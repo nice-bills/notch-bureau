@@ -20,6 +20,15 @@ import crypto from 'node:crypto';
 //      one phone number = one wallet (refused in the enclave AND on chain), password-protected PDF refused,
 //      injection text inside the PDF ignored; Superteam Earn email + a real devnet USDC transfer accepted,
 //      email without a transfer refused
+//  10  Bureau: hostel-deposit CPI + @notch/bureau SDK
+//  11  Tranches (senior / junior): both deposit, the subordination floor refuses an over-sized senior deposit,
+//      the fee waterfall splits a real repayment between the tranches, a FORCED DEFAULT (see below) hits the
+//      junior tranche first and leaves senior untouched, and request/claim/cancel works per tranche.
+//      Forcing the default: the program's normal loan term is 30 days, so step 11's borrower draws with
+//      `draw_with_term(amount, 10)` (10 s is the shortest due period the program allows; it only ever hurts the
+//      borrower) and mark_default is called once the chain clock passes the due time. The app uses plain `draw`.
+//      A loss BIGGER than the junior tranche is not forced on the shared devnet pool (that would drain it);
+//      that case, the subordination floor on junior exits and the 3-day claim itself are covered by LiteSVM.
 //
 // The underwriter runs inside this process (same Underwriter class and same key file as the demo
 // enclave on :8787) because only the process that holds the synthetic DKIM key can sign fresh emails.
@@ -62,6 +71,12 @@ import {
   decodeRecord,
   decodeTokenAmount,
   decodeWithdrawRequest,
+  drawWithTermIx,
+  juniorRatioOk,
+  seniorHeadroom,
+  splitFee,
+  splitLoss,
+  trancheNav,
   depositBorrowerIx,
   depositIx,
   deriveAddresses,
@@ -232,7 +247,7 @@ const PROGRAM_ERRORS = [
   'RecordExpired', 'StaleRecord', 'UnderwriterExpired', 'OverLimit', 'Defaulted', 'NotPastDue',
   'InvalidAmount', 'NothingToRepay', 'InsufficientDeposit', 'FeeRequired', 'InsufficientLiquidity',
   'InvalidPoolState', 'BalanceOutstanding', 'MathOverflow', 'CooldownActive', 'IdentityBound', 'IdentityRequired',
-  'NoCreditLine', 'InsufficientCredit',
+  'NoCreditLine', 'InsufficientCredit', 'SubordinationBreached', 'BadTrancheMint', 'InvalidTrancheParams', 'InvalidTerm',
 ];
 /** Name of the Anchor error in the logs, plus the custom code number from the status. */
 function programError(res) {
@@ -311,6 +326,7 @@ const line = await deriveLine(program, borrower.address);
 console.log(`borrower    ${borrower.address}\nlender      ${lender.address}`);
 
 const bureauWallets = []; // step 10 throwaways, swept at the end
+const trancheWallets = []; // step 11 throwaways, swept at the end
 let failed = false;
 try {
   // -------------------------------------------------------------------------------------------
@@ -449,6 +465,14 @@ try {
     pool3.outstanding === pool1.outstanding && pool3.feesEarned - pool2.feesEarned === fee && pool3.idle - pool2.idle === payoff && pool2.borrowerDeposits - pool3.borrowerDeposits === needed);
   check('vault token balance == pool.idle + pool.borrowerDeposits (no stray tokens, no missing tokens)',
     (await vaultAmount()) === pool3.idle + pool3.borrowerDeposits, `${await vaultAmount()} vs ${pool3.idle + pool3.borrowerDeposits}`);
+  {
+    // Tranche waterfall on a real repayment: the 2% fee is split between SENIOR and JUNIOR by weighted capital.
+    const [expS, expJ] = splitFee(fee, pool2.seniorNav, pool2.juniorNav, pool2.juniorWeightBps);
+    check(`fee ${usd(fee)} USDC split by the waterfall: senior +${expS}, junior +${expJ} (floor, dust to junior)`,
+      pool3.seniorNav - pool2.seniorNav === expS && pool3.juniorNav - pool2.juniorNav === expJ && pool3.seniorFees - pool2.seniorFees === expS && pool3.juniorFees - pool2.juniorFees === expJ,
+      `senior ${pool3.seniorNav - pool2.seniorNav}, junior ${pool3.juniorNav - pool2.juniorNav}`);
+    check('invariant after repay: seniorNav + juniorNav == idle + outstanding', pool3.seniorNav + pool3.juniorNav === pool3.idle + pool3.outstanding);
+  }
 
   // The program returns the deposit inside repay, so withdraw_borrower is exercised with a fresh deposit.
   const r0 = await send('ATTACK withdraw_borrower with nothing deposited', borrower, [withdrawBorrowerIx(A, borrower.address, line, bAta)], { expectFail: true });
@@ -465,7 +489,7 @@ try {
   {
     const p0 = decodePool(await accountBytes(A.pool));
     const supply0 = decodeMintSupply(await accountBytes(A.shareMint));
-    const assets0 = poolAssets(p0);
+    const assets0 = trancheNav(p0, 'junior'); // the lender below deposits into the JUNIOR tranche (default)
     const expShares = sharesForDeposit(lenderUsdc, supply0, assets0);
     await send(`lender deposit ${usd(lenderUsdc)} USDC`, lender, [
       createAtaIdempotentIx(lender.address, lShareAta, lender.address, A.shareMint),
@@ -474,7 +498,7 @@ try {
     const p1 = decodePool(await accountBytes(A.pool));
     const supply1 = decodeMintSupply(await accountBytes(A.shareMint));
     const shares = await tokenBal(lender.address, A.shareMint);
-    check(`shares minted == floor(amount*supply/assets) = ${shares}`, shares === expShares, `expected ${expShares} (supply ${supply0}, assets ${assets0})`);
+    check(`shares minted == floor(amount*supply/junior NAV) = ${shares}`, shares === expShares, `expected ${expShares} (supply ${supply0}, assets ${assets0})`);
     check('share supply grew by the minted shares', supply1 - supply0 === shares);
     check('pool.idle grew by the deposit', p1.idle - p0.idle === lenderUsdc);
     check('lender USDC is 0 after depositing', (await tokenBal(lender.address, mint)) === 0n);
@@ -815,6 +839,156 @@ try {
     const sdkC2 = await sdkGetCredit(rpc, carol.address, { programAddress: program });
     check('SDK sees carol\'s on-time repayment (1) after repaying', sdkC2.onTimeRepayments === 1, jsonSafe(sdkC2));
   }
+  // -------------------------------------------------------------------------------------------
+  step('11', 'Tranches: senior + junior deposits, subordination floor, fee waterfall, forced default hits junior first, per-tranche timed withdraw');
+  {
+    const jL = await generateKeyPairSigner(); // junior lender
+    const sL = await generateKeyPairSigner(); // senior lender
+    const tB = await generateKeyPairSigner(); // borrower
+    trancheWallets.push(jL, sL, tB);
+    const jUsdc = await deriveAta(jL.address, mint), sUsdc = await deriveAta(sL.address, mint), tUsdc = await deriveAta(tB.address, mint);
+    const jShares = await deriveAta(jL.address, A.juniorMint), sShares = await deriveAta(sL.address, A.seniorMint);
+    const jEscrow = await deriveEscrow(program, jL.address, 'junior'), jReq = await deriveWithdrawRequest(program, jL.address, 'junior');
+    const sEscrow = await deriveEscrow(program, sL.address, 'senior'), sReq = await deriveWithdrawRequest(program, sL.address, 'senior');
+    const tLine = await deriveLine(program, tB.address);
+    const readPool = async () => decodePool(await accountBytes(A.pool));
+    const supplyOf = async (m) => decodeMintSupply(await accountBytes(m));
+    const inv = (p) => p.seniorNav + p.juniorNav === p.idle + p.outstanding;
+
+    const jDep = 30n * USDC, sDep = 40n * USDC;
+    await send('fund tranche demo wallets (0.015 SOL each; junior lender 30 USDC, borrower 10 USDC)', admin, [
+      getTransferSolInstruction({ source: admin, destination: jL.address, amount: lamports(15_000_000n) }),
+      getTransferSolInstruction({ source: admin, destination: sL.address, amount: lamports(15_000_000n) }),
+      getTransferSolInstruction({ source: admin, destination: tB.address, amount: lamports(15_000_000n) }),
+      createAtaIdempotentIx(admin.address, jUsdc, jL.address, mint),
+      getMintToInstruction({ mint, token: jUsdc, mintAuthority: admin, amount: jDep }),
+      createAtaIdempotentIx(admin.address, tUsdc, tB.address, mint),
+      getMintToInstruction({ mint, token: tUsdc, mintAuthority: admin, amount: 10n * USDC }),
+    ]);
+
+    // 11a. junior deposit: shares at the JUNIOR price, senior untouched
+    const q0 = await readPool();
+    const jSup0 = await supplyOf(A.juniorMint);
+    await send(`junior lender deposits ${usd(jDep)} USDC into the JUNIOR tranche`, jL, [
+      createAtaIdempotentIx(jL.address, jShares, jL.address, A.juniorMint),
+      depositIx(A, jL.address, jUsdc, jShares, jDep, 'junior'),
+    ]);
+    const q1 = await readPool();
+    const jGot = await tokenBal(jL.address, A.juniorMint);
+    check(`junior shares == floor(amount*supply/junior NAV) = ${jGot}`, jGot === sharesForDeposit(jDep, jSup0, trancheNav(q0, 'junior')), `supply ${jSup0}, junior NAV ${trancheNav(q0, 'junior')}`);
+    check('junior NAV +deposit, senior NAV unchanged, idle +deposit', q1.juniorNav - q0.juniorNav === jDep && q1.seniorNav === q0.seniorNav && q1.idle - q0.idle === jDep);
+    check('invariant: seniorNav + juniorNav == idle + outstanding', inv(q1));
+
+    // 11b. subordination floor: a senior deposit one unit over the headroom is refused, one that fits is accepted
+    const head = seniorHeadroom(q1);
+    const skipGuard = head > 100_000n * USDC; // floor 0 or an enormous junior tranche: nothing sensible to test
+    const sFund = sDep + (skipGuard ? 0n : head + 1n);
+    await send(`fund the senior lender with ${usd(sFund)} test USDC (headroom ${usd(head)})`, admin, [
+      createAtaIdempotentIx(admin.address, sUsdc, sL.address, mint),
+      getMintToInstruction({ mint, token: sUsdc, mintAuthority: admin, amount: sFund }),
+    ]);
+    if (!skipGuard) {
+      const over = await send(`ATTACK senior deposit of headroom + 1 micro-USDC (${usd(head + 1n)} USDC)`, sL, [
+        createAtaIdempotentIx(sL.address, sShares, sL.address, A.seniorMint),
+        depositIx(A, sL.address, sUsdc, sShares, head + 1n, 'senior'),
+      ], { expectFail: true });
+      expectProgramError('senior deposit that would push junior under the floor', over, 'SubordinationBreached');
+      check('the refused deposit moved nothing', decodePool(await accountBytes(A.pool)).seniorNav === q1.seniorNav);
+    }
+    const sSup0 = await supplyOf(A.seniorMint);
+    await send(`senior lender deposits ${usd(sDep)} USDC into the SENIOR tranche`, sL, [
+      createAtaIdempotentIx(sL.address, sShares, sL.address, A.seniorMint),
+      depositIx(A, sL.address, sUsdc, sShares, sDep, 'senior'),
+    ]);
+    const q2 = await readPool();
+    const sGot = await tokenBal(sL.address, A.seniorMint);
+    check(`senior shares == floor(amount*supply/senior NAV) = ${sGot}`, sGot === sharesForDeposit(sDep, sSup0, trancheNav(q1, 'senior')), `supply ${sSup0}, senior NAV ${trancheNav(q1, 'senior')}`);
+    check('senior NAV +deposit, junior NAV unchanged', q2.seniorNav - q1.seniorNav === sDep && q2.juniorNav === q1.juniorNav);
+    check('subordination floor still holds after the senior deposit', juniorRatioOk(q2.juniorNav, q2.seniorNav + q2.juniorNav, q2.minJuniorBps), `junior ${usd(q2.juniorNav)} of ${usd(q2.seniorNav + q2.juniorNav)}`);
+    check('invariant after senior deposit', inv(q2));
+    check('vault token balance == pool.idle + pool.borrowerDeposits', (await vaultAmount()) === q2.idle + q2.borrowerDeposits);
+
+    // 11c. a borrower with a real signed limit
+    const u = await underwrite(await freshEmail(fixtures.deelPayout), tB.address);
+    if (u.status !== 200 || !u.body.ok) throw new Error(`underwriter refused ${tB.address}: ${jsonSafe(u.body)}`);
+    const tRec = base64ToBytes(u.body.message);
+    const tDec = decodeRecord(tRec);
+    await send('tranche borrower: post_limit', tB, postLimitIxs(A, { payer: tB.address, borrower: tB.address, line: tLine, dedupe: await deriveDedupe(program, tDec.dedupe), record: tRec }, uwKey, base64ToBytes(u.body.signature)));
+    const amt = 5n * USDC, need = depositNeededFor(amt), tFee = feeFor(amt);
+    check(`borrower limit covers a ${usd(amt)} USDC draw`, tDec.limitMicro >= amt, usd(tDec.limitMicro));
+
+    // 11d. fee waterfall with BOTH tranches funded (draw -> repay on time)
+    await send(`borrower: deposit ${usd(need)} + draw ${usd(amt)}`, tB, [depositBorrowerIx(A, tB.address, tLine, tUsdc, need), drawIx(A, tB.address, tLine, tUsdc, amt)]);
+    const w0 = await readPool();
+    await send(`borrower: repay ${usd(payoffFor(amt))} USDC (principal + 2% fee)`, tB, [repayIx(A, tB.address, tLine, tUsdc, payoffFor(amt))]);
+    const w1 = await readPool();
+    const [eS, eJ] = splitFee(tFee, w0.seniorNav, w0.juniorNav, w0.juniorWeightBps);
+    check(`fee ${usd(tFee)} USDC split: senior +${eS}, junior +${eJ} (junior dollar counts ${w0.juniorWeightBps / 10_000}x)`,
+      w1.seniorNav - w0.seniorNav === eS && w1.juniorNav - w0.juniorNav === eJ, `senior +${w1.seniorNav - w0.seniorNav}, junior +${w1.juniorNav - w0.juniorNav}`);
+    check('both tranches earned something, junior earns more per dollar of capital',
+      eS > 0n && eJ > 0n && eJ * w0.seniorNav > eS * w0.juniorNav, `junior ${eJ}/${w0.juniorNav} vs senior ${eS}/${w0.seniorNav}`);
+    check('invariant after the waterfall repay', inv(w1));
+
+    // 11e. forced default: shortest due period, then mark_default once the chain clock passes it
+    const tooShort = await send('ATTACK draw_with_term with a 9 second term (minimum is 10)', tB, [
+      depositBorrowerIx(A, tB.address, tLine, tUsdc, need), drawWithTermIx(A, tB.address, tLine, tUsdc, amt, 9)], { expectFail: true });
+    expectProgramError('term shorter than 10 seconds', tooShort, 'InvalidTerm');
+    const tooLong = await send('ATTACK draw_with_term with a 30 day + 1 second term', tB, [
+      depositBorrowerIx(A, tB.address, tLine, tUsdc, need), drawWithTermIx(A, tB.address, tLine, tUsdc, amt, 30 * 86_400 + 1)], { expectFail: true });
+    expectProgramError('term longer than 30 days', tooLong, 'InvalidTerm');
+    check('the refused attempts left no deposit or balance behind', decodeLine(await accountBytes(tLine)).deposit === 0n && decodeLine(await accountBytes(tLine)).drawn === 0n);
+    await send(`borrower: deposit ${usd(need)} + draw_with_term ${usd(amt)} USDC due in 10 s`, tB, [
+      depositBorrowerIx(A, tB.address, tLine, tUsdc, need), drawWithTermIx(A, tB.address, tLine, tUsdc, amt, 10)]);
+    const dl = decodeLine(await accountBytes(tLine));
+    check('line.due is ~10 seconds after the draw (not 30 days)', dl.drawn === amt && dl.due - BigInt(Math.floor(Date.now() / 1000)) < 30n && dl.due - BigInt(Math.floor(Date.now() / 1000)) > -30n, `due in ${dl.due - BigInt(Math.floor(Date.now() / 1000))} s`);
+    const d0 = await readPool();
+    const jSupD = await supplyOf(A.juniorMint), sSupD = await supplyOf(A.seniorMint);
+    let marked = null;
+    for (let i = 0; i < 12 && !marked; i++) {
+      await sleep(i === 0 ? 11_000 : 3_000); // wall clock ~ chain clock; retry until the chain agrees it is overdue
+      const r = await send(`mark_default (attempt ${i + 1})`, sL, [markDefaultIx(A, tLine)], { expectFail: true });
+      if (!r.err) marked = r;
+      else if (decodeLine(await accountBytes(tLine)).defaulted) marked = r; // someone else (the keeper) got there first
+      else if (programError(r).name !== 'NotPastDue') throw new Error(`mark_default failed unexpectedly: ${r.err}\n${r.logs.join('\n')}`);
+    }
+    check('mark_default landed once the due time passed', !!marked);
+    const d1 = await readPool();
+    const dLine = decodeLine(await accountBytes(tLine));
+    const netLoss = amt - need; // the first-loss deposit is seized
+    const [expSl, expJl] = splitLoss(netLoss, d0.seniorNav, d0.juniorNav);
+    check('line is defaulted and closed', dLine.defaulted && dLine.drawn === 0n && dLine.deposit === 0n);
+    check(`net loss ${usd(netLoss)} USDC (${usd(amt)} lost - ${usd(need)} seized): JUNIOR NAV -${expJl}, SENIOR NAV -${expSl}`,
+      d0.juniorNav - d1.juniorNav === expJl && d0.seniorNav - d1.seniorNav === expSl, `junior ${d0.juniorNav} -> ${d1.juniorNav}, senior ${d0.seniorNav} -> ${d1.seniorNav}`);
+    check('junior took the loss first: senior NAV is unchanged (loss < junior NAV)', expJl === netLoss && d1.seniorNav === d0.seniorNav && d1.juniorNav < d0.juniorNav);
+    check('pool counters: defaults +1, default_amount +draw, juniorLosses +loss, seniorLosses unchanged',
+      d1.defaults - d0.defaults === 1n && d1.defaultAmount - d0.defaultAmount === amt && d1.juniorLosses - d0.juniorLosses === expJl && d1.seniorLosses === d0.seniorLosses);
+    check('junior share price fell (NAV / supply), senior share price did not',
+      d1.juniorNav * jSupD < d0.juniorNav * jSupD && d1.seniorNav * sSupD === d0.seniorNav * sSupD);
+    check('invariant after the default', inv(d1));
+    check('vault token balance == pool.idle + pool.borrowerDeposits after the default', (await vaultAmount()) === d1.idle + d1.borrowerDeposits);
+
+    // 11f. timed withdraw is per tranche: own escrow, own request, early claim refused, cancel returns the right shares
+    const jSh = await tokenBal(jL.address, A.juniorMint), sSh = await tokenBal(sL.address, A.seniorMint);
+    await send(`junior lender request_withdraw ${jSh} JUNIOR shares`, jL, [requestWithdrawIx(A, jL.address, jShares, jEscrow, jReq, jSh, 'junior')]);
+    await send(`senior lender request_withdraw ${sSh} SENIOR shares`, sL, [requestWithdrawIx(A, sL.address, sShares, sEscrow, sReq, sSh, 'senior')]);
+    check('each tranche has its own escrow and request account', jEscrow !== sEscrow && jReq !== sReq && decodeWithdrawRequest(await accountBytes(jReq)).shares === jSh && decodeWithdrawRequest(await accountBytes(sReq)).shares === sSh);
+    check('shares sit in escrow and stay in each tranche\'s supply',
+      decodeTokenAmount(await accountBytes(jEscrow)) === jSh && decodeTokenAmount(await accountBytes(sEscrow)) === sSh && (await supplyOf(A.juniorMint)) === jSupD && (await supplyOf(A.seniorMint)) === sSupD);
+    const cJ = await send('junior lender claim_withdraw before the cooldown (must be refused)', jL, [claimWithdrawIx(A, jL.address, jEscrow, jReq, jUsdc, 'junior')], { expectFail: true });
+    expectProgramError('junior claim before the cooldown', cJ, 'CooldownActive');
+    const cS = await send('senior lender claim_withdraw before the cooldown (must be refused)', sL, [claimWithdrawIx(A, sL.address, sEscrow, sReq, sUsdc, 'senior')], { expectFail: true });
+    expectProgramError('senior claim before the cooldown', cS, 'CooldownActive');
+    // a senior claim cannot be pointed at the junior request (different mint -> different PDAs)
+    const cross = await send('ATTACK senior lender claims against the JUNIOR escrow/request', sL, [claimWithdrawIx(A, sL.address, jEscrow, jReq, sUsdc, 'senior')], { expectFail: true });
+    check('claiming through the other tranche\'s escrow is refused', !!cross.err, cross.err ?? 'succeeded');
+    await send('junior lender cancel_withdraw', jL, [cancelWithdrawIx(A, jL.address, jShares, jEscrow, jReq, 'junior')]);
+    await send('senior lender cancel_withdraw', sL, [cancelWithdrawIx(A, sL.address, sShares, sEscrow, sReq, 'senior')]);
+    check('cancel returned each lender\'s own shares and closed the accounts',
+      (await tokenBal(jL.address, A.juniorMint)) === jSh && (await tokenBal(sL.address, A.seniorMint)) === sSh && (await accountBytes(jEscrow)) === null && (await accountBytes(sReq)) === null);
+    const fin = await readPool();
+    check('final invariants: NAVs sum to idle + outstanding; vault == idle + borrower deposits', inv(fin) && (await vaultAmount()) === fin.idle + fin.borrowerDeposits);
+    console.log(`  note  tranche state: senior NAV ${usd(fin.seniorNav)}, junior NAV ${usd(fin.juniorNav)} (junior losses ${usd(fin.juniorLosses)}, senior losses ${usd(fin.seniorLosses)})`);
+  }
 } catch (e) {
   failed = true;
   console.error(`\nABORTED in step ${currentStep}: ${e.message}`);
@@ -822,7 +996,7 @@ try {
 } finally {
   // ---- cleanup: sweep leftover SOL back to the admin wallet ----
   if (opts.sweep) {
-    for (const w of [borrower, lender, momoUser, momoOther, ...bureauWallets]) {
+    for (const w of [borrower, lender, momoUser, momoOther, ...bureauWallets, ...trancheWallets]) {
       try {
         const bal = await solBal(w.address);
         if (bal > 10_000n) {

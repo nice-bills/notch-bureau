@@ -7,7 +7,8 @@ const PROGRAM_ERRORS = [
   'RecordExpired', 'StaleRecord', 'UnderwriterExpired', 'OverLimit', 'Defaulted', 'NotPastDue',
   'InvalidAmount', 'NothingToRepay', 'InsufficientDeposit', 'FeeRequired', 'InsufficientLiquidity',
   'InvalidPoolState', 'BalanceOutstanding', 'MathOverflow', 'CooldownActive',
-  'IdentityBound', 'IdentityRequired',
+  'IdentityBound', 'IdentityRequired', 'NoCreditLine', 'InsufficientCredit',
+  'SubordinationBreached', 'BadTrancheMint', 'InvalidTrancheParams', 'InvalidTerm',
 ] as const;
 export type ProgramErrorName = (typeof PROGRAM_ERRORS)[number];
 
@@ -35,6 +36,12 @@ export const ERROR_MESSAGES: Record<ProgramErrorName, string> = {
   CooldownActive: 'Your withdrawal is still in its waiting period. You can claim it once the countdown ends.',
   IdentityBound: 'That mobile-money account is already linked to a different wallet. One account can back only one wallet.',
   IdentityRequired: 'This limit is tied to a mobile-money account, but the account link was left out of the transaction.',
+  NoCreditLine: 'This wallet has no credit line yet.',
+  InsufficientCredit: 'The available credit is below the amount asked for.',
+  SubordinationBreached: 'The junior tranche would fall below its minimum share of the pool, so this deposit or withdrawal was refused. Senior money needs enough junior money underneath it.',
+  BadTrancheMint: 'That is not one of the pool’s two share tokens (senior or junior).',
+  InvalidTrancheParams: 'The tranche settings are out of range.',
+  InvalidTerm: 'The loan term must be between 10 seconds and 30 days.',
 };
 
 export interface FriendlyError {

@@ -1,0 +1,73 @@
+=== 11. Tranches: senior + junior deposits, subordination floor, fee waterfall, forced default hits junior first, per-tranche timed withdraw
+  tx  ok      fund tranche demo wallets (0.015 SOL each; junior lender 30 USDC, borrower 10 USDC)
+      https://explorer.solana.com/tx/3BA1roQPdgnKBz4YaQQhB5nHgf6bUuCk5gJcxDqvMEhMiadz3S9WL4Jh6yv1pmEUSYSBdnzdQ6uxSdRuwMfdJcBn?cluster=devnet
+  tx  ok      junior lender deposits 30 USDC into the JUNIOR tranche
+      https://explorer.solana.com/tx/4MzqN2QvGbJLB935fVU4y1krcYubjz8EXNr1EKwktrCok9FNcWjdXDuNw4ivk3eQdJJYmWP64Jr9RChGkBSAqLMZ?cluster=devnet
+  PASS  junior shares == floor(amount*supply/junior NAV) = 29991832  (supply 1004999091, junior NAV 1005272770)
+  PASS  junior NAV +deposit, senior NAV unchanged, idle +deposit
+  PASS  invariant: seniorNav + juniorNav == idle + outstanding
+  tx  ok      fund the senior lender with 3981.063851 test USDC (headroom 3941.06385)
+      https://explorer.solana.com/tx/iWmEVeaNDFeqvHzZs3HnnqgDMA4gDRTudz1H978qxAadi38P5bjxAYGtUpKZSkfg6JkobYJWdpeMwGf24zwCojJ?cluster=devnet
+  tx  REFUSED  ATTACK senior deposit of headroom + 1 micro-USDC (3941.063851 USDC)
+      https://explorer.solana.com/tx/B5XVXHfsvoA3MfHEBFKdKvc3H5VrrhDT4iv5tBLpJxnDhmuJAoWvqMrmuXTrEkcjVsHubjQYdFWEKJXLa6JP2ef?cluster=devnet
+  PASS  senior deposit that would push junior under the floor -> SubordinationBreached  (got SubordinationBreached / code 6025, want SubordinationBreached / 6025)
+  PASS  the refused deposit moved nothing
+  tx  ok      senior lender deposits 40 USDC into the SENIOR tranche
+      https://explorer.solana.com/tx/3ArBXvAfaEkuTBdScbmenuS7h9CvVxmdghfkWsHbxJBqH93PLBPauuwYb3X8XQGsNvM2auEQKYVEXEUHwuxx8HkV?cluster=devnet
+  PASS  senior shares == floor(amount*supply/senior NAV) = 39994554  (supply 200000000, senior NAV 200027230)
+  PASS  senior NAV +deposit, junior NAV unchanged
+  PASS  subordination floor still holds after the senior deposit  (junior 1035.27277 of 1275.3)
+  PASS  invariant after senior deposit
+  PASS  vault token balance == pool.idle + pool.borrowerDeposits
+  tx  ok      tranche borrower: post_limit
+      https://explorer.solana.com/tx/3dNG4Sm84gdkp1ZHJa33te8rM8DuieUb6WzNoCWa2Pyyy21KvzNFJ5M3Wb487XGRrpJKWVuuYfFXmZudo3Suve1n?cluster=devnet
+  PASS  borrower limit covers a 5 USDC draw  (50)
+  tx  ok      borrower: deposit 1 + draw 5
+      https://explorer.solana.com/tx/3nbH4hETEi6mgHuDs5TF54kQP1Gf7c1WmBP5EzauvdsEUKNWe3SEwKn2kpdjKiryyP3ej7kBDcHxt4FtdGmJhLfn?cluster=devnet
+  tx  ok      borrower: repay 5.1 USDC (principal + 2% fee)
+      https://explorer.solana.com/tx/sz3zY4KSNac134rGeHdyb1jKxrYcEqLxpCxnGtgzVgb78bVR85B1GakYBbE7FD4S5vvNYU4Mgd3HpuVETo4ujTq?cluster=devnet
+  PASS  fee 0.1 USDC split: senior +10388, junior +89612 (junior dollar counts 2x)  (senior +10388, junior +89612)
+  PASS  both tranches earned something, junior earns more per dollar of capital  (junior 89612/1035272770 vs senior 10388/240027230)
+  PASS  invariant after the waterfall repay
+  tx  REFUSED  ATTACK draw_with_term with a 9 second term (minimum is 10)
+      https://explorer.solana.com/tx/tAT5GVQFNX9A55wofyTvy9H4msSabnnxnc2pTw97MqjFmYmbTLU1zW7nq1CWYQfZaGpjvN9bPpA9396aHKahxhe?cluster=devnet
+  PASS  term shorter than 10 seconds -> InvalidTerm  (got InvalidTerm / code 6028, want InvalidTerm / 6028)
+  tx  REFUSED  ATTACK draw_with_term with a 30 day + 1 second term
+      https://explorer.solana.com/tx/2hkjfUTKCUfhTWvPTounCBknwuDfX3VtZ81bNLp2eC5wSB7aNNtEotbEEtemzuVCd9z5TWS6TgtFLZ4HPn3mE6PN?cluster=devnet
+  PASS  term longer than 30 days -> InvalidTerm  (got InvalidTerm / code 6028, want InvalidTerm / 6028)
+  PASS  the refused attempts left no deposit or balance behind
+  tx  ok      borrower: deposit 1 + draw_with_term 5 USDC due in 10 s
+      https://explorer.solana.com/tx/4eqeB3FZ87rjgrWsk7NXaByWAsTZxUEk55sfUoyxBaaK4a5P3jUAAo9TavE7P6nsBg4592kwtqxEpGoqWZ5ZEpG?cluster=devnet
+  PASS  line.due is ~10 seconds after the draw (not 30 days)  (due in 8 s)
+  tx  ok      mark_default (attempt 1)
+      https://explorer.solana.com/tx/3BSCnuev3e8ANKjtuTuTvpsgyLef7QFDHrD4ZjSF7avKoNa7aaEhuGEje2BCCM5HW7ynm7KBmLnroE2jSpYnHZRf?cluster=devnet
+  PASS  mark_default landed once the due time passed
+  PASS  line is defaulted and closed
+  PASS  net loss 4 USDC (5 lost - 1 seized): JUNIOR NAV -4000000, SENIOR NAV -0  (junior 1035362382 -> 1031362382, senior 240037618 -> 240037618)
+  PASS  junior took the loss first: senior NAV is unchanged (loss < junior NAV)
+  PASS  pool counters: defaults +1, default_amount +draw, juniorLosses +loss, seniorLosses unchanged
+  PASS  junior share price fell (NAV / supply), senior share price did not
+  PASS  invariant after the default
+  PASS  vault token balance == pool.idle + pool.borrowerDeposits after the default
+  tx  ok      junior lender request_withdraw 29991832 JUNIOR shares
+      https://explorer.solana.com/tx/ott4L94z53v83mmvDyUhQHDs8GME74WQvt5fMaBcuWoDwgMNPi8CViBKvZcU7KMTheqihB6jP1tCZtjXXnUJsza?cluster=devnet
+  tx  ok      senior lender request_withdraw 39994554 SENIOR shares
+      https://explorer.solana.com/tx/345SEsmZ9tgZQumJRJzvJeHrQe61fZEEjJZZDNUSjeZfrB6EeuvLCCXpwWLYRxjNASA4qyDSvbehjJYCVfvQRyV3?cluster=devnet
+  PASS  each tranche has its own escrow and request account
+  PASS  shares sit in escrow and stay in each tranche's supply
+  tx  REFUSED  junior lender claim_withdraw before the cooldown (must be refused)
+      https://explorer.solana.com/tx/bdhguZSMqkmpsikHWYbzbVm4n9aXPYoLSopzpcB1VLgFYDb96XLa9zWxdCdSqXEyvN8o5wYJ1hYpZMoH27Ez7Bp?cluster=devnet
+  PASS  junior claim before the cooldown -> CooldownActive  (got CooldownActive / code 6020, want CooldownActive / 6020)
+  tx  REFUSED  senior lender claim_withdraw before the cooldown (must be refused)
+      https://explorer.solana.com/tx/4RjaZUJ88PS5yuFJkRLoU8CoCSRVzkELG3XNcjgdA17PdMfDVfackBTWuyqGk3V1oMtzbsnwdtMRyr3ppfCsyAP1?cluster=devnet
+  PASS  senior claim before the cooldown -> CooldownActive  (got CooldownActive / code 6020, want CooldownActive / 6020)
+  tx  REFUSED  ATTACK senior lender claims against the JUNIOR escrow/request
+      https://explorer.solana.com/tx/4PTfBF2141CgSJ7S95q6vN65bdwwHXPvqhzdsQ83RfDZbySv7zP8rzcKELi7Yfu4vy2i2zMq8VHVKoB12UpduUQ2?cluster=devnet
+  PASS  claiming through the other tranche's escrow is refused  ({"InstructionError":["0",{"Custom":"2006"}]})
+  tx  ok      junior lender cancel_withdraw
+      https://explorer.solana.com/tx/cof59LhXdLKLJfJsJAgiLmHf7NGtQD3iszQosBbpkKtPs3GG4kP5nUZXcGXUsdcAoM2K1uVzuUcogtFtzkqRSKC?cluster=devnet
+  tx  ok      senior lender cancel_withdraw
+      https://explorer.solana.com/tx/LmQqeiMenZ2X8RD6EAr2w9KRCcVwydWZtoZENVuqmhK1biG5FDYsYhYKv9S3obQ1Djte57Cfxb6JBnraQxbABsY?cluster=devnet
+  PASS  cancel returned each lender's own shares and closed the accounts
+  PASS  final invariants: NAVs sum to idle + outstanding; vault == idle + borrower deposits
+  note  tranche state: senior NAV 240.037618, junior NAV 1031.362382 (junior losses 4, senior losses 0)

@@ -24,12 +24,15 @@ export const INSTRUCTIONS_SYSVAR = address('Sysvar1nstructions111111111111111111
 export const USDC_DECIMALS = 6;
 export const USDC = 1_000_000n;
 export const LOAN_TERM_SECONDS = 30n * 86_400n;
+/** Mirrors MIN_LOAN_TERM_S in programs/notch/src/lib.rs: the shortest `draw_with_term` period. */
+export const MIN_LOAN_TERM_SECONDS = 10n;
 /** Mirrors WITHDRAW_COOLDOWN_S in programs/notch/src/lib.rs. */
 export const WITHDRAW_COOLDOWN_SECONDS = 3n * 86_400n;
 
 /** Anchor discriminators: sha256("global:<name>")[0..8]. Verified against node:crypto in the unit test. */
 const DISCRIMINATORS = {
   init: 'dc3bcfec6cfa2f64',
+  init_pool: '74e9c7cc739fab24',
   set_underwriter: '6449a18380907111',
   post_limit: 'e9a2b88e298351e0',
   deposit: 'f223c68952e1f2b6',
@@ -39,6 +42,7 @@ const DISCRIMINATORS = {
   deposit_borrower: 'a0783533ea0296a8',
   withdraw_borrower: 'af42e688c2545ba2',
   draw: '3d283eb81fb01882',
+  draw_with_term: '54a098ba60d7b3c1',
   repay: 'ea674352d0eadba6',
   mark_default: 'b6e77b8442d0898b',
 } as const;
@@ -105,12 +109,21 @@ export function bytesToHex(bytes: Uint8Array): string {
 const addressEncoder = getAddressEncoder();
 const text = (s: string) => new TextEncoder().encode(s);
 
+export type Tranche = 'senior' | 'junior';
+
 export interface NotchAddresses {
   program: Address;
   mint: Address;
   config: Address;
+  /** Pool v2 PDAs ("vault-v2", "pool-v2"); the v1 single-token pool is gone (see the tranche block in lib.rs). */
   vault: Address;
   pool: Address;
+  seniorMint: Address;
+  juniorMint: Address;
+  /**
+   * The share token the single-tranche UI deposits into: the JUNIOR tranche (the only one that can take the
+   * first deposit into an empty pool). Pass an explicit `Tranche` to the builders to use senior.
+   */
   shareMint: Address;
 }
 
@@ -120,14 +133,19 @@ async function pda(program: Address, ...seeds: Uint8Array[]): Promise<Address> {
 }
 
 export async function deriveAddresses(program: Address, mint: Address): Promise<NotchAddresses> {
-  const [config, vault, pool, shareMint] = await Promise.all([
+  const [config, vault, pool, seniorMint, juniorMint] = await Promise.all([
     pda(program, text('config')),
-    pda(program, text('vault')),
-    pda(program, text('pool')),
-    pda(program, text('share-mint')),
+    pda(program, text('vault-v2')),
+    pda(program, text('pool-v2')),
+    pda(program, text('senior-mint')),
+    pda(program, text('junior-mint')),
   ]);
-  return { program, mint, config, vault, pool, shareMint };
+  return { program, mint, config, vault, pool, seniorMint, juniorMint, shareMint: juniorMint };
 }
+
+/** Share mint of a tranche. */
+export const trancheMint = (a: Pick<NotchAddresses, 'seniorMint' | 'juniorMint'>, t: Tranche): Address =>
+  t === 'senior' ? a.seniorMint : a.juniorMint;
 
 export const deriveLine = (program: Address, borrower: Address) =>
   pda(program, text('line'), new Uint8Array(addressEncoder.encode(borrower)));
@@ -140,11 +158,18 @@ export const deriveDedupe = (program: Address, dedupeHash: Uint8Array) =>
 export const deriveIdentity = (program: Address, idHash: Uint8Array) =>
   pda(program, text('identity'), idHash);
 
-/** The lender's share escrow (a token account that owns itself) and pending-withdrawal record. */
-export const deriveEscrow = (program: Address, lender: Address) =>
-  pda(program, text('escrow'), new Uint8Array(addressEncoder.encode(lender)));
-export const deriveWithdrawRequest = (program: Address, lender: Address) =>
-  pda(program, text('withdraw'), new Uint8Array(addressEncoder.encode(lender)));
+/**
+ * The lender's share escrow (a token account that owns itself) and pending-withdrawal record, per tranche:
+ * ["escrow", share_mint, lender] and ["withdraw", share_mint, lender]. One pending request per lender per tranche.
+ */
+export async function deriveEscrow(program: Address, lender: Address, tranche: Tranche = 'junior'): Promise<Address> {
+  const mint = await pda(program, text(tranche === 'senior' ? 'senior-mint' : 'junior-mint'));
+  return pda(program, text('escrow'), new Uint8Array(addressEncoder.encode(mint)), new Uint8Array(addressEncoder.encode(lender)));
+}
+export async function deriveWithdrawRequest(program: Address, lender: Address, tranche: Tranche = 'junior'): Promise<Address> {
+  const mint = await pda(program, text(tranche === 'senior' ? 'senior-mint' : 'junior-mint'));
+  return pda(program, text('withdraw'), new Uint8Array(addressEncoder.encode(mint)), new Uint8Array(addressEncoder.encode(lender)));
+}
 
 export async function deriveAta(owner: Address, mint: Address): Promise<Address> {
   const [ata] = await getProgramDerivedAddress({
@@ -241,6 +266,7 @@ export function ed25519VerifyIx(publicKey: Uint8Array, message: Uint8Array, sign
   return { programAddress: ED25519_PROGRAM, accounts: [], data: concat(header, publicKey, signature, message) };
 }
 
+/** Creates the config only. The lender pool (vault + senior/junior mints) comes from `initPoolIx`. */
 export function initIx(
   a: NotchAddresses,
   admin: Address,
@@ -249,8 +275,37 @@ export function initIx(
 ): Instruction {
   return ix(
     a.program,
-    [meta(admin, WS), meta(a.config, W), meta(a.mint, R), meta(a.vault, W), meta(a.pool, W), meta(a.shareMint, W), meta(TOKEN_PROGRAM, R), meta(SYSTEM_PROGRAM, R)],
+    [meta(admin, WS), meta(a.config, W), meta(a.mint, R), meta(SYSTEM_PROGRAM, R)],
     concat(discriminator('init'), new Uint8Array(addressEncoder.encode(underwriter)), i64Le(underwriterExpiry)),
+  );
+}
+
+export function u16Le(n: number): Uint8Array {
+  const b = new Uint8Array(2);
+  new DataView(b.buffer).setUint16(0, n, true);
+  return b;
+}
+export function u32Le(n: number): Uint8Array {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, n, true);
+  return b;
+}
+
+/** Defaults used by the demo pools: junior is at least 20% of the pool; a junior dollar counts 2x in the fee split. */
+export const DEFAULT_MIN_JUNIOR_BPS = 2000;
+export const DEFAULT_JUNIOR_WEIGHT_BPS = 20_000;
+
+/** Admin only, once: create the vault and both share mints and fix the waterfall parameters. */
+export function initPoolIx(
+  a: NotchAddresses,
+  admin: Address,
+  minJuniorBps: number = DEFAULT_MIN_JUNIOR_BPS,
+  juniorWeightBps: number = DEFAULT_JUNIOR_WEIGHT_BPS,
+): Instruction {
+  return ix(
+    a.program,
+    [meta(admin, WS), meta(a.config, R), meta(a.mint, R), meta(a.vault, W), meta(a.pool, W), meta(a.seniorMint, W), meta(a.juniorMint, W), meta(TOKEN_PROGRAM, R), meta(SYSTEM_PROGRAM, R)],
+    concat(discriminator('init_pool'), u16Le(minJuniorBps), u32Le(juniorWeightBps)),
   );
 }
 
@@ -297,17 +352,18 @@ export function postLimitIx(a: NotchAddresses, p: PostLimitParams): Instruction 
   );
 }
 
-export function depositIx(a: NotchAddresses, lender: Address, from: Address, shareAccount: Address, amount: bigint | number): Instruction {
+/** Deposit into a tranche (default junior, the entry tranche). `shareAccount` must hold that tranche's share mint. */
+export function depositIx(a: NotchAddresses, lender: Address, from: Address, shareAccount: Address, amount: bigint | number, tranche: Tranche = 'junior'): Instruction {
   return ix(
     a.program,
-    [meta(lender, RS), meta(a.config, R), meta(a.mint, R), meta(from, W), meta(a.vault, W), meta(a.pool, W), meta(a.shareMint, W), meta(shareAccount, W), meta(TOKEN_PROGRAM, R)],
+    [meta(lender, RS), meta(a.config, R), meta(a.pool, W), meta(a.mint, R), meta(from, W), meta(a.vault, W), meta(trancheMint(a, tranche), W), meta(shareAccount, W), meta(TOKEN_PROGRAM, R)],
     concat(discriminator('deposit'), u64Le(amount)),
   );
 }
 
 /**
- * Step 1 of leaving the pool: shares move into escrow, the cooldown starts. The lender pays rent for
- * the escrow and request accounts (refunded on claim or cancel). One pending request per lender.
+ * Step 1 of leaving a tranche: shares move into escrow, the cooldown starts. The lender pays rent for
+ * the escrow and request accounts (refunded on claim or cancel). One pending request per lender per tranche.
  */
 export function requestWithdrawIx(
   a: NotchAddresses,
@@ -316,28 +372,29 @@ export function requestWithdrawIx(
   escrow: Address,
   request: Address,
   shares: bigint | number,
+  tranche: Tranche = 'junior',
 ): Instruction {
   return ix(
     a.program,
-    [meta(lender, WS), meta(a.config, R), meta(a.shareMint, R), meta(shareAccount, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM, R), meta(SYSTEM_PROGRAM, R)],
+    [meta(lender, WS), meta(a.pool, R), meta(trancheMint(a, tranche), R), meta(shareAccount, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM, R), meta(SYSTEM_PROGRAM, R)],
     concat(discriminator('request_withdraw'), u64Le(shares)),
   );
 }
 
-/** Step 2, after `unlock_ts`: burns the escrowed shares and pays USDC at the share price of that moment. */
-export function claimWithdrawIx(a: NotchAddresses, lender: Address, escrow: Address, request: Address, to: Address): Instruction {
+/** Step 2, after `unlock_ts`: burns the escrowed shares and pays USDC at that tranche's share price of that moment. */
+export function claimWithdrawIx(a: NotchAddresses, lender: Address, escrow: Address, request: Address, to: Address, tranche: Tranche = 'junior'): Instruction {
   return ix(
     a.program,
-    [meta(lender, WS), meta(a.config, R), meta(a.mint, R), meta(a.vault, W), meta(a.pool, W), meta(a.shareMint, W), meta(escrow, W), meta(request, W), meta(to, W), meta(TOKEN_PROGRAM, R)],
+    [meta(lender, WS), meta(a.config, R), meta(a.mint, R), meta(a.pool, W), meta(a.vault, W), meta(trancheMint(a, tranche), W), meta(escrow, W), meta(request, W), meta(to, W), meta(TOKEN_PROGRAM, R)],
     discriminator('claim_withdraw'),
   );
 }
 
 /** Give the escrowed shares back to the lender (any time, before or after the cooldown). */
-export function cancelWithdrawIx(a: NotchAddresses, lender: Address, shareAccount: Address, escrow: Address, request: Address): Instruction {
+export function cancelWithdrawIx(a: NotchAddresses, lender: Address, shareAccount: Address, escrow: Address, request: Address, tranche: Tranche = 'junior'): Instruction {
   return ix(
     a.program,
-    [meta(lender, WS), meta(a.config, R), meta(a.shareMint, R), meta(shareAccount, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM, R)],
+    [meta(lender, WS), meta(a.pool, R), meta(trancheMint(a, tranche), R), meta(shareAccount, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM, R)],
     discriminator('cancel_withdraw'),
   );
 }
@@ -345,7 +402,7 @@ export function cancelWithdrawIx(a: NotchAddresses, lender: Address, shareAccoun
 export function depositBorrowerIx(a: NotchAddresses, borrower: Address, line: Address, from: Address, amount: bigint | number): Instruction {
   return ix(
     a.program,
-    [meta(borrower, RS), meta(a.config, R), meta(line, W), meta(a.mint, R), meta(from, W), meta(a.vault, W), meta(a.pool, W), meta(TOKEN_PROGRAM, R)],
+    [meta(borrower, RS), meta(a.config, R), meta(a.pool, W), meta(line, W), meta(a.mint, R), meta(from, W), meta(a.vault, W), meta(TOKEN_PROGRAM, R)],
     concat(discriminator('deposit_borrower'), u64Le(amount)),
   );
 }
@@ -353,17 +410,24 @@ export function depositBorrowerIx(a: NotchAddresses, borrower: Address, line: Ad
 export function withdrawBorrowerIx(a: NotchAddresses, borrower: Address, line: Address, to: Address): Instruction {
   return ix(
     a.program,
-    [meta(borrower, RS), meta(a.config, R), meta(line, W), meta(a.mint, R), meta(a.vault, W), meta(to, W), meta(a.pool, W), meta(TOKEN_PROGRAM, R)],
+    [meta(borrower, RS), meta(a.config, R), meta(a.pool, W), meta(line, W), meta(a.mint, R), meta(a.vault, W), meta(to, W), meta(TOKEN_PROGRAM, R)],
     discriminator('withdraw_borrower'),
   );
 }
 
+const drawAccounts = (a: NotchAddresses, borrower: Address, line: Address, to: Address) =>
+  [meta(borrower, RS), meta(a.config, R), meta(a.pool, W), meta(line, W), meta(a.mint, R), meta(a.vault, W), meta(to, W), meta(TOKEN_PROGRAM, R)];
+
 export function drawIx(a: NotchAddresses, borrower: Address, line: Address, to: Address, amount: bigint | number): Instruction {
-  return ix(
-    a.program,
-    [meta(borrower, RS), meta(a.config, R), meta(line, W), meta(a.mint, R), meta(a.vault, W), meta(to, W), meta(TOKEN_PROGRAM, R), meta(a.pool, W)],
-    concat(discriminator('draw'), u64Le(amount)),
-  );
+  return ix(a.program, drawAccounts(a, borrower, line, to), concat(discriminator('draw'), u64Le(amount)));
+}
+
+/**
+ * Like `drawIx` but with a shorter due period (10 s ..= 30 days), set on the first draw of a loan only.
+ * Only ever worse for the borrower; used to force a default on devnet and in tests.
+ */
+export function drawWithTermIx(a: NotchAddresses, borrower: Address, line: Address, to: Address, amount: bigint | number, termSeconds: bigint | number): Instruction {
+  return ix(a.program, drawAccounts(a, borrower, line, to), concat(discriminator('draw_with_term'), u64Le(amount), i64Le(termSeconds)));
 }
 
 /** `depositReturn` may be the same account as `from` (the tests pass the same token account twice). */
@@ -377,7 +441,7 @@ export function repayIx(
 ): Instruction {
   return ix(
     a.program,
-    [meta(borrower, RS), meta(a.config, R), meta(line, W), meta(a.mint, R), meta(from, W), meta(a.vault, W), meta(TOKEN_PROGRAM, R), meta(a.pool, W), meta(depositReturn, W)],
+    [meta(borrower, RS), meta(a.config, R), meta(a.pool, W), meta(line, W), meta(a.mint, R), meta(from, W), meta(a.vault, W), meta(TOKEN_PROGRAM, R), meta(depositReturn, W)],
     concat(discriminator('repay'), u64Le(amount)),
   );
 }
@@ -439,9 +503,20 @@ export interface PoolStats {
   feesEarned: bigint;
   borrowerDeposits: bigint;
   idle: bigint;
+  /** Tracked NAV of each tranche; seniorNav + juniorNav == idle + outstanding. */
+  seniorNav: bigint;
+  juniorNav: bigint;
+  seniorFees: bigint;
+  juniorFees: bigint;
+  seniorLosses: bigint;
+  juniorLosses: bigint;
+  /** Junior must stay at least this share of total NAV (bps). */
+  minJuniorBps: number;
+  /** A junior dollar counts this many bps of a senior dollar in the fee split. */
+  juniorWeightBps: number;
 }
 
-export const POOL_MIN_LEN = 64;
+export const POOL_MIN_LEN = 186;
 
 export function decodePool(data: Uint8Array): PoolStats {
   if (data.length < POOL_MIN_LEN) throw new Error('pool account is too short');
@@ -454,6 +529,14 @@ export function decodePool(data: Uint8Array): PoolStats {
     feesEarned: v.getBigUint64(40, true),
     borrowerDeposits: v.getBigUint64(48, true),
     idle: v.getBigUint64(56, true),
+    seniorNav: v.getBigUint64(64, true),
+    juniorNav: v.getBigUint64(72, true),
+    seniorFees: v.getBigUint64(80, true),
+    juniorFees: v.getBigUint64(88, true),
+    seniorLosses: v.getBigUint64(96, true),
+    juniorLosses: v.getBigUint64(104, true),
+    minJuniorBps: v.getUint16(112, true),
+    juniorWeightBps: v.getUint32(114, true),
   };
 }
 
@@ -492,8 +575,39 @@ function getAddressDecoderFromBytes(bytes: Uint8Array): Address {
 // Money rules, mirrored from the program so the UI can show them before a tx.
 // ---------------------------------------------------------------------------
 
-/** Share price numerator: idle lender cash plus principal out on loan. */
+/** Total pool assets (both tranches): idle lender cash plus principal out on loan. */
 export const poolAssets = (p: PoolStats) => p.idle + p.outstanding;
+/** Tracked NAV of one tranche: the share price numerator for that tranche's token. */
+export const trancheNav = (p: Pick<PoolStats, 'seniorNav' | 'juniorNav'>, t: Tranche) => (t === 'senior' ? p.seniorNav : p.juniorNav);
+
+const BPS = 10_000n;
+/**
+ * Fee waterfall, mirrors `TranchePool::split_fee`: weighted pro-rata, a junior dollar counts
+ * `juniorWeightBps / 10_000` times. Returns [seniorFee, juniorFee]; dust goes to junior; they sum to `fee`.
+ */
+export function splitFee(fee: bigint, seniorNav: bigint, juniorNav: bigint, juniorWeightBps: number | bigint): [bigint, bigint] {
+  const sw = seniorNav * BPS;
+  const jw = juniorNav * BigInt(juniorWeightBps);
+  if (sw + jw === 0n) throw new Error('pool has no capital');
+  const s = (fee * sw) / (sw + jw);
+  return [s, fee - s];
+}
+/** Loss waterfall, mirrors `TranchePool::apply_loss`: junior first, senior only for the rest. Returns [seniorLoss, juniorLoss]. */
+export function splitLoss(loss: bigint, seniorNav: bigint, juniorNav: bigint): [bigint, bigint] {
+  const j = loss < juniorNav ? loss : juniorNav;
+  const s = loss - j;
+  if (s > seniorNav) throw new Error('loss exceeds the pool');
+  return [s, j];
+}
+/** Subordination floor, mirrors `junior_ratio_ok`: junior * 10_000 >= minJuniorBps * total. */
+export const juniorRatioOk = (junior: bigint, total: bigint, minJuniorBps: number | bigint) => junior * BPS >= BigInt(minJuniorBps) * total;
+/** Largest senior deposit the floor allows right now (0 when none). */
+export function seniorHeadroom(p: Pick<PoolStats, 'seniorNav' | 'juniorNav' | 'minJuniorBps'>): bigint {
+  if (p.minJuniorBps === 0) return BigInt(Number.MAX_SAFE_INTEGER);
+  const maxTotal = (p.juniorNav * BPS) / BigInt(p.minJuniorBps);
+  const total = p.seniorNav + p.juniorNav;
+  return maxTotal > total ? maxTotal - total : 0n;
+}
 
 /** Flat 2% fee on the drawn balance, rounded up. */
 export const feeFor = (drawn: bigint) => (drawn * 2n + 99n) / 100n;

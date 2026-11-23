@@ -28,6 +28,7 @@ import {
   type CreditLine,
   type NotchAddresses,
   type PoolStats,
+  type Tranche,
   type WithdrawRequest,
 } from './notch';
 
@@ -49,7 +50,10 @@ async function accountBytes(addr: Address): Promise<Uint8Array | null> {
 
 export interface PoolView {
   stats: PoolStats;
+  /** Supply of the share token the single-tranche UI uses (JUNIOR). */
   shareSupply: bigint;
+  seniorSupply: bigint;
+  juniorSupply: bigint;
   vaultBalance: bigint;
   underwriter: Address | null;
   underwriterExpiry: bigint | null;
@@ -58,13 +62,14 @@ export interface PoolView {
 /** Read pool accounting, share supply and config. Returns null if the program has not been initialised. */
 export async function fetchPool(): Promise<PoolView | null> {
   const a = await notchAddresses();
-  const [pool, shareMint, vault, config] = await Promise.all([
+  const [pool, shareMint, seniorMint, vault, config] = await Promise.all([
     accountBytes(a.pool),
     accountBytes(a.shareMint),
+    accountBytes(a.seniorMint),
     accountBytes(a.vault),
     accountBytes(a.config),
   ]);
-  if (!pool || !shareMint) return null;
+  if (!pool || !shareMint || !seniorMint) return null;
   let underwriter: Address | null = null;
   let underwriterExpiry: bigint | null = null;
   if (config && config.length >= 112) {
@@ -74,6 +79,8 @@ export async function fetchPool(): Promise<PoolView | null> {
   return {
     stats: decodePool(pool),
     shareSupply: decodeMintSupply(shareMint),
+    seniorSupply: decodeMintSupply(seniorMint),
+    juniorSupply: decodeMintSupply(shareMint),
     vaultBalance: vault ? decodeTokenAmount(vault) : 0n,
     underwriter,
     underwriterExpiry,
@@ -87,9 +94,9 @@ export async function fetchLine(borrower: Address): Promise<CreditLine | null> {
 }
 
 /** The lender's pending withdrawal, or null when there is none. */
-export async function fetchWithdrawRequest(lender: Address): Promise<WithdrawRequest | null> {
+export async function fetchWithdrawRequest(lender: Address, tranche: Tranche = 'junior'): Promise<WithdrawRequest | null> {
   const a = await notchAddresses();
-  const bytes = await accountBytes(await deriveWithdrawRequest(a.program, lender));
+  const bytes = await accountBytes(await deriveWithdrawRequest(a.program, lender, tranche));
   return bytes ? decodeWithdrawRequest(bytes) : null;
 }
 

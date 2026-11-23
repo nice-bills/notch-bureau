@@ -10,6 +10,8 @@ declare_id!("4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz");
 /// Native Ed25519 signature-verify program.
 pub const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
 pub const LOAN_TERM_S: i64 = 30 * 86_400;
+/// Shortest due period `draw_with_term` accepts.
+pub const MIN_LOAN_TERM_S: i64 = 10;
 /// How long a lender's shares sit in escrow between `request_withdraw` and `claim_withdraw`.
 ///
 /// Why it exists: a loan is "overdue" the second after `line.due`, but the loss only reaches the
@@ -25,11 +27,67 @@ pub const LOAN_TERM_S: i64 = 30 * 86_400;
 /// `LOAN_TERM_S` so honest lenders are not locked up for long.
 pub const WITHDRAW_COOLDOWN_S: i64 = 3 * 86_400;
 
+// ===========================================================================================
+// SENIOR / JUNIOR TRANCHES (pool v2)
+// ===========================================================================================
+// The lender pool has two share mints over ONE vault and ONE pool of loans:
+//
+//   SENIOR  (PDA ["senior-mint"])  gets protection: it loses only after JUNIOR is at zero.
+//   JUNIOR  (PDA ["junior-mint"])  gives protection: it loses first, and is paid more per dollar.
+//
+// Accounting is plain integers, all checked. Each tranche has a tracked net asset value (NAV):
+//
+//     senior_nav + junior_nav == idle + outstanding            (checked on every pool touch)
+//
+// A tranche's share price is `nav / share supply` (escrowed shares stay in the supply). Prices come
+// from this tracked NAV, never from the vault's token balance, so a token donation to the vault
+// cannot move any price (first-depositor / inflation protection, per tranche).
+//
+// LOSSES (mark_default). Net loss = defaulted principal - seized first-loss deposit.
+//     junior takes min(net loss, junior_nav); senior takes only the remainder.
+//   A loss smaller than the junior NAV leaves senior_nav untouched. Fees do NOT refill a hole
+//   (no make-whole step): after a loss, later fees are split by the new, smaller NAVs.
+//
+// FEES (repay, flat 2% of principal). One rule, no clocks, no APR bookkeeping:
+//     senior_fee = floor(fee * senior_nav * 10_000
+//                        / (senior_nav * 10_000 + junior_nav * junior_weight_bps))
+//     junior_fee = fee - senior_fee
+//   i.e. pro-rata by capital, except a dollar of junior counts `junior_weight_bps / 10_000` times
+//   (default 2.0x) because it carries the first loss. A tranche with zero NAV earns nothing and the
+//   other takes the whole fee. With 80 senior / 20 junior and weight 2.0x: senior gets 40/60 of fees
+//   (0.83x of the pool rate per dollar), junior gets 20/60 ... i.e. 1.67x per dollar.
+//
+// SUBORDINATION GUARD (config `min_junior_bps`, e.g. 2000 = 20%):
+//     junior_nav * 10_000 >= min_junior_bps * (senior_nav + junior_nav)
+//   - a SENIOR deposit is refused if it would break this (so the first senior needs junior first);
+//   - a JUNIOR claim is refused if it would break this (junior can always leave once senior is 0).
+//   A loss can push the ratio below the floor; then senior deposits and junior exits stay refused
+//   until junior is topped up. Senior exits are never blocked by the guard.
+//
+// WITHDRAWALS are the same two-step escrow as before, per tranche (escrow/request PDAs are keyed by
+// the tranche's share mint). The claim is priced at THAT tranche's NAV at claim time, so a default
+// marked during the cooldown is priced in. A payout is capped by idle lender cash and by the
+// tranche's own NAV.
+//
+// DEAD TRANCHE: a tranche whose NAV hit zero while shares exist refuses deposits (nobody can buy
+// into a hole that existing zero-value shares would share). Dust note: if a tranche's supply is
+// zero with a leftover NAV (rounding dust only), the next depositor mints 1:1 and inherits it.
+//
+// MIGRATION. The v1 pool (PDAs "pool", "vault", "share-mint", single token) is NOT migrated: v2
+// uses new PDAs ("pool-v2", "vault-v2", "senior-mint", "junior-mint"), `Config`, credit lines,
+// dedupe and identity accounts are shared and untouched. v1 instructions are gone. On devnet only
+// test-mint USDC sat in the v1 vault; it is abandoned there. Any line still carrying a v1 balance
+// cannot repay into v2 (it fails with MathOverflow); none exist after the e2e cleanups.
+pub const BPS: u128 = 10_000;
+pub const SENIOR: u8 = 0;
+pub const JUNIOR: u8 = 1;
+
 #[program]
 pub mod notch {
     use super::*;
 
     /// One-time setup: who may rotate the underwriter, and which mint the pool lends.
+    /// (The lender pool itself is created by `init_pool`, so an existing config can be reused.)
     pub fn init(ctx: Context<Init>, underwriter: Pubkey, underwriter_expiry: i64) -> Result<()> {
         let c = &mut ctx.accounts.config;
         c.admin = ctx.accounts.admin.key();
@@ -37,9 +95,31 @@ pub mod notch {
         c.underwriter = underwriter;
         c.underwriter_expiry = underwriter_expiry;
         c.bump = ctx.bumps.config;
-        c.vault_bump = ctx.bumps.vault;
-        c.share_mint_bump = ctx.bumps.share_mint;
-        ctx.accounts.pool.bump = ctx.bumps.pool;
+        // v1 leftovers (vault / share mint bumps); the v2 pool keeps its own bumps.
+        c.vault_bump = 0;
+        c.share_mint_bump = 0;
+        Ok(())
+    }
+
+    /// Create the tranche pool: vault, SENIOR and JUNIOR share mints, and the (immutable) waterfall
+    /// parameters. Admin only, once. `min_junior_bps`: junior must stay at least this share of total
+    /// NAV (0..=10_000). `junior_weight_bps`: how many times a junior dollar counts in the fee split
+    /// (>= 10_000 so junior never earns less per dollar than senior; <= 100_000).
+    pub fn init_pool(ctx: Context<InitPool>, min_junior_bps: u16, junior_weight_bps: u32) -> Result<()> {
+        require!(min_junior_bps as u128 <= BPS, NotchError::InvalidTrancheParams);
+        require!(
+            junior_weight_bps as u128 >= BPS && junior_weight_bps <= 100_000,
+            NotchError::InvalidTrancheParams
+        );
+        let p = &mut ctx.accounts.pool;
+        p.min_junior_bps = min_junior_bps;
+        p.junior_weight_bps = junior_weight_bps;
+        p.senior_mint = ctx.accounts.senior_mint.key();
+        p.junior_mint = ctx.accounts.junior_mint.key();
+        p.bump = ctx.bumps.pool;
+        p.vault_bump = ctx.bumps.vault;
+        p.senior_bump = ctx.bumps.senior_mint;
+        p.junior_bump = ctx.bumps.junior_mint;
         Ok(())
     }
 
@@ -160,21 +240,31 @@ pub mod notch {
         Ok(out)
     }
 
-    /// Deposit USDC and mint shares at the current net asset value.
+    /// Deposit USDC into a tranche (the `share_mint` account picks SENIOR or JUNIOR) and mint shares
+    /// at that tranche's current NAV. Senior deposits must keep the subordination ratio.
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         require!(amount > 0, NotchError::InvalidAmount);
+        let pool = &mut ctx.accounts.pool;
+        pool.check_invariant()?;
+        let t = pool.tranche_of(&ctx.accounts.share_mint.key())?;
         // Share price comes from tracked accounting, never from the raw vault balance, so a direct
         // token donation to the vault cannot move it (no first-depositor inflation attack).
-        let assets = pool_assets(&ctx.accounts.pool)?;
+        let nav = pool.nav(t);
         let supply = ctx.accounts.share_mint.supply;
         let shares = if supply == 0 { amount } else {
-            require!(assets > 0, NotchError::InvalidPoolState);
+            require!(nav > 0, NotchError::InvalidPoolState);
             let s = (amount as u128).checked_mul(supply as u128).ok_or(NotchError::MathOverflow)?
-                .checked_div(assets as u128).ok_or(NotchError::MathOverflow)?;
+                .checked_div(nav as u128).ok_or(NotchError::MathOverflow)?;
             u64::try_from(s).map_err(|_| NotchError::MathOverflow)?
         };
         require!(shares > 0, NotchError::InvalidAmount);
-        ctx.accounts.pool.idle = ctx.accounts.pool.idle.checked_add(amount).ok_or(NotchError::MathOverflow)?;
+        if t == SENIOR {
+            let new_total = pool.total_nav()?.checked_add(amount).ok_or(NotchError::MathOverflow)?;
+            require!(pool.junior_ratio_ok(pool.junior_nav, new_total), NotchError::SubordinationBreached);
+        }
+        pool.idle = pool.idle.checked_add(amount).ok_or(NotchError::MathOverflow)?;
+        *pool.nav_mut(t) = nav.checked_add(amount).ok_or(NotchError::MathOverflow)?;
+        let (mint_seed, mint_bump) = pool.mint_seed(t);
         let decimals = ctx.accounts.mint.decimals;
         token_interface::transfer_checked(
             CpiContext::new(
@@ -189,8 +279,8 @@ pub mod notch {
             amount,
             decimals,
         )?;
-        let bump = [ctx.accounts.config.share_mint_bump];
-        let seeds: &[&[&[u8]]] = &[&[b"share-mint", &bump]];
+        let bump = [mint_bump];
+        let seeds: &[&[&[u8]]] = &[&[mint_seed, &bump]];
         token_interface::mint_to_checked(CpiContext::new_with_signer(
             ctx.accounts.token_program.key(), token_interface::MintToChecked {
                 mint: ctx.accounts.share_mint.to_account_info(),
@@ -199,49 +289,23 @@ pub mod notch {
             }, seeds), shares, ctx.accounts.share_mint.decimals)
     }
 
-    /// Borrow against the bureau limit.
-    pub fn draw(ctx: Context<Draw>, amount: u64) -> Result<()> {
-        let now = Clock::get()?.unix_timestamp;
-        require!(amount > 0, NotchError::InvalidAmount);
-        let line = &mut ctx.accounts.line;
-        require!(!line.defaulted, NotchError::Defaulted);
-        require!(now < line.expiry, NotchError::RecordExpired);
-        let drawn = line
-            .drawn
-            .checked_add(amount)
-            .ok_or(NotchError::OverLimit)?;
-        require!(drawn <= line.limit, NotchError::OverLimit);
-        // First-loss deposit must cover 20% (rounded up) of the TOTAL balance after this draw.
-        require!(
-            line.borrower_deposit >= drawn.checked_add(4).ok_or(NotchError::MathOverflow)? / 5,
-            NotchError::InsufficientDeposit
-        );
-        // Only lender liquidity can be lent; never other borrowers' deposits or stray donations.
-        require!(amount <= ctx.accounts.pool.idle, NotchError::InsufficientLiquidity);
-        if line.drawn == 0 {
-            line.due = now.checked_add(LOAN_TERM_S).ok_or(NotchError::MathOverflow)?;
-        }
-        line.drawn = drawn;
-        ctx.accounts.pool.idle = ctx.accounts.pool.idle.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
-        ctx.accounts.pool.total_lent = ctx.accounts.pool.total_lent.checked_add(amount).ok_or(NotchError::MathOverflow)?;
-        ctx.accounts.pool.outstanding = ctx.accounts.pool.outstanding.checked_add(amount).ok_or(NotchError::MathOverflow)?;
+    /// Borrow against the bureau limit. The loan is due `LOAN_TERM_S` (30 days) after the first draw.
+    pub fn draw(mut ctx: Context<Draw>, amount: u64) -> Result<()> {
+        do_draw(&mut ctx.accounts, amount, LOAN_TERM_S)
+    }
 
-        let bump = [ctx.accounts.config.vault_bump];
-        let seeds: &[&[&[u8]]] = &[&[b"vault", &bump]];
-        token_interface::transfer_checked(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.key(),
-                TransferChecked {
-                    from: ctx.accounts.vault.to_account_info(),
-                    mint: ctx.accounts.mint.to_account_info(),
-                    to: ctx.accounts.to.to_account_info(),
-                    authority: ctx.accounts.vault.to_account_info(),
-                },
-                seeds,
-            ),
-            amount,
-            ctx.accounts.mint.decimals,
-        )
+    /// Same as `draw`, but the borrower picks a SHORTER due period (`MIN_LOAN_TERM_S`..=`LOAN_TERM_S`
+    /// seconds). It only applies to the first draw of a loan (later draws keep the existing due date).
+    /// A shorter term can only hurt the borrower (the line defaults sooner and the first-loss deposit is
+    /// seized), never the lenders, whose worst case is already "default at day 30". The app always uses
+    /// `draw`; this exists so a real default (and the junior-first loss) can be shown end to end on
+    /// devnet and in tests without waiting 30 days.
+    pub fn draw_with_term(mut ctx: Context<Draw>, amount: u64, term_s: i64) -> Result<()> {
+        require!(
+            (MIN_LOAN_TERM_S..=LOAN_TERM_S).contains(&term_s),
+            NotchError::InvalidTerm
+        );
+        do_draw(&mut ctx.accounts, amount, term_s)
     }
 
     /// Pay back. Clearing the balance before the due date counts as an on-time repayment,
@@ -274,6 +338,12 @@ pub mod notch {
         pool.outstanding = pool.outstanding.checked_sub(principal).ok_or(NotchError::MathOverflow)?;
         pool.idle = pool.idle.checked_add(payoff).ok_or(NotchError::MathOverflow)?;
         pool.fees_earned = pool.fees_earned.checked_add(fee_due).ok_or(NotchError::MathOverflow)?;
+        // Fee waterfall (see the block comment at the top): weighted pro-rata, junior counts extra.
+        let (senior_fee, junior_fee) = pool.split_fee(fee_due)?;
+        pool.senior_nav = pool.senior_nav.checked_add(senior_fee).ok_or(NotchError::MathOverflow)?;
+        pool.junior_nav = pool.junior_nav.checked_add(junior_fee).ok_or(NotchError::MathOverflow)?;
+        pool.senior_fees = pool.senior_fees.checked_add(senior_fee).ok_or(NotchError::MathOverflow)?;
+        pool.junior_fees = pool.junior_fees.checked_add(junior_fee).ok_or(NotchError::MathOverflow)?;
         // Full repayment frees the first-loss deposit; it goes back to the borrower in this same instruction.
         let deposit_return = line.borrower_deposit;
         line.borrower_deposit = 0;
@@ -284,11 +354,11 @@ pub mod notch {
             line.repaid_late = line.repaid_late.checked_add(1).ok_or(NotchError::MathOverflow)?;
         }
         line.due = 0;
-        let bump = [ctx.accounts.config.vault_bump];
+        let bump = [ctx.accounts.pool.vault_bump];
         token_interface::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), TransferChecked {
             from: ctx.accounts.vault.to_account_info(), mint: ctx.accounts.mint.to_account_info(),
             to: ctx.accounts.deposit_return.to_account_info(), authority: ctx.accounts.vault.to_account_info(),
-        }, &[&[b"vault", &bump]]), deposit_return, ctx.accounts.mint.decimals)?;
+        }, &[&[b"vault-v2", &bump]]), deposit_return, ctx.accounts.mint.decimals)?;
         Ok(())
     }
 
@@ -315,12 +385,16 @@ pub mod notch {
         pool.idle = pool.idle.checked_add(seized).ok_or(NotchError::MathOverflow)?;
         pool.defaults = pool.defaults.checked_add(1).ok_or(NotchError::MathOverflow)?;
         pool.default_amount = pool.default_amount.checked_add(lost).ok_or(NotchError::MathOverflow)?;
+        // Losses: junior first, senior only for what is left once junior is at zero.
+        let net_loss = lost.checked_sub(seized).ok_or(NotchError::MathOverflow)?;
+        let (senior_loss, junior_loss) = pool.apply_loss(net_loss)?;
+        emit!(LossApplied { wallet: line.wallet, lost, seized, senior_loss, junior_loss });
         Ok(())
     }
 
-    /// Step 1 of leaving the pool: move `shares` into a program-owned escrow and start the cooldown.
+    /// Step 1 of leaving a tranche: move `shares` into a program-owned escrow and start the cooldown.
     /// The shares are NOT burned, so they still count in the supply (and keep earning/losing with the
-    /// pool) until `claim_withdraw`. One pending request per lender; cancel to change the amount.
+    /// pool) until `claim_withdraw`. One pending request per lender PER TRANCHE; cancel to change the amount.
     pub fn request_withdraw(ctx: Context<RequestWithdraw>, shares: u64) -> Result<()> {
         require!(shares > 0 && shares <= ctx.accounts.share_account.amount, NotchError::InvalidAmount);
         let now = Clock::get()?.unix_timestamp;
@@ -353,19 +427,31 @@ pub mod notch {
         let now = Clock::get()?.unix_timestamp;
         require!(now >= ctx.accounts.request.unlock_ts, NotchError::CooldownActive);
         let shares = ctx.accounts.request.shares;
+        let pool = &mut ctx.accounts.pool;
+        pool.check_invariant()?;
+        let t = pool.tranche_of(&ctx.accounts.share_mint.key())?;
         // Escrowed shares are still in `supply`, so the price per share is unaffected by the escrow.
-        let assets = pool_assets(&ctx.accounts.pool)?;
-        let amount = (shares as u128).checked_mul(assets as u128).ok_or(NotchError::MathOverflow)?
+        let nav = pool.nav(t);
+        let amount = (shares as u128).checked_mul(nav as u128).ok_or(NotchError::MathOverflow)?
             .checked_div(ctx.accounts.share_mint.supply as u128).ok_or(NotchError::MathOverflow)?;
         let amount = u64::try_from(amount).map_err(|_| NotchError::MathOverflow)?;
         require!(amount > 0, NotchError::InvalidAmount);
         // Only idle lender cash can leave; USDC out on loan and borrower deposits cannot.
-        require!(amount <= ctx.accounts.pool.idle, NotchError::InsufficientLiquidity);
-        ctx.accounts.pool.idle = ctx.accounts.pool.idle.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
+        require!(amount <= pool.idle, NotchError::InsufficientLiquidity);
+        // A junior exit may not drop junior below the floor (senior must keep its cushion).
+        if t == JUNIOR {
+            let new_junior = nav.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
+            let new_total = pool.total_nav()?.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
+            require!(pool.junior_ratio_ok(new_junior, new_total), NotchError::SubordinationBreached);
+        }
+        pool.idle = pool.idle.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
+        *pool.nav_mut(t) = nav.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
+        let vault_bump = pool.vault_bump;
 
         let lender_key = ctx.accounts.lender.key();
         let escrow_bump = [ctx.accounts.request.escrow_bump];
-        let escrow_seeds: &[&[&[u8]]] = &[&[b"escrow", lender_key.as_ref(), &escrow_bump]];
+        let mint_key = ctx.accounts.share_mint.key();
+        let escrow_seeds: &[&[&[u8]]] = &[&[b"escrow", mint_key.as_ref(), lender_key.as_ref(), &escrow_bump]];
         // Burn everything in escrow (the request amount, plus any shares a stranger sent in): the
         // account must be empty to be closed, and nobody else can pull from it.
         let escrowed = ctx.accounts.escrow.amount;
@@ -377,18 +463,19 @@ pub mod notch {
             account: ctx.accounts.escrow.to_account_info(), destination: ctx.accounts.lender.to_account_info(),
             authority: ctx.accounts.escrow.to_account_info(),
         }, escrow_seeds))?;
-        let vbump = [ctx.accounts.config.vault_bump];
+        let vbump = [vault_bump];
         token_interface::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), TransferChecked {
             from: ctx.accounts.vault.to_account_info(), mint: ctx.accounts.mint.to_account_info(),
             to: ctx.accounts.to.to_account_info(), authority: ctx.accounts.vault.to_account_info(),
-        }, &[&[b"vault", &vbump]]), amount, ctx.accounts.mint.decimals)
+        }, &[&[b"vault-v2", &vbump]]), amount, ctx.accounts.mint.decimals)
     }
 
     /// Change of mind (allowed any time, before or after the cooldown): shares go back to the lender.
     pub fn cancel_withdraw(ctx: Context<CancelWithdraw>) -> Result<()> {
         let lender_key = ctx.accounts.lender.key();
         let escrow_bump = [ctx.accounts.request.escrow_bump];
-        let escrow_seeds: &[&[&[u8]]] = &[&[b"escrow", lender_key.as_ref(), &escrow_bump]];
+        let mint_key = ctx.accounts.share_mint.key();
+        let escrow_seeds: &[&[&[u8]]] = &[&[b"escrow", mint_key.as_ref(), lender_key.as_ref(), &escrow_bump]];
         token_interface::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), TransferChecked {
             from: ctx.accounts.escrow.to_account_info(), mint: ctx.accounts.share_mint.to_account_info(),
             to: ctx.accounts.share_account.to_account_info(), authority: ctx.accounts.escrow.to_account_info(),
@@ -420,12 +507,57 @@ pub mod notch {
         require!(amount > 0, NotchError::InvalidAmount);
         line.borrower_deposit = 0;
         ctx.accounts.pool.borrower_deposits = ctx.accounts.pool.borrower_deposits.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
-        let bump = [ctx.accounts.config.vault_bump];
+        let bump = [ctx.accounts.pool.vault_bump];
         token_interface::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), TransferChecked {
             from: ctx.accounts.vault.to_account_info(), mint: ctx.accounts.mint.to_account_info(),
             to: ctx.accounts.to.to_account_info(), authority: ctx.accounts.vault.to_account_info(),
-        }, &[&[b"vault", &bump]]), amount, ctx.accounts.mint.decimals)
+        }, &[&[b"vault-v2", &bump]]), amount, ctx.accounts.mint.decimals)
     }
+}
+
+/// Shared body of `draw` / `draw_with_term`.
+fn do_draw(acc: &mut Draw, amount: u64, term_s: i64) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    require!(amount > 0, NotchError::InvalidAmount);
+    let line = &mut acc.line;
+    require!(!line.defaulted, NotchError::Defaulted);
+    require!(now < line.expiry, NotchError::RecordExpired);
+    let drawn = line
+        .drawn
+        .checked_add(amount)
+        .ok_or(NotchError::OverLimit)?;
+    require!(drawn <= line.limit, NotchError::OverLimit);
+    // First-loss deposit must cover 20% (rounded up) of the TOTAL balance after this draw.
+    require!(
+        line.borrower_deposit >= drawn.checked_add(4).ok_or(NotchError::MathOverflow)? / 5,
+        NotchError::InsufficientDeposit
+    );
+    // Only lender liquidity can be lent; never other borrowers' deposits or stray donations.
+    require!(amount <= acc.pool.idle, NotchError::InsufficientLiquidity);
+    if line.drawn == 0 {
+        line.due = now.checked_add(term_s).ok_or(NotchError::MathOverflow)?;
+    }
+    line.drawn = drawn;
+    acc.pool.idle = acc.pool.idle.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
+    acc.pool.total_lent = acc.pool.total_lent.checked_add(amount).ok_or(NotchError::MathOverflow)?;
+    acc.pool.outstanding = acc.pool.outstanding.checked_add(amount).ok_or(NotchError::MathOverflow)?;
+
+    let bump = [acc.pool.vault_bump];
+    let seeds: &[&[&[u8]]] = &[&[b"vault-v2", &bump]];
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            acc.token_program.key(),
+            TransferChecked {
+                from: acc.vault.to_account_info(),
+                mint: acc.mint.to_account_info(),
+                to: acc.to.to_account_info(),
+                authority: acc.vault.to_account_info(),
+            },
+            seeds,
+        ),
+        amount,
+        acc.mint.decimals,
+    )
 }
 
 /// Bytes 56..88 of the record (the email's dedupe hash); a short record yields an empty seed and fails parsing later.
@@ -495,9 +627,11 @@ fn write_trailing_i64<W: std::io::Write>(v: &i64, writer: &mut W) -> std::io::Re
     Ok(())
 }
 
+/// The v2 lender pool. PDA ["pool-v2"]. The first seven fields keep the v1 `TranchePool` byte layout
+/// (offsets 8..64) so older readers of those numbers still work; the rest is new.
 #[account]
 #[derive(InitSpace)]
-pub struct PoolStats {
+pub struct TranchePool {
     pub total_lent: u64,
     pub outstanding: u64,
     pub defaults: u64,
@@ -508,16 +642,87 @@ pub struct PoolStats {
     /// Lender-owned cash in the vault (deposits + fees + seized deposits - draws - withdrawals).
     /// Tracked, not read from the vault, so stray token donations to the vault are ignored.
     pub idle: u64,
+    /// Tracked NAV of each tranche. Invariant: senior_nav + junior_nav == idle + outstanding.
+    pub senior_nav: u64,
+    pub junior_nav: u64,
+    /// Lifetime fees credited to / losses absorbed by each tranche (stats only).
+    pub senior_fees: u64,
+    pub junior_fees: u64,
+    pub senior_losses: u64,
+    pub junior_losses: u64,
+    /// Junior must stay at least this share of total NAV (basis points).
+    pub min_junior_bps: u16,
+    /// A junior dollar counts this many bps of a senior dollar in the fee split (10_000 = equal).
+    pub junior_weight_bps: u32,
+    pub senior_mint: Pubkey,
+    pub junior_mint: Pubkey,
     pub bump: u8,
+    pub vault_bump: u8,
+    pub senior_bump: u8,
+    pub junior_bump: u8,
 }
 
-/// Net asset value backing the shares: idle lender cash plus principal out on loan.
-fn pool_assets(pool: &PoolStats) -> Result<u64> {
-    pool.idle.checked_add(pool.outstanding).ok_or(error!(NotchError::InvalidPoolState))
+impl TranchePool {
+    /// Which tranche a share mint belongs to; any other mint is rejected.
+    pub fn tranche_of(&self, mint: &Pubkey) -> Result<u8> {
+        if *mint == self.senior_mint {
+            Ok(SENIOR)
+        } else if *mint == self.junior_mint {
+            Ok(JUNIOR)
+        } else {
+            err!(NotchError::BadTrancheMint)
+        }
+    }
+    pub fn nav(&self, t: u8) -> u64 {
+        if t == SENIOR { self.senior_nav } else { self.junior_nav }
+    }
+    pub fn nav_mut(&mut self, t: u8) -> &mut u64 {
+        if t == SENIOR { &mut self.senior_nav } else { &mut self.junior_nav }
+    }
+    /// PDA seed and bump of a tranche's share mint (it is its own mint authority).
+    pub fn mint_seed(&self, t: u8) -> (&'static [u8], u8) {
+        if t == SENIOR { (b"senior-mint", self.senior_bump) } else { (b"junior-mint", self.junior_bump) }
+    }
+    pub fn total_nav(&self) -> Result<u64> {
+        self.senior_nav.checked_add(self.junior_nav).ok_or(error!(NotchError::MathOverflow))
+    }
+    /// senior_nav + junior_nav must equal idle + outstanding; anything else is a bookkeeping bug.
+    pub fn check_invariant(&self) -> Result<()> {
+        let assets = self.idle.checked_add(self.outstanding).ok_or(NotchError::InvalidPoolState)?;
+        require!(self.total_nav()? == assets, NotchError::InvalidPoolState);
+        Ok(())
+    }
+    /// The subordination floor: junior * 10_000 >= min_junior_bps * total.
+    pub fn junior_ratio_ok(&self, junior: u64, total: u64) -> bool {
+        (junior as u128) * BPS >= (self.min_junior_bps as u128) * (total as u128)
+    }
+    /// Fee waterfall: weighted pro-rata, a junior dollar counts `junior_weight_bps / 10_000` times.
+    /// Returns (senior_fee, junior_fee); rounding dust goes to junior; the two always sum to `fee`.
+    pub fn split_fee(&self, fee: u64) -> Result<(u64, u64)> {
+        let sw = (self.senior_nav as u128).checked_mul(BPS).ok_or(NotchError::MathOverflow)?;
+        let jw = (self.junior_nav as u128).checked_mul(self.junior_weight_bps as u128).ok_or(NotchError::MathOverflow)?;
+        let denom = sw.checked_add(jw).ok_or(NotchError::MathOverflow)?;
+        require!(denom > 0, NotchError::InvalidPoolState);
+        let s = (fee as u128).checked_mul(sw).ok_or(NotchError::MathOverflow)? / denom;
+        let s = u64::try_from(s).map_err(|_| NotchError::MathOverflow)?;
+        Ok((s, fee - s))
+    }
+    /// Loss waterfall: junior absorbs up to its whole NAV, senior only the rest.
+    /// Returns (senior_loss, junior_loss).
+    pub fn apply_loss(&mut self, loss: u64) -> Result<(u64, u64)> {
+        let junior_loss = loss.min(self.junior_nav);
+        let senior_loss = loss - junior_loss;
+        require!(senior_loss <= self.senior_nav, NotchError::InvalidPoolState);
+        self.junior_nav -= junior_loss;
+        self.senior_nav -= senior_loss;
+        self.junior_losses = self.junior_losses.checked_add(junior_loss).ok_or(NotchError::MathOverflow)?;
+        self.senior_losses = self.senior_losses.checked_add(senior_loss).ok_or(NotchError::MathOverflow)?;
+        Ok((senior_loss, junior_loss))
+    }
 }
 
-/// A lender's pending exit. PDA ["withdraw", lender]; the shares sit in the token account
-/// ["escrow", lender] (owned by itself) until claimed or cancelled.
+/// A lender's pending exit from one tranche. PDA ["withdraw", share_mint, lender]; the shares sit in the
+/// token account ["escrow", share_mint, lender] (owned by itself) until claimed or cancelled.
 #[account]
 #[derive(InitSpace)]
 pub struct WithdrawRequest {
@@ -564,6 +769,16 @@ pub struct CreditCheck {
     pub defaulted: bool,
 }
 
+/// Emitted by `mark_default`: how the net loss was split between the tranches.
+#[event]
+pub struct LossApplied {
+    pub wallet: Pubkey,
+    pub lost: u64,
+    pub seized: u64,
+    pub senior_loss: u64,
+    pub junior_loss: u64,
+}
+
 #[event]
 pub struct CreditChecked {
     pub wallet: Pubkey,
@@ -598,12 +813,24 @@ pub struct Init<'info> {
     #[account(init, payer = admin, space = 8 + Config::INIT_SPACE, seeds = [b"config"], bump)]
     pub config: Account<'info, Config>,
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(init, payer = admin, seeds = [b"vault"], bump, token::mint = mint, token::authority = vault, token::token_program = token_program)]
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitPool<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin, has_one = mint)]
+    pub config: Account<'info, Config>,
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(init, payer = admin, seeds = [b"vault-v2"], bump, token::mint = mint, token::authority = vault, token::token_program = token_program)]
     pub vault: InterfaceAccount<'info, TokenAccount>,
-    #[account(init, payer = admin, seeds = [b"pool"], bump, space = 8 + PoolStats::INIT_SPACE)]
-    pub pool: Account<'info, PoolStats>,
-    #[account(init, payer = admin, seeds = [b"share-mint"], bump, mint::decimals = mint.decimals, mint::authority = share_mint, token::token_program = token_program)]
-    pub share_mint: InterfaceAccount<'info, Mint>,
+    #[account(init, payer = admin, seeds = [b"pool-v2"], bump, space = 8 + TranchePool::INIT_SPACE)]
+    pub pool: Account<'info, TranchePool>,
+    #[account(init, payer = admin, seeds = [b"senior-mint"], bump, mint::decimals = mint.decimals, mint::authority = senior_mint, token::token_program = token_program)]
+    pub senior_mint: InterfaceAccount<'info, Mint>,
+    #[account(init, payer = admin, seeds = [b"junior-mint"], bump, mint::decimals = mint.decimals, mint::authority = junior_mint, token::token_program = token_program)]
+    pub junior_mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
@@ -645,13 +872,15 @@ pub struct Deposit<'info> {
     pub lender: Signer<'info>,
     #[account(seeds = [b"config"], bump = config.bump, has_one = mint)]
     pub config: Account<'info, Config>,
+    #[account(mut, seeds = [b"pool-v2"], bump = pool.bump)] pub pool: Account<'info, TranchePool>,
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut, token::mint = mint, token::authority = lender)]
     pub from: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, seeds = [b"vault"], bump = config.vault_bump)]
+    #[account(mut, seeds = [b"vault-v2"], bump = pool.vault_bump)]
     pub vault: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, seeds = [b"pool"], bump = pool.bump)] pub pool: Account<'info, PoolStats>,
-    #[account(mut, seeds = [b"share-mint"], bump = config.share_mint_bump)] pub share_mint: InterfaceAccount<'info, Mint>,
+    /// SENIOR or JUNIOR share mint: this account is how the lender picks the tranche.
+    #[account(mut, constraint = share_mint.key() == pool.senior_mint || share_mint.key() == pool.junior_mint @ NotchError::BadTrancheMint)]
+    pub share_mint: InterfaceAccount<'info, Mint>,
     #[account(mut, token::mint = share_mint, token::authority = lender)] pub share_account: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
 }
@@ -661,15 +890,15 @@ pub struct Draw<'info> {
     pub borrower: Signer<'info>,
     #[account(seeds = [b"config"], bump = config.bump, has_one = mint)]
     pub config: Account<'info, Config>,
+    #[account(mut, seeds = [b"pool-v2"], bump = pool.bump)] pub pool: Account<'info, TranchePool>,
     #[account(mut, seeds = [b"line", borrower.key().as_ref()], bump = line.bump)]
     pub line: Account<'info, CreditLine>,
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(mut, seeds = [b"vault"], bump = config.vault_bump)]
+    #[account(mut, seeds = [b"vault-v2"], bump = pool.vault_bump)]
     pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut, token::mint = mint, token::authority = borrower)]
     pub to: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
-    #[account(mut, seeds = [b"pool"], bump = pool.bump)] pub pool: Account<'info, PoolStats>,
 }
 
 #[derive(Accounts)]
@@ -677,15 +906,15 @@ pub struct Repay<'info> {
     pub borrower: Signer<'info>,
     #[account(seeds = [b"config"], bump = config.bump, has_one = mint)]
     pub config: Account<'info, Config>,
+    #[account(mut, seeds = [b"pool-v2"], bump = pool.bump)] pub pool: Account<'info, TranchePool>,
     #[account(mut, seeds = [b"line", borrower.key().as_ref()], bump = line.bump)]
     pub line: Account<'info, CreditLine>,
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut, token::mint = mint, token::authority = borrower)]
     pub from: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, seeds = [b"vault"], bump = config.vault_bump)]
+    #[account(mut, seeds = [b"vault-v2"], bump = pool.vault_bump)]
     pub vault: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
-    #[account(mut, seeds = [b"pool"], bump = pool.bump)] pub pool: Account<'info, PoolStats>,
     #[account(mut, dup, token::mint = mint, token::authority = borrower)] pub deposit_return: InterfaceAccount<'info, TokenAccount>,
 }
 
@@ -693,16 +922,17 @@ pub struct Repay<'info> {
 pub struct MarkDefault<'info> {
     #[account(mut, seeds = [b"line", line.wallet.as_ref()], bump = line.bump)]
     pub line: Account<'info, CreditLine>,
-    #[account(mut, seeds = [b"pool"], bump = pool.bump)] pub pool: Account<'info, PoolStats>,
+    #[account(mut, seeds = [b"pool-v2"], bump = pool.bump)] pub pool: Account<'info, TranchePool>,
 }
 
 #[derive(Accounts)]
 pub struct BorrowerDeposit<'info> {
     pub borrower: Signer<'info>, #[account(seeds=[b"config"], bump=config.bump, has_one=mint)] pub config: Account<'info,Config>,
+    #[account(mut,seeds=[b"pool-v2"],bump=pool.bump)] pub pool: Account<'info,TranchePool>,
     #[account(mut,seeds=[b"line",borrower.key().as_ref()],bump=line.bump)] pub line: Account<'info,CreditLine>,
     pub mint: InterfaceAccount<'info,Mint>, #[account(mut,token::mint=mint,token::authority=borrower)] pub from: InterfaceAccount<'info,TokenAccount>,
-    #[account(mut,seeds=[b"vault"],bump=config.vault_bump)] pub vault: InterfaceAccount<'info,TokenAccount>,
-    #[account(mut,seeds=[b"pool"],bump=pool.bump)] pub pool: Account<'info,PoolStats>, pub token_program: Interface<'info,TokenInterface>,
+    #[account(mut,seeds=[b"vault-v2"],bump=pool.vault_bump)] pub vault: InterfaceAccount<'info,TokenAccount>,
+    pub token_program: Interface<'info,TokenInterface>,
 }
 
 #[derive(Accounts)]
@@ -710,15 +940,15 @@ pub struct RequestWithdraw<'info> {
     /// Pays rent for the request and escrow accounts (refunded when they close).
     #[account(mut)]
     pub lender: Signer<'info>,
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, Config>,
-    #[account(seeds = [b"share-mint"], bump = config.share_mint_bump)]
+    #[account(seeds = [b"pool-v2"], bump = pool.bump)]
+    pub pool: Account<'info, TranchePool>,
+    #[account(constraint = share_mint.key() == pool.senior_mint || share_mint.key() == pool.junior_mint @ NotchError::BadTrancheMint)]
     pub share_mint: InterfaceAccount<'info, Mint>,
     #[account(mut, token::mint = share_mint, token::authority = lender)]
     pub share_account: InterfaceAccount<'info, TokenAccount>,
-    #[account(init, payer = lender, seeds = [b"escrow", lender.key().as_ref()], bump, token::mint = share_mint, token::authority = escrow, token::token_program = token_program)]
+    #[account(init, payer = lender, seeds = [b"escrow", share_mint.key().as_ref(), lender.key().as_ref()], bump, token::mint = share_mint, token::authority = escrow, token::token_program = token_program)]
     pub escrow: InterfaceAccount<'info, TokenAccount>,
-    #[account(init, payer = lender, space = 8 + WithdrawRequest::INIT_SPACE, seeds = [b"withdraw", lender.key().as_ref()], bump)]
+    #[account(init, payer = lender, space = 8 + WithdrawRequest::INIT_SPACE, seeds = [b"withdraw", share_mint.key().as_ref(), lender.key().as_ref()], bump)]
     pub request: Account<'info, WithdrawRequest>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
@@ -732,15 +962,15 @@ pub struct ClaimWithdraw<'info> {
     #[account(seeds = [b"config"], bump = config.bump, has_one = mint)]
     pub config: Account<'info, Config>,
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(mut, seeds = [b"vault"], bump = config.vault_bump)]
+    #[account(mut, seeds = [b"pool-v2"], bump = pool.bump)]
+    pub pool: Account<'info, TranchePool>,
+    #[account(mut, seeds = [b"vault-v2"], bump = pool.vault_bump)]
     pub vault: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, seeds = [b"pool"], bump = pool.bump)]
-    pub pool: Account<'info, PoolStats>,
-    #[account(mut, seeds = [b"share-mint"], bump = config.share_mint_bump)]
+    #[account(mut, constraint = share_mint.key() == pool.senior_mint || share_mint.key() == pool.junior_mint @ NotchError::BadTrancheMint)]
     pub share_mint: InterfaceAccount<'info, Mint>,
-    #[account(mut, seeds = [b"escrow", lender.key().as_ref()], bump = request.escrow_bump, token::mint = share_mint)]
+    #[account(mut, seeds = [b"escrow", share_mint.key().as_ref(), lender.key().as_ref()], bump = request.escrow_bump, token::mint = share_mint)]
     pub escrow: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, close = lender, seeds = [b"withdraw", lender.key().as_ref()], bump = request.bump, has_one = lender)]
+    #[account(mut, close = lender, seeds = [b"withdraw", share_mint.key().as_ref(), lender.key().as_ref()], bump = request.bump, has_one = lender)]
     pub request: Account<'info, WithdrawRequest>,
     #[account(mut, token::mint = mint, token::authority = lender)]
     pub to: InterfaceAccount<'info, TokenAccount>,
@@ -751,15 +981,15 @@ pub struct ClaimWithdraw<'info> {
 pub struct CancelWithdraw<'info> {
     #[account(mut)]
     pub lender: Signer<'info>,
-    #[account(seeds = [b"config"], bump = config.bump)]
-    pub config: Account<'info, Config>,
-    #[account(seeds = [b"share-mint"], bump = config.share_mint_bump)]
+    #[account(seeds = [b"pool-v2"], bump = pool.bump)]
+    pub pool: Account<'info, TranchePool>,
+    #[account(constraint = share_mint.key() == pool.senior_mint || share_mint.key() == pool.junior_mint @ NotchError::BadTrancheMint)]
     pub share_mint: InterfaceAccount<'info, Mint>,
     #[account(mut, token::mint = share_mint, token::authority = lender)]
     pub share_account: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, seeds = [b"escrow", lender.key().as_ref()], bump = request.escrow_bump, token::mint = share_mint)]
+    #[account(mut, seeds = [b"escrow", share_mint.key().as_ref(), lender.key().as_ref()], bump = request.escrow_bump, token::mint = share_mint)]
     pub escrow: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, close = lender, seeds = [b"withdraw", lender.key().as_ref()], bump = request.bump, has_one = lender)]
+    #[account(mut, close = lender, seeds = [b"withdraw", share_mint.key().as_ref(), lender.key().as_ref()], bump = request.bump, has_one = lender)]
     pub request: Account<'info, WithdrawRequest>,
     pub token_program: Interface<'info, TokenInterface>,
 }
@@ -769,15 +999,15 @@ pub struct WithdrawBorrower<'info> {
     pub borrower: Signer<'info>,
     #[account(seeds = [b"config"], bump = config.bump, has_one = mint)]
     pub config: Account<'info, Config>,
+    #[account(mut, seeds = [b"pool-v2"], bump = pool.bump)]
+    pub pool: Account<'info, TranchePool>,
     #[account(mut, seeds = [b"line", borrower.key().as_ref()], bump = line.bump)]
     pub line: Account<'info, CreditLine>,
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(mut, seeds = [b"vault"], bump = config.vault_bump)]
+    #[account(mut, seeds = [b"vault-v2"], bump = pool.vault_bump)]
     pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut, token::mint = mint, token::authority = borrower)]
     pub to: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, seeds = [b"pool"], bump = pool.bump)]
-    pub pool: Account<'info, PoolStats>,
     pub token_program: Interface<'info, TokenInterface>,
 }
 
@@ -833,4 +1063,12 @@ pub enum NotchError {
     NoCreditLine,
     #[msg("Available credit is below the amount asked for")]
     InsufficientCredit,
+    #[msg("Junior tranche would fall below the minimum share of the pool")]
+    SubordinationBreached,
+    #[msg("That mint is not one of the pool's tranche share mints")]
+    BadTrancheMint,
+    #[msg("Tranche parameters are out of range")]
+    InvalidTrancheParams,
+    #[msg("Loan term must be between 10 seconds and 30 days")]
+    InvalidTerm,
 }

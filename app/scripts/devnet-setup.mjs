@@ -6,8 +6,10 @@
 //
 // What it does (with --send):
 //   1. creates a TEST USDC mint (6 decimals, your wallet is the mint authority)   [skipped with --mint]
-//   2. runs `init` on the Notch program with the underwriter's public key
-//   3. optionally mints test USDC to wallets (--mint-to) and seeds the lender pool (--seed-pool)
+//   2. runs `init` on the Notch program with the underwriter's public key (skipped when the config exists)
+//      and `init_pool` (skipped when the v2 tranche pool exists): vault + SENIOR and JUNIOR share mints
+//   3. optionally mints test USDC to wallets (--mint-to) and seeds the pool: --seed-pool = JUNIOR tranche,
+//      --seed-senior = SENIOR tranche (senior needs enough junior under it: junior >= 20% of the pool)
 //   4. prints the VITE_* values for app/.env.local (or writes them with --write-env)
 //
 // Safety: devnet only. It checks the RPC's genesis hash and refuses anything else. It reads the
@@ -34,10 +36,13 @@ import { getCreateAccountInstruction } from '@solana-program/system';
 import { getInitializeMint2Instruction, getMintSize, getMintToInstruction, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
 import {
   createAtaIdempotentIx,
+  DEFAULT_JUNIOR_WEIGHT_BPS,
+  DEFAULT_MIN_JUNIOR_BPS,
   depositIx,
   deriveAddresses,
   deriveAta,
   initIx,
+  initPoolIx,
 } from '../src/notch.ts';
 
 const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
@@ -60,6 +65,9 @@ function parseArgs(argv) {
     else if (a === '--mint') o.mint = next();
     else if (a === '--mint-to') o.mintTo.push(next());
     else if (a === '--seed-pool') o.seedPool = next();
+    else if (a === '--seed-senior') o.seedSenior = next();
+    else if (a === '--min-junior-bps') o.minJuniorBps = Number(next());
+    else if (a === '--junior-weight-bps') o.juniorWeightBps = Number(next());
     else if (a === '-h' || a === '--help') { help(); process.exit(0); }
     else fail(`unknown option ${a}`);
   }
@@ -74,7 +82,10 @@ function help() {
   --expiry-days <n>      how long the program trusts the underwriter key (default 365)
   --mint <address>       use an existing test USDC mint (you must be its mint authority to use --mint-to/--seed-pool)
   --mint-to <addr[:usdc]> mint test USDC to a wallet (repeatable; default 100 USDC)
-  --seed-pool <usdc>     deposit this much test USDC into the lender pool from your wallet
+  --seed-pool <usdc>     deposit this much test USDC into the JUNIOR tranche from your wallet
+  --seed-senior <usdc>   deposit this much test USDC into the SENIOR tranche (junior must be >= the floor first)
+  --min-junior-bps <n>   pool creation only: junior floor in bps of the pool (default ${DEFAULT_MIN_JUNIOR_BPS} = 20%)
+  --junior-weight-bps <n> pool creation only: how many bps a junior dollar counts in the fee split (default ${DEFAULT_JUNIOR_WEIGHT_BPS} = 2x)
   --program <address>    program id (default ${DEFAULT_PROGRAM})
   --rpc <url>            devnet RPC (default https://api.devnet.solana.com)
   --keypair <path>       payer/admin keypair (default ~/.config/solana/id.json)
@@ -170,6 +181,16 @@ if (existing.value) {
   await send(`init (underwriter trusted for ${opts.expiryDays} days)`, [initIx(addrs, payer.address, address(underwriter), expiry)]);
 }
 
+// --- 2b. tranche pool (v2): vault + senior/junior share mints + waterfall parameters ----------------
+const poolInfo = dry ? { value: null } : await rpc.getAccountInfo(addrs.pool, { encoding: 'base64' }).send();
+if (poolInfo.value) {
+  console.log('init_pool   skipped: the tranche pool already exists (its parameters are fixed at creation).');
+} else {
+  const minJ = opts.minJuniorBps ?? DEFAULT_MIN_JUNIOR_BPS;
+  const wJ = opts.juniorWeightBps ?? DEFAULT_JUNIOR_WEIGHT_BPS;
+  await send(`init_pool (junior floor ${minJ / 100}%, junior counts ${wJ / 10_000}x in the fee split)`, [initPoolIx(addrs, payer.address, minJ, wJ)]);
+}
+
 // --- 3. optional: fund wallets, seed pool -------------------------------------------------
 const mintAmount = async (owner, amount, label) => {
   const ata = await deriveAta(owner, mint);
@@ -183,16 +204,19 @@ for (const spec of opts.mintTo) {
   try { address(who); } catch { fail(`--mint-to: "${who}" is not a valid address`); }
   await mintAmount(address(who), toMicro(amt), amt);
 }
-if (opts.seedPool) {
-  const amount = toMicro(opts.seedPool);
+const seedTranche = async (usdc, tranche) => {
+  const amount = toMicro(usdc);
+  const mintAddr = tranche === 'senior' ? addrs.seniorMint : addrs.juniorMint;
   const usdcAta = await deriveAta(payer.address, mint);
-  const shareAta = await deriveAta(payer.address, addrs.shareMint);
-  await mintAmount(payer.address, amount, opts.seedPool);
-  await send(`seed pool with ${opts.seedPool} USDC`, [
-    createAtaIdempotentIx(payer.address, shareAta, payer.address, addrs.shareMint),
-    depositIx(addrs, payer.address, usdcAta, shareAta, amount),
+  const shareAta = await deriveAta(payer.address, mintAddr);
+  await mintAmount(payer.address, amount, usdc);
+  await send(`seed ${tranche.toUpperCase()} tranche with ${usdc} USDC`, [
+    createAtaIdempotentIx(payer.address, shareAta, payer.address, mintAddr),
+    depositIx(addrs, payer.address, usdcAta, shareAta, amount, tranche),
   ]);
-}
+};
+if (opts.seedPool) await seedTranche(opts.seedPool, 'junior');
+if (opts.seedSenior) await seedTranche(opts.seedSenior, 'senior');
 
 // --- 4. env ------------------------------------------------------------------------------
 const env = [
