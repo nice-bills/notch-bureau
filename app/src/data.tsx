@@ -77,10 +77,9 @@ export function ChainProvider({ children }: { children: ReactNode }) {
       setWithdrawRequest(wr);
       setSol(lamports);
       setError(null);
+      setPoolLoaded(true); // only after a successful read: a failed RPC call must not look like "pool not created"
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPoolLoaded(true);
     }
   }, []);
 

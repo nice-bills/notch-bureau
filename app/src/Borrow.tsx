@@ -283,7 +283,7 @@ export function Borrow() {
           <ActionStatus a={repayAct} />
         </Step>
 
-        <Step n={7} title="Take your deposit back" state={st(7, false)}>
+        <Step n={7} title="Take your deposit back" state={drawn === 0n && have > 0n ? 'active' : 'locked'}>
           <p className="step-help">{drawn > 0n ? 'Available once you owe nothing. Repaying in full returns it automatically.' : have > 0n ? `${formatUsdc(have)} USDC is waiting for you.` : 'No deposit is being held.'}</p>
           <Btn variant="secondary" onClick={onWithdraw} busy={wdAct.busy} disabled={drawn > 0n || have === 0n}>Withdraw {have > 0n ? `${formatUsdc(have)} USDC` : 'deposit'}</Btn>
           <ActionStatus a={wdAct} />

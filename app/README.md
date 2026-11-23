@@ -11,6 +11,8 @@ pnpm dev                          # http://localhost:5173
 pnpm build                        # type-check + production build
 pnpm test                         # notch.ts vs tests/notch.test.js, error messages, maths
 pnpm e2e:devnet                   # full real run on devnet (see below)
+pnpm e2e                          # browser end-to-end tests (see below)
+pnpm e2e:all                      # every test layer, in order
 ```
 
 ## First-time devnet setup (nothing is sent unless you pass `--send`)
@@ -74,3 +76,41 @@ whether the demo enclave at `VITE_ENCLAVE_URL` reports the same underwriter key.
 - `src/Borrow.tsx`, `Lend.tsx`, `Book.tsx`, `Attacks.tsx`: the four screens.
 - `src/MarkDefault.tsx`: “Mark overdue loan as defaulted” panel on the Book screen (anyone can call `mark_default` once a loan is past due).
 - `scripts/devnet-setup.mjs`, `scripts/demo-enclave.mjs`, `scripts/enclave-lib.mjs`, `scripts/e2e-devnet.mjs`, `scripts/keeper.mjs`.
+
+## Browser end-to-end tests (`pnpm e2e`)
+
+Real Chromium (headless, Playwright) drives the real app against the real devnet program and the demo underwriter.
+Nothing is mocked. Test money only; it refuses anything that is not devnet.
+
+```sh
+pnpm exec playwright install chromium   # once (or set E2E_CHROMIUM=/usr/bin/chromium)
+pnpm e2e                                # ~4 minutes, about 0.01 devnet SOL net
+pnpm e2e -g "4\."                      # one flow
+```
+
+What it starts: the demo enclave on :8787 (`NOTCH_KEY_FILE=../.underwriter-key.json`) and the Vite dev server on :5173,
+unless they are already running. It checks that the enclave's key is the one the program trusts, funds fresh wallets from
+`~/.config/solana/id.json` (SOL plus test USDC, the admin is the mint authority), and sweeps leftover SOL back at the end.
+Rent locked in token and program accounts stays on devnet (about 0.003 SOL per wallet).
+
+**Test wallet.** An init script registers a Wallet Standard wallet named "Phantom" (connect, events, disconnect,
+`solana:signTransaction`, `solana:signAndSendTransaction`), so it shows up in the picker like the real one. A fresh keypair is made per
+test and signing happens in Node (`context.exposeFunction`): the secret key never enters page JavaScript.
+Browser RPC calls are forwarded through one throttled, retrying queue because the public devnet RPC answers 429 under load.
+
+| Flow | What it does |
+| --- | --- |
+| 1 Borrow | connect, MoMo sample, sealed computer, "what left" shows only limit + signature (no income, name or balance anywhere, raw reply included), post limit, deposit 20%, draw, repay principal + 2%, deposit again and withdraw. The line account is read back from devnet after every step. Also: the mark-default control on a loan that is out but not overdue, and the same email posted to Solana twice. |
+| 2 Lend | deposit, request withdrawal, live countdown, claim refused before the cooldown with the plain-English message (page clock set 4 days fast so the button is live; the program still refuses), cancel, shares back, accounts closed |
+| 3 Loan book | totals equal the chain and moved by exactly what flows 1 and 2 did |
+| 4 Attack panel | edited email (DKIM), same email twice, limit signed by the wrong key (program refusal, dry run, wallet never asked to sign) |
+| 5 Mark default | disabled with no input, bad address, no line, repaid line; a forced click on a not-yet-due loan is refused by the program (inside flow 1) |
+| 6 Phone | flow 1 at 390x844 with a screenshot per step in `e2e/screens/` and a check that the page never scrolls sideways |
+
+Flow 3 and 5 read what flows 1 and 2 saved in `e2e/.state/`, so run the whole file (a single flow is fine for 1, 2, 4, 6).
+Failure traces land in `e2e/test-results/`, the HTML report in `e2e/report/` (`pnpm exec playwright show-report e2e/report`).
+
+## Everything (`pnpm e2e:all`)
+
+Runs, in order: notch `pnpm test` (LiteSVM program tests), `pnpm test:enclave`, the app unit tests (`pnpm test`), `pnpm e2e:devnet`
+(chain only), then `pnpm e2e` (browser). Stops at the first failure.

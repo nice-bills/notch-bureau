@@ -131,7 +131,7 @@ a:hover { color: var(--seal); }
 .step-content > * { max-width: 100%; }
 .step-locked .step-content { opacity: 0.45; }
 .step-locked h3 { color: var(--muted); }
-.step-help { color: var(--muted); max-width: 62ch; text-wrap: pretty; }
+.step-help { color: var(--muted); max-width: 62ch; text-wrap: pretty; overflow-wrap: anywhere; }
 .step-help.warn { color: oklch(0.42 0.14 50); font-weight: 500; }
 .file-row, .sample-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .sample-row { font-size: 0.88rem; color: var(--muted); }
