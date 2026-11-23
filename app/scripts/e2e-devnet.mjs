@@ -32,6 +32,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nacl from 'tweetnacl';
 import {
+  AccountRole,
   address,
   appendTransactionMessageInstructions,
   createKeyPairSignerFromBytes,
@@ -41,6 +42,7 @@ import {
   getAddressDecoder,
   getAddressEncoder,
   getBase64EncodedWireTransaction,
+  getProgramDerivedAddress,
   lamports,
   pipe,
   setTransactionMessageFeePayerSigner,
@@ -89,6 +91,7 @@ import { signRecord } from '../../enclave/src/record.js';
 import { identityHash, normalizeMsisdn } from '../../enclave/src/statement.js';
 import { getIdentityOwner } from '../../enclave/src/chain-history.js';
 import { makeRpc } from '../../enclave/src/chain-payout.js';
+import { buildCheckCreditIx, decodeCreditCheck, getCredit as sdkGetCredit } from '../../sdk/src/index.js';
 
 const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -111,6 +114,7 @@ const opts = {
   rpc: env.VITE_RPC_URL || 'https://api.devnet.solana.com',
   program: env.VITE_PROGRAM_ID,
   mint: env.VITE_USDC_MINT,
+  hostel: env.HOSTEL_PROGRAM_ID || fs.readFileSync(path.join(here, '..', '..', 'Anchor.toml'), 'utf8').match(/hostel_deposit = "(\w+)"/)?.[1],
   enclaveUrl: env.VITE_ENCLAVE_URL || 'http://localhost:8787',
   keypair: path.join(os.homedir(), '.config/solana/id.json'),
   enclaveKey: env.NOTCH_KEY_FILE || path.join(here, '..', '..', '.underwriter-key.json'),
@@ -124,6 +128,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--rpc') opts.rpc = next();
   else if (a === '--program') opts.program = next();
   else if (a === '--mint') opts.mint = next();
+  else if (a === '--hostel') opts.hostel = next();
   else if (a === '--keypair') opts.keypair = next();
   else if (a === '--enclave-key') opts.enclaveKey = next();
   else if (a === '-h' || a === '--help') {
@@ -227,6 +232,7 @@ const PROGRAM_ERRORS = [
   'RecordExpired', 'StaleRecord', 'UnderwriterExpired', 'OverLimit', 'Defaulted', 'NotPastDue',
   'InvalidAmount', 'NothingToRepay', 'InsufficientDeposit', 'FeeRequired', 'InsufficientLiquidity',
   'InvalidPoolState', 'BalanceOutstanding', 'MathOverflow', 'CooldownActive', 'IdentityBound', 'IdentityRequired',
+  'NoCreditLine', 'InsufficientCredit',
 ];
 /** Name of the Anchor error in the logs, plus the custom code number from the status. */
 function programError(res) {
@@ -304,6 +310,7 @@ const lRequest = await deriveWithdrawRequest(program, lender.address);
 const line = await deriveLine(program, borrower.address);
 console.log(`borrower    ${borrower.address}\nlender      ${lender.address}`);
 
+const bureauWallets = []; // step 10 throwaways, swept at the end
 let failed = false;
 try {
   // -------------------------------------------------------------------------------------------
@@ -683,6 +690,131 @@ try {
       check('the same on-chain transfer cannot back a second Earn email', reuse.status === 422 && /no matching USDC transfer/.test(reuse.body.reason || ''), jsonSafe(reuse.body));
     }
   }
+  // -------------------------------------------------------------------------------------------
+  step('10', 'Bureau: any app can check a wallet (hostel-deposit CPIs notch::check_credit) + the @notch/bureau SDK');
+  {
+    if (!opts.hostel) die('hostel-deposit program id missing (Anchor.toml hostel_deposit or HOSTEL_PROGRAM_ID)');
+    const hostel = address(opts.hostel);
+    const hostelInfo = await call(rpc.getAccountInfo(hostel, { encoding: 'base64', commitment: 'confirmed' }));
+    check('hostel-deposit is deployed (executable) on devnet', !!hostelInfo.value?.executable, opts.hostel);
+    const DISC = (name) => crypto.createHash('sha256').update(`global:${name}`).digest().subarray(0, 8);
+    const bookingOf = async (w) => (await getProgramDerivedAddress({ programAddress: hostel, seeds: [Buffer.from('booking'), getAddressEncoder().encode(w)] }))[0];
+    const bookIx = async (student, rent) => ({
+      programAddress: hostel,
+      accounts: [
+        { address: student.address, role: AccountRole.WRITABLE_SIGNER },
+        { address: await bookingOf(student.address), role: AccountRole.WRITABLE },
+        { address: await deriveLine(program, student.address), role: AccountRole.READONLY },
+        { address: program, role: AccountRole.READONLY },
+        { address: address('11111111111111111111111111111111'), role: AccountRole.READONLY },
+      ],
+      data: Buffer.concat([DISC('book'), Buffer.from(new BigUint64Array([rent]).buffer)]),
+    });
+    const readBooking = async (w) => {
+      const b = await accountBytes(await bookingOf(w));
+      if (!b) return null;
+      const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      return { student: getAddressDecoder().decode(b.subarray(8, 40)), rent: dv.getBigUint64(40, true), bucket: b[48] };
+    };
+    // Read-only on-chain answer: simulate a transaction holding only check_credit and read its return data.
+    const simulateCheck = async (payer, wallet, minAvailable, maxAgeSeconds) => {
+      const { value: bh } = await call(rpc.getLatestBlockhash({ commitment: 'confirmed' }));
+      const checkIx = await buildCheckCreditIx({ wallet, minAvailable, maxAgeSeconds, programAddress: program });
+      const tx = await pipe(
+        createTransactionMessage({ version: 0 }),
+        (m) => setTransactionMessageFeePayerSigner(payer, m),
+        (m) => setTransactionMessageLifetimeUsingBlockhash(bh, m),
+        (m) => appendTransactionMessageInstructions([checkIx], m),
+        (m) => signTransactionMessageWithSigners(m),
+      );
+      const sim = await call(rpc.simulateTransaction(getBase64EncodedWireTransaction(tx), { encoding: 'base64', commitment: 'confirmed' }));
+      return sim.value;
+    };
+    const newStudent = async (label) => {
+      const w = await generateKeyPairSigner();
+      bureauWallets.push(w);
+      return w;
+    };
+
+    // 10a. two students with a real signed limit, one wallet with no line at all
+    const alice = await newStudent('alice');   // gets a limit, books
+    const carol = await newStudent('carol');   // gets a limit, draws, then cannot cover the rent
+    const nobody = await newStudent('nobody'); // never posts a record
+    const cAta = await deriveAta(carol.address, mint);
+    await send('fund the bureau demo wallets (alice, carol, nobody: 0.02 SOL each; carol gets 10 test USDC)', admin, [
+      getTransferSolInstruction({ source: admin, destination: alice.address, amount: lamports(20_000_000n) }),
+      getTransferSolInstruction({ source: admin, destination: carol.address, amount: lamports(20_000_000n) }),
+      getTransferSolInstruction({ source: admin, destination: nobody.address, amount: lamports(20_000_000n) }),
+      createAtaIdempotentIx(admin.address, cAta, carol.address, mint),
+      getMintToInstruction({ mint, token: cAta, mintAuthority: admin, amount: 10n * USDC }),
+    ]);
+
+    const getLimit = async (student) => {
+      const u = await underwrite(await freshEmail(fixtures.deelPayout), student.address);
+      if (u.status !== 200 || !u.body.ok) throw new Error(`underwriter refused ${student.address}: ${jsonSafe(u.body)}`);
+      const rec = base64ToBytes(u.body.message);
+      const d = decodeRecord(rec);
+      const sLine = await deriveLine(program, student.address);
+      await send(`post_limit for ${student.address.slice(0, 6)}`, student,
+        postLimitIxs(A, { payer: student.address, borrower: student.address, line: sLine, dedupe: await deriveDedupe(program, d.dedupe), record: rec }, uwKey, base64ToBytes(u.body.signature)));
+      return { limit: d.limitMicro, line: sLine };
+    };
+    const a = await getLimit(alice);
+    const c = await getLimit(carol);
+    check(`alice and carol each got a limit (${usd(a.limit)} / ${usd(c.limit)} USDC)`, a.limit > 0n && c.limit > 0n);
+
+    // 10b. the SDK reads the line straight from account data
+    const sdkA = await sdkGetCredit(rpc, alice.address, { programAddress: program });
+    check('SDK: alice exists, active, not defaulted, 0 on-time repayments', sdkA.exists && sdkA.active && !sdkA.defaulted && sdkA.onTimeRepayments === 0, jsonSafe(sdkA));
+    check('SDK: expiresAt == record expiry on chain and postedAt is just now', sdkA.expiresAt === Number(decodeLine(await accountBytes(a.line)).expiry) && Math.abs(sdkA.postedAt - Date.now() / 1000) < 600, `postedAt ${sdkA.postedAt}`);
+    const nobodySdk = await sdkGetCredit(rpc, nobody.address, { programAddress: program });
+    check('SDK: a wallet with no line reads { exists: false }', nobodySdk.exists === false, jsonSafe(nobodySdk));
+
+    // 10c. on-chain answer == SDK answer (same bucket), via check_credit return data
+    const simA = await simulateCheck(alice, alice.address, a.limit, 3600);
+    const chainA = simA.err ? null : decodeCreditCheck(base64ToBytes(simA.returnData.data[0]));
+    check('check_credit (simulated) passes for alice at her full limit and returns 38 bytes of return data', !!chainA, simA.err ? `${jsonSafe(simA.err)} ${(simA.logs ?? []).slice(-3).join(' | ')}` : '');
+    check('SDK bucket == on-chain check_credit bucket for alice (and the on-chain wallet is alice)',
+      chainA?.availableBucket === sdkA.availableBucket && chainA?.wallet === alice.address && chainA?.onTimeRepayments === 0 && chainA?.defaulted === false,
+      chainA ? `${chainA.availableBucket} vs ${sdkA.availableBucket}` : 'n/a');
+    const simTooMuch = await simulateCheck(alice, alice.address, a.limit + 1n, 3600);
+    check('check_credit asks for 1 micro-USDC more than the limit -> InsufficientCredit',
+      !!simTooMuch.err && (simTooMuch.logs ?? []).join('\n').includes('Error Code: InsufficientCredit'), (simTooMuch.logs ?? []).slice(-2).join(' | '));
+    const simNone = await simulateCheck(alice, nobody.address, 1n, 3600);
+    check('check_credit for a wallet with no line -> NoCreditLine', !!simNone.err && (simNone.logs ?? []).join('\n').includes('Error Code: NoCreditLine'), (simNone.logs ?? []).slice(-2).join(' | '));
+
+    // 10d. the hostel books alice (CPI into notch), stores only the bucket
+    const rent = a.limit;
+    const okBook = await send(`hostel-deposit.book(${usd(rent)} USDC) for alice: CPI into notch::check_credit`, alice, [await bookIx(alice, rent)]);
+    check('hostel booking accepted for alice', !okBook.err);
+    const bk = await readBooking(alice.address);
+    check('Booking PDA records student, rent and the same coarse bucket the SDK reads', bk?.student === alice.address && bk.rent === rent && bk.bucket === sdkA.availableBucket, jsonSafe(bk));
+    check("booking did not touch alice's Notch line", decodeLine(await accountBytes(a.line)).drawn === 0n);
+
+    // 10e. a wallet with no line is refused
+    const noLineBook = await send('ATTACK hostel-deposit.book for a wallet with no Notch line', nobody, [await bookIx(nobody, 1n * USDC)], { expectFail: true });
+    expectProgramError('hostel refuses a wallet with no line', noLineBook, 'NoCreditLine');
+    check('no booking was created for the wallet with no line', (await readBooking(nobody.address)) === null);
+
+    // 10f. carol draws, leaving too little: refused. The SDK sees the lower availability.
+    const cNeed = depositNeededFor(5n * USDC);
+    await send('carol: deposit_borrower 20% of a 5 USDC draw', carol, [depositBorrowerIx(A, carol.address, c.line, cAta, cNeed)]);
+    await send('carol: draw 5 USDC', carol, [drawIx(A, carol.address, c.line, cAta, 5n * USDC)]);
+    const sdkC = await sdkGetCredit(rpc, carol.address, { programAddress: program });
+    const availC = c.limit - 5n * USDC;
+    const simC = await simulateCheck(carol, carol.address, availC, 3600);
+    const chainC = simC.err ? null : decodeCreditCheck(base64ToBytes(simC.returnData.data[0]));
+    check('check_credit sees carol with limit - 5 USDC left (passes at exactly that, same bucket as the SDK)',
+      !!chainC && chainC.availableBucket === sdkC.availableBucket, chainC ? `${chainC.availableBucket} vs ${sdkC.availableBucket}` : jsonSafe(simC.err));
+    const cBook = await send(`ATTACK hostel-deposit.book(${usd(c.limit)} USDC) after carol drew 5 (only ${usd(availC)} left)`, carol, [await bookIx(carol, c.limit)], { expectFail: true });
+    expectProgramError('hostel refuses a booking larger than what is left after a draw', cBook, 'InsufficientCredit');
+    check('no booking for carol, and her draw is untouched by the refused booking', (await readBooking(carol.address)) === null && decodeLine(await accountBytes(c.line)).drawn === 5n * USDC);
+    const cBook2 = await send(`hostel-deposit.book(${usd(availC)} USDC) for carol: exactly what is left is accepted`, carol, [await bookIx(carol, availC)]);
+    check('a booking for exactly the remaining credit is accepted', !cBook2.err && (await readBooking(carol.address))?.rent === availC);
+    await send('carol: repay 5 USDC + 2% fee (clean up the pool)', carol, [repayIx(A, carol.address, c.line, cAta, payoffFor(5n * USDC))]);
+    const sdkC2 = await sdkGetCredit(rpc, carol.address, { programAddress: program });
+    check('SDK sees carol\'s on-time repayment (1) after repaying', sdkC2.onTimeRepayments === 1, jsonSafe(sdkC2));
+  }
 } catch (e) {
   failed = true;
   console.error(`\nABORTED in step ${currentStep}: ${e.message}`);
@@ -690,7 +822,7 @@ try {
 } finally {
   // ---- cleanup: sweep leftover SOL back to the admin wallet ----
   if (opts.sweep) {
-    for (const w of [borrower, lender, momoUser, momoOther]) {
+    for (const w of [borrower, lender, momoUser, momoOther, ...bureauWallets]) {
       try {
         const bal = await solBal(w.address);
         if (bal > 10_000n) {
@@ -709,7 +841,7 @@ try {
 // ---------------------------------------------------------------------------------------------
 const adminSolEnd = await solBal(admin.address);
 console.log('\n================ SUMMARY ================');
-const steps = [...new Set(results.map((r) => r.step))].sort();
+const steps = [...new Set(results.map((r) => r.step))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 for (const s of steps) {
   const rs = results.filter((r) => r.step === s);
   console.log(`step ${s}: ${rs.every((r) => r.ok) ? 'PASS' : 'FAIL'}  (${rs.filter((r) => r.ok).length}/${rs.length})`);

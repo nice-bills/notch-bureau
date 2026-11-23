@@ -55,6 +55,15 @@ same TDX enclave. Pointing this at a normal hosted LLM breaks the privacy claim.
 is schema-checked and every amount must appear in the email next to a credit keyword;
 otherwise the service falls back to the rule-based extractor.
 
+## Bureau: any app can check a wallet
+
+`check_credit(min_available, max_age_s)` on the Notch program is read-only. It succeeds only if the wallet has a line, is not defaulted, its signed record has not expired, was posted within `max_age_s`, and has at least `min_available` left. Otherwise it fails with `NoCreditLine`, `Defaulted`, `RecordExpired`, `InsufficientCredit` or `StaleRecord`. On success it returns and logs `{ wallet, available_bucket, on_time_repayments, defaulted: false }` where the bucket is coarse (0: under 25, 1: 25 to 100, 2: 100 to 500, 3: 500+ USDC), never the exact limit.
+
+- `programs/hostel-deposit`: a minimal consumer that CPIs `check_credit` before it records a booking.
+- `sdk/` (`@notch/bureau`): `getCredit(rpc, wallet)` and `buildCheckCreditIx(...)`, with a 10-line integration example in its README.
+- Tests: `tests/bureau.test.js` (LiteSVM), `sdk/test`, and step 10 of `app/scripts/e2e-devnet.mjs`.
+- Lines created before this change are 8 bytes shorter (no `posted_at`). They keep working for draw, repay and default; `check_credit` reads them as "posted long ago", so only an unlimited `max_age_s` passes for them.
+
 ## Project notes
 
 - [Research and differentiation](RESEARCH.md)

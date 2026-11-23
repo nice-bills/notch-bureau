@@ -1,0 +1,19 @@
+[package]
+name = "hostel-deposit"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "hostel_deposit"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+idl-build = ["anchor-lang/idl-build", "notch/idl-build"]
+
+[dependencies]
+anchor-lang = "=1.1.2"
+notch = { path = "../notch", features = ["cpi"] }

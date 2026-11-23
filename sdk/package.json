@@ -1,0 +1,14 @@
+{
+  "name": "@notch/bureau",
+  "version": "0.1.0",
+  "description": "Read the Notch credit bureau: a wallet's coarse credit bucket, and an on-chain check_credit instruction any app can call.",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": { ".": { "types": "./src/index.d.ts", "default": "./src/index.js" } },
+  "files": ["src", "README.md"],
+  "scripts": { "test": "node --test test/" },
+  "peerDependencies": { "@solana/kit": "^8.6.0" },
+  "devDependencies": { "@solana/kit": "^8.6.0" },
+  "license": "MIT"
+}

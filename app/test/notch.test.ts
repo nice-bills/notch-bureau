@@ -270,8 +270,8 @@ describe('notch.ts matches tests/notch.test.js', () => {
     expect(await deriveDedupe(PROGRAM, hash)).toBe(dd);
   });
 
-  it('drift guard: tests/notch.test.js still has the account lists this file mirrors', () => {
-    const src = fs.readFileSync(new URL('../../tests/notch.test.js', import.meta.url), 'utf8');
+  it('drift guard: tests/lib.js (the shared LiteSVM helpers) still has the account lists this file mirrors', () => {
+    const src = fs.readFileSync(new URL('../../tests/lib.js', import.meta.url), 'utf8');
     for (const needle of [
       "accounts: [meta(lender.signer.address, WS), meta(ctx.config, R), meta(ctx.shareMint, R), meta(lender.shares, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM_ADDRESS, R), meta(SYSTEM, R)]",
       "accounts: [meta(lender.signer.address, WS), meta(ctx.config, R), meta(ctx.mint.address, R), meta(ctx.vault, W), meta(ctx.pool, W), meta(ctx.shareMint, W), meta(escrow, W), meta(request, W), meta(lender.usdc, W), meta(TOKEN_PROGRAM_ADDRESS, R)]",

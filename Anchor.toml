@@ -7,9 +7,11 @@ skip-lint = false
 
 [programs.localnet]
 notch = "4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz"
+hostel_deposit = "78e2fCurHQuKe4WfHAWM2kqkqj91zRauPER2TM9w6e13"
 
 [programs.devnet]
 notch = "4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz"
+hostel_deposit = "78e2fCurHQuKe4WfHAWM2kqkqj91zRauPER2TM9w6e13"
 
 [provider]
 cluster = "devnet"

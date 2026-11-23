@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/",
-    "test:enclave": "cd enclave && node --test test/"
+    "test:enclave": "cd enclave && node --test test/",
+    "test:sdk": "cd sdk && node --test test/"
   },
   "devDependencies": {
     "@solana-program/system": "^0.14.1",

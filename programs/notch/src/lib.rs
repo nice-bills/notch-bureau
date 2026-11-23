@@ -112,6 +112,7 @@ pub mod notch {
         line.last_nonce = r.nonce;
         line.limit = r.limit;
         line.expiry = r.expiry;
+        line.posted_at = now;
         ctx.accounts.dedupe.used_at = now;
         emit!(LimitPosted {
             wallet: r.wallet,
@@ -120,6 +121,43 @@ pub mod notch {
             nonce: r.nonce
         });
         Ok(())
+    }
+
+    /// The bureau read. Any program (via CPI) or client (same transaction) can ask "is this wallet good for at
+    /// least `min_available` base units, on a record posted within the last `max_age_s` seconds?".
+    /// Read-only: it changes nothing. It fails with a specific error otherwise, and on success returns and
+    /// logs a coarse bucket, never the exact limit or balance.
+    pub fn check_credit(ctx: Context<CheckCredit>, min_available: u64, max_age_s: i64) -> Result<CreditCheck> {
+        let now = Clock::get()?.unix_timestamp;
+        let info = ctx.accounts.line.to_account_info();
+        // A wallet nobody has posted a record for has no account yet; report that as NoCreditLine.
+        require!(
+            info.owner == &crate::ID && info.data_len() > 8,
+            NotchError::NoCreditLine
+        );
+        let line = CreditLine::try_deserialize(&mut &info.try_borrow_data()?[..])?;
+        require_keys_eq!(line.wallet, ctx.accounts.borrower.key(), NotchError::NoCreditLine);
+        require!(!line.defaulted, NotchError::Defaulted);
+        require!(now < line.expiry, NotchError::RecordExpired);
+        let available = line.limit.saturating_sub(line.drawn);
+        require!(available >= min_available, NotchError::InsufficientCredit);
+        require!(
+            now.saturating_sub(line.posted_at) <= max_age_s,
+            NotchError::StaleRecord
+        );
+        let out = CreditCheck {
+            wallet: line.wallet,
+            available_bucket: available_bucket(available),
+            on_time_repayments: line.repaid_on_time,
+            defaulted: false,
+        };
+        emit!(CreditChecked {
+            wallet: out.wallet,
+            available_bucket: out.available_bucket,
+            on_time_repayments: out.on_time_repayments,
+            defaulted: false,
+        });
+        Ok(out)
     }
 
     /// Deposit USDC and mint shares at the current net asset value.
@@ -428,6 +466,33 @@ pub struct CreditLine {
     pub bump: u8,
     /// First-loss deposit held in the vault for this borrower. Not lender money.
     pub borrower_deposit: u64,
+    /// Unix time the current signed record was posted (`post_limit`). Appended last so older readers keep working.
+    /// Lines created before this field existed are 8 bytes shorter: they read as 0 here and, because a zero is
+    /// never written, they can still be saved. (`check_credit` treats 0 as "posted long ago".)
+    #[borsh(deserialize_with = "read_trailing_i64", serialize_with = "write_trailing_i64")]
+    pub posted_at: i64,
+}
+
+/// Read the last field; a legacy account that ends before it reads as 0.
+fn read_trailing_i64<R: std::io::Read>(reader: &mut R) -> std::io::Result<i64> {
+    let mut b = [0u8; 8];
+    let mut n = 0;
+    while n < 8 {
+        match reader.read(&mut b[n..])? {
+            0 => break,
+            k => n += k,
+        }
+    }
+    Ok(if n == 8 { i64::from_le_bytes(b) } else { 0 })
+}
+
+/// Write the last field only when it is non-zero. New accounts are zero-filled, so skipping a zero is the same
+/// bytes, and it keeps a legacy (shorter) account from overflowing its buffer when the line is saved.
+fn write_trailing_i64<W: std::io::Write>(v: &i64, writer: &mut W) -> std::io::Result<()> {
+    if *v != 0 {
+        writer.write_all(&v.to_le_bytes())?;
+    }
+    Ok(())
 }
 
 #[account]
@@ -476,6 +541,46 @@ pub struct Dedupe {
 pub struct IdentityLink {
     pub wallet: Pubkey,
     pub bump: u8,
+}
+
+/// Coarse bucket for available credit, in base units of the 6-decimal USDC mint:
+/// 0 = under 25, 1 = 25 to under 100, 2 = 100 to under 500, 3 = 500 or more.
+pub fn available_bucket(available: u64) -> u8 {
+    const USDC: u64 = 1_000_000;
+    match available {
+        a if a < 25 * USDC => 0,
+        a if a < 100 * USDC => 1,
+        a if a < 500 * USDC => 2,
+        _ => 3,
+    }
+}
+
+/// What `check_credit` returns (as return data) and logs. Deliberately coarse.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CreditCheck {
+    pub wallet: Pubkey,
+    pub available_bucket: u8,
+    pub on_time_repayments: u32,
+    pub defaulted: bool,
+}
+
+#[event]
+pub struct CreditChecked {
+    pub wallet: Pubkey,
+    pub available_bucket: u8,
+    pub on_time_repayments: u32,
+    pub defaulted: bool,
+}
+
+/// Read-only. `line` is unchecked on purpose: a wallet with no line has no account, and that must
+/// surface as `NoCreditLine`, not as a generic Anchor deserialization error.
+#[derive(Accounts)]
+pub struct CheckCredit<'info> {
+    /// CHECK: only its address is used, to derive the line PDA.
+    pub borrower: UncheckedAccount<'info>,
+    /// CHECK: PDA ["line", borrower]; owner and contents are checked in the handler.
+    #[account(seeds = [b"line", borrower.key().as_ref()], bump)]
+    pub line: UncheckedAccount<'info>,
 }
 
 #[event]
@@ -692,7 +797,7 @@ pub enum NotchError {
     WrongWallet,
     #[msg("Record has expired")]
     RecordExpired,
-    #[msg("Record nonce is not newer than the last one")]
+    #[msg("Record is stale: an older nonce than the last one, or posted longer ago than max_age_s")]
     StaleRecord,
     #[msg("Underwriter attestation has expired")]
     UnderwriterExpired,
@@ -724,4 +829,8 @@ pub enum NotchError {
     IdentityBound,
     #[msg("Record carries an identity but the identity account was not provided")]
     IdentityRequired,
+    #[msg("No credit line exists for this wallet")]
+    NoCreditLine,
+    #[msg("Available credit is below the amount asked for")]
+    InsufficientCredit,
 }

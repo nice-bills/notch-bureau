@@ -14,7 +14,7 @@
     "keeper": "node scripts/keeper.mjs",
     "e2e": "node scripts/e2e-browser.mjs",
     "e2e:browser:devnet": "playwright test -c e2e/playwright.config.ts --workers=1",
-    "e2e:all": "pnpm --dir .. test && pnpm --dir .. test:enclave && pnpm test && pnpm e2e:devnet && pnpm e2e"
+    "e2e:all": "pnpm --dir .. test && pnpm --dir .. test:enclave && pnpm --dir .. test:sdk && pnpm test && pnpm e2e:devnet && pnpm e2e"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",

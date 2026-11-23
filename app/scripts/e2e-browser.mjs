@@ -26,6 +26,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const app = path.resolve(here, '..');
 const root = path.resolve(app, '..');
 const soFile = path.join(root, 'target/deploy/notch.so');
+const hostelSo = path.join(root, 'target/deploy/hostel_deposit.so'); // example consumer, preloaded so local runs match devnet
+const HOSTEL_ID = fs.readFileSync(path.join(root, 'Anchor.toml'), 'utf8').match(/hostel_deposit = "(\w+)"/)?.[1];
 const keyFile = path.join(root, '.underwriter-key.json');
 const stateDir = path.join(app, 'e2e/.state');
 const adminFile = path.join(stateDir, 'local-admin.json');
@@ -70,6 +72,7 @@ const validator = spawn(validatorBin, [
   '--faucet-port', String(RPC_PORT + 1001),
   '--limit-ledger-size', '50000000',
   '--bpf-program', PROGRAM_ID, soFile,
+  ...(HOSTEL_ID && fs.existsSync(hostelSo) ? ['--bpf-program', HOSTEL_ID, hostelSo] : []),
 ], { stdio: ['ignore', 'ignore', 'inherit'] });
 
 let stopped = false;
