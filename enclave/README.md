@@ -82,3 +82,12 @@ Removed: `mtn.com.gh`. Not yet listed (no evidence of signed income email): Tele
    `CREDIT_TYPES`, `LABELLED_NUMBER`).
 2. One Superteam Earn payout email (sender domain, wording, whether it quotes a transaction signature).
 3. One email each from Wise, Payoneer, Deel, Upwork (`d=`, wording, amount and currency format).
+
+## Running in a TDX confidential VM (Phala Cloud)
+
+`src/cvm-server.js` is the same underwriter inside a Phala/dstack TDX VM: key generated at boot in the TD and never
+written out, `GET /attestation?nonce=` returns a real TDX quote binding the key (`attest.js`), and `DEMO_FIXTURES=1`
+(a build flag, visible in the attested compose) trusts the synthetic DKIM test key. Verify from outside with
+`scripts/verify-attestation.mjs`; end-to-end with `scripts/e2e-phala.mjs`. Deployment, switching the devnet key and
+the honest list of what is still mocked: `../deploy/phala/README.md`. The AI reader still calls a hosted endpoint
+outside the TEE; `NOTCH_LLM_IN_TEE=1` (declared, not verified) is reported in `/attestation` for when it moves inside.

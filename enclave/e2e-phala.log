@@ -1,0 +1,80 @@
+cvm         https://0015f90bd03804232678c956ce789b09384f4b1d-8787.dstack-pha1-prod9.phala.network
+program     4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz
+admin       BEEwhev4xcmigv7qKxczMQUTsDkz5mcY3f4gKRCijEP6
+on-chain underwriter at start: AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2  (local demo key: AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2)
+
+=== 1. verify the TDX attestation of the CVM
+  PASS  fetch /attestation (fresh nonce)  (underwriter 2Z9jXELjEFTznQ8xqkiM56nQzgbmvoz2fgw24WFb6tJs)
+  PASS  quote is an Intel TDX v4 quote  (MRTD 2a674327c50218db…)
+  PASS  Intel DCAP signature chain + TCB (local, @phala/dcap-qvl)  (TCB status UpToDate)
+  PASS  parsed RTMR3 matches the DCAP library
+  PASS  underwriter key is a 32-byte Ed25519 key
+  PASS  report_data == sha256("notch-underwriter-v1" | key | our nonce)  (key born in this TD, quote is fresh)
+  PASS  RTMR3 replayed from the event log == RTMR3 in the signed quote  (RTMR3 210193173dfd8649…)
+  PASS  compose-hash event in RTMR3 == sha256(app_compose)  (compose-hash a14b66342f53cd72cb68c2e37a13c8162f07e75c479dff7ec9f14276dbd9a5a0)
+  PASS  server-reported compose_hash agrees
+  PASS  app-id event == reported app_id  (app_id 0015f90bd03804232678c956ce789b09384f4b1d)
+  PASS  every image in the attested compose is pinned by sha256 digest  (node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee)
+  PASS  server-reported demo_fixtures flag matches the attested compose  (compose says DEMO_FIXTURES=1)
+  PASS  code bundle inside the attested compose == this repo (enclave/src, fixtures, lockfile)  (19 files byte-identical)
+  PASS  CVM is in the declared DEMO mode (DEMO_FIXTURES=1 is in the attested compose)
+  PASS  CVM key differs from the local demo key (the Phala key really is another key)
+  compose-hash a14b66342f53cd72cb68c2e37a13c8162f07e75c479dff7ec9f14276dbd9a5a0
+  underwriter  2Z9jXELjEFTznQ8xqkiM56nQzgbmvoz2fgw24WFb6tJs
+
+=== 2. fresh MoMo statement -> CVM /underwrite (signed inside the TEE)
+  PASS  CVM serves a fresh signed demo MoMo statement email  (HTTP 200)
+  PASS  CVM underwrites the statement  (2243 ms, reader llm, limit 26.32 USDC)
+  PASS  record is 128 bytes (NOTCHv2), signature 64 bytes
+  PASS  signature verifies off-chain against the ATTESTED key
+  PASS  record is for the borrower wallet
+  PASS  statement-backed record carries an identity hash (one MoMo number = one wallet)
+  PASS  reply leaks nothing beyond the signed record fields
+
+=== 3. register the attested key on devnet (admin set_underwriter after the check above)
+  PASS  fetch /attestation (fresh nonce)
+  PASS  quote is an Intel TDX v4 quote
+  PASS  Intel DCAP signature chain + TCB (local, @phala/dcap-qvl)
+  PASS  parsed RTMR3 matches the DCAP library
+  PASS  underwriter key is a 32-byte Ed25519 key
+  PASS  report_data == sha256("notch-underwriter-v1" | key | our nonce)  (key born in this TD, quote is fresh)
+  PASS  RTMR3 replayed from the event log == RTMR3 in the signed quote
+  PASS  compose-hash event in RTMR3 == sha256(app_compose)
+  PASS  server-reported compose_hash agrees
+  PASS  app-id event == reported app_id
+  PASS  every image in the attested compose is pinned by sha256 digest
+  PASS  server-reported demo_fixtures flag matches the attested compose
+  PASS  code bundle inside the attested compose == this repo (enclave/src, fixtures, lockfile)
+on-chain underwriter before: AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2
+  tx  ok      set_underwriter 2Z9jXELjEFTznQ8xqkiM56nQzgbmvoz2fgw24WFb6tJs
+      https://explorer.solana.com/tx/3D5LYsMeBs2iUFeQWP62nLJt7LGoZeevLztMVXDDXrK8ybq5s4cv2t9sJMtrFRFf3PwV2FfGN2pRJoWXDbPQH9tr?cluster=devnet
+  PASS  program now trusts the CVM key  (2Z9jXELjEFTznQ8xqkiM56nQzgbmvoz2fgw24WFb6tJs)
+  PASS  registration re-verified the same compose-hash
+
+=== 4. post_limit with the CVM-signed record, read the CreditLine back
+  tx  ok      post_limit (record signed inside the TEE)
+      https://explorer.solana.com/tx/4wEstBFMZSCmdtrUqR9kHwzyAVf4pVE8EeQG8AQpKobXw754yhAo7QQgkpNUUdHi7fkwTkC4DvKMwQkoAKGHKWty?cluster=devnet
+  PASS  post_limit accepted
+  PASS  CreditLine account exists
+  PASS  CreditLine wallet == borrower
+  PASS  CreditLine limit == the CVM-signed limit  (26.32 USDC)
+  PASS  CreditLine limit == the limit the CVM replied with
+  PASS  CreditLine expiry == record expiry
+
+=== 5. negative: a record signed by the old local key is refused
+  tx  REFUSED  ATTACK post_limit signed by the old local demo key
+      https://explorer.solana.com/tx/2s5KTP3YLfaHRfnhW4C2zbM85j7FyCUZt8k5bbdiosHqXujExUKnzZB5ibDRRQ1wVkeC85FNgkNRiRD6d18BSg8G?cluster=devnet
+  PASS  record signed by the old local key -> WrongUnderwriter  (got WrongUnderwriter / code 6003, want WrongUnderwriter / 6003)
+  tx  REFUSED  ATTACK replay of the same CVM-signed record
+      https://explorer.solana.com/tx/3FzAT4tT4xwHb9PbRmNFc2kziXp3udbEHBGvD9i7SExoj8C2xrBofDLeKoDvqDZt7BSu4FR5FqBPwuwKL6R1EY4v?cluster=devnet
+  PASS  replaying the same signed record is refused  (already in use)
+
+=== 6. restore the local demo key (the other devnet e2e depends on it)
+on-chain underwriter before: 2Z9jXELjEFTznQ8xqkiM56nQzgbmvoz2fgw24WFb6tJs
+  tx  ok      set_underwriter AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2
+      https://explorer.solana.com/tx/4Vr5De3C48j8GdNB2MWckJiFtafipvTEFpnyYQDryqSCm4gq3PDL5aScgKp1gxMRkcpF5xZXcPSJmyoqSmqbBBBj?cluster=devnet
+  PASS  program trusts the local demo key again  (AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2)
+
+33/33 checks passed
+
+E2E PHALA: GREEN

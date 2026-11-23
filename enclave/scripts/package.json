@@ -1,0 +1,8 @@
+{
+  "name": "notch-enclave-scripts",
+  "private": true,
+  "description": "Verifier-side tools. Install with: npm install --prefix enclave/scripts",
+  "dependencies": {
+    "@phala/dcap-qvl": "0.7.3"
+  }
+}
