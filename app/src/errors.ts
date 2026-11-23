@@ -7,6 +7,7 @@ const PROGRAM_ERRORS = [
   'RecordExpired', 'StaleRecord', 'UnderwriterExpired', 'OverLimit', 'Defaulted', 'NotPastDue',
   'InvalidAmount', 'NothingToRepay', 'InsufficientDeposit', 'FeeRequired', 'InsufficientLiquidity',
   'InvalidPoolState', 'BalanceOutstanding', 'MathOverflow', 'CooldownActive',
+  'IdentityBound', 'IdentityRequired',
 ] as const;
 export type ProgramErrorName = (typeof PROGRAM_ERRORS)[number];
 
@@ -32,6 +33,8 @@ export const ERROR_MESSAGES: Record<ProgramErrorName, string> = {
   BalanceOutstanding: 'You still owe money. Repay in full before taking your deposit back.',
   MathOverflow: 'That amount is too large to process.',
   CooldownActive: 'Your withdrawal is still in its waiting period. You can claim it once the countdown ends.',
+  IdentityBound: 'That mobile-money account is already linked to a different wallet. One account can back only one wallet.',
+  IdentityRequired: 'This limit is tied to a mobile-money account, but the account link was left out of the transaction.',
 };
 
 export interface FriendlyError {

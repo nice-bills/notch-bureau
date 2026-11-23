@@ -41,6 +41,7 @@ import {
 } from '../src/notch.ts';
 
 const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
 const DEFAULT_PROGRAM = '4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz';
 
 function parseArgs(argv) {
@@ -90,6 +91,9 @@ const toMicro = (s) => {
 const opts = parseArgs(process.argv.slice(2));
 const dry = !opts.send;
 if (/mainnet/i.test(opts.rpc)) fail('refusing to run against a mainnet RPC URL. This script is devnet only.');
+// A local solana-test-validator (the browser e2e harness starts one) is allowed too: any chain on localhost
+// whose genesis is not mainnet's. Everything else must be devnet.
+const LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(opts.rpc);
 const rpc = createSolanaRpc(opts.rpc);
 
 // --- load key + guard network -------------------------------------------------------------
@@ -101,10 +105,10 @@ console.log(`wallet      ${payer.address}`);
 
 if (!dry) {
   const genesis = await rpc.getGenesisHash().send();
-  if (genesis !== DEVNET_GENESIS) fail(`this RPC is not devnet (genesis ${genesis}). Refusing to send.`);
+  if (LOCAL ? genesis === MAINNET_GENESIS : genesis !== DEVNET_GENESIS) fail(`this RPC is not ${LOCAL ? 'a local test validator' : 'devnet'} (genesis ${genesis}). Refusing to send.`);
   const bal = await rpc.getBalance(payer.address).send();
-  console.log(`balance     ${Number(bal.value) / 1e9} SOL (devnet)`);
-  if (bal.value < 100_000_000n) fail('wallet needs at least 0.1 devnet SOL. Run: solana airdrop 2 --url devnet');
+  console.log(`balance     ${Number(bal.value) / 1e9} SOL (${LOCAL ? 'local test validator' : 'devnet'})`);
+  if (bal.value < 100_000_000n) fail(LOCAL ? 'wallet needs at least 0.1 SOL on the local validator.' : 'wallet needs at least 0.1 devnet SOL. Run: solana airdrop 2 --url devnet');
 }
 
 // --- underwriter key ---------------------------------------------------------------------

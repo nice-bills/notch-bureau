@@ -136,6 +136,10 @@ export const deriveLine = (program: Address, borrower: Address) =>
 export const deriveDedupe = (program: Address, dedupeHash: Uint8Array) =>
   pda(program, text('dedupe'), dedupeHash);
 
+/** IdentityLink PDA ["identity", id_hash] (bytes 96..128 of the record): one mobile-money account, one wallet. */
+export const deriveIdentity = (program: Address, idHash: Uint8Array) =>
+  pda(program, text('identity'), idHash);
+
 /** The lender's share escrow (a token account that owns itself) and pending-withdrawal record. */
 export const deriveEscrow = (program: Address, lender: Address) =>
   pda(program, text('escrow'), new Uint8Array(addressEncoder.encode(lender)));
@@ -155,12 +159,14 @@ export async function deriveAta(owner: Address, mint: Address): Promise<Address>
 }
 
 // ---------------------------------------------------------------------------
-// Signed record (96 bytes). Must match enclave/src/record.js and record.rs.
-//   "NOTCHv1\0" | wallet[32] | limit_micro u64 | expiry i64 | dedupe[32] | nonce u64
+// Signed record (128 bytes). Must match enclave/src/record.js and record.rs.
+//   "NOTCHv2\0" | wallet[32] | limit_micro u64 | expiry i64 | dedupe[32] | nonce u64 | id_hash[32]
+// id_hash is all zeros when the income source has no bindable identity (see IdentityLink in the program).
 // ---------------------------------------------------------------------------
 
-export const RECORD_LEN = 96;
-const RECORD_TAG = new Uint8Array([0x4e, 0x4f, 0x54, 0x43, 0x48, 0x76, 0x31, 0x00]);
+export const RECORD_LEN = 128;
+const RECORD_TAG = new Uint8Array([0x4e, 0x4f, 0x54, 0x43, 0x48, 0x76, 0x32, 0x00]);
+const NO_IDENTITY = new Uint8Array(32);
 
 export interface RecordFields {
   wallet: Address;
@@ -168,10 +174,14 @@ export interface RecordFields {
   expiry: bigint | number;
   dedupe: Uint8Array;
   nonce: bigint | number;
+  /** sha256("notch-msisdn"|number) of the backing mobile-money account; omit (zeros) for none. */
+  idHash?: Uint8Array;
 }
 
 export function encodeRecord(f: RecordFields): Uint8Array {
   if (f.dedupe.length !== 32) throw new Error('dedupe hash must be 32 bytes');
+  const idHash = f.idHash ?? NO_IDENTITY;
+  if (idHash.length !== 32) throw new Error('id_hash must be 32 bytes');
   return concat(
     RECORD_TAG,
     new Uint8Array(addressEncoder.encode(f.wallet)),
@@ -179,19 +189,24 @@ export function encodeRecord(f: RecordFields): Uint8Array {
     i64Le(f.expiry),
     f.dedupe,
     u64Le(f.nonce),
+    idHash,
   );
 }
 
-export function decodeRecord(bytes: Uint8Array): { limitMicro: bigint; expiry: bigint; dedupe: Uint8Array; nonce: bigint } {
-  if (bytes.length !== RECORD_LEN) throw new Error('record must be 96 bytes');
+export function decodeRecord(bytes: Uint8Array): { limitMicro: bigint; expiry: bigint; dedupe: Uint8Array; nonce: bigint; idHash: Uint8Array } {
+  if (bytes.length !== RECORD_LEN) throw new Error(`record must be ${RECORD_LEN} bytes`);
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return {
     limitMicro: v.getBigUint64(40, true),
     expiry: v.getBigInt64(48, true),
     dedupe: bytes.slice(56, 88),
     nonce: v.getBigUint64(88, true),
+    idHash: bytes.slice(96, 128),
   };
 }
+
+/** True when the record carries a mobile-money identity (non-zero id_hash). */
+export const hasIdentity = (idHash: Uint8Array) => idHash.some((b) => b !== 0);
 
 // ---------------------------------------------------------------------------
 // Instructions
@@ -258,6 +273,8 @@ export interface PostLimitParams {
   line: Address;
   dedupe: Address;
   record: Uint8Array;
+  /** IdentityLink PDA; needed only when the record has a non-zero id_hash. Omitted => "None" placeholder. */
+  identity?: Address;
 }
 
 /** Returns [ed25519 verify, post_limit]; the verify ix must sit directly before post_limit. */
@@ -273,7 +290,9 @@ export function postLimitIxs(
 export function postLimitIx(a: NotchAddresses, p: PostLimitParams): Instruction {
   return ix(
     a.program,
-    [meta(p.payer, WS), meta(p.borrower, R), meta(a.config, R), meta(p.line, W), meta(p.dedupe, W), meta(INSTRUCTIONS_SYSVAR, R), meta(SYSTEM_PROGRAM, R)],
+    [meta(p.payer, WS), meta(p.borrower, R), meta(a.config, R), meta(p.line, W), meta(p.dedupe, W), meta(INSTRUCTIONS_SYSVAR, R), meta(SYSTEM_PROGRAM, R),
+      // Optional trailing account: Anchor reads the program's own id as "None".
+      p.identity ? meta(p.identity, W) : meta(a.program, R)],
     concat(discriminator('post_limit'), vecU8(p.record)),
   );
 }

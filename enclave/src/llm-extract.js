@@ -101,6 +101,44 @@ export function corroborateEvents(text, events) {
   });
 }
 
+// Statement PDFs: the structured parser (src/statement.js) has already read the credit rows from the table's
+// Amount column. The model is a second reader, and every event it returns must be backed by one of those rows
+// (same currency, same amount, each row used at most once). The row, not the model, supplies the date,
+// kind and identity of the event, and the amount must literally appear in the PDF text.
+export function corroborateStatementEvents(statement, events) {
+  const pool = statement.credits.map((c) => ({ ...c, used: false }));
+  const literal = literalAmounts(statement.text);
+  const out = [];
+  for (const e of events) {
+    const row = pool.find((c) => !c.used && c.currency === e.currency && Math.abs(c.amount - e.amount) < 0.005
+      && literal.some((v) => Math.abs(v - c.amount) < 0.005));
+    if (!row) continue;
+    row.used = true;
+    const { used, ...credit } = row;
+    out.push(credit);
+  }
+  return out;
+}
+
+export async function extractStatementAuto(statement, {
+  llm = llmConfigFromEnv(),
+  fetchImpl = fetch,
+  now = new Date(),
+  timeoutMs,
+} = {}) {
+  const rules = () => ({ events: statement.credits.map((c) => ({ ...c })), via: 'rules' });
+  if (!llm) return rules();
+  try {
+    const content = await chatComplete({ config: llm, text: statement.text, fetchImpl, timeoutMs });
+    const parsed = parseLlmEvents(content, { now });
+    const events = corroborateStatementEvents(statement, parsed);
+    if (!events.length) return { ...rules(), note: 'llm returned no corroborated credit events' };
+    return { events, via: 'llm' };
+  } catch (err) {
+    return { ...rules(), note: `llm fallback: ${err.message}` };
+  }
+}
+
 // The one entry point the underwriter uses.
 export async function extractIncomeAuto(eml, {
   llm = llmConfigFromEnv(),

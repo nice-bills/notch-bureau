@@ -7,7 +7,7 @@ import { useWallet } from './wallet';
 import { underwrite, recordBytes, getAttestation, type EnclaveResult } from './enclave';
 import { explainError, TxError } from './errors';
 import { address, getAddressEncoder } from '@solana/kit';
-import { decodeRecord, deriveDedupe, deriveLine, encodeRecord, postLimitIxs, USDC, bytesToBase64, bytesToHex } from './notch';
+import { decodeRecord, deriveDedupe, deriveIdentity, hasIdentity, deriveLine, encodeRecord, postLimitIxs, USDC, bytesToBase64, bytesToHex } from './notch';
 import { Btn, Notice } from './ui';
 import { formatUsdc } from './amount';
 
@@ -29,19 +29,41 @@ async function loadSampleEmail(): Promise<{ name: string; bytes: Uint8Array }> {
   return { name: 'momo.eml', bytes: new TextEncoder().encode(t) };
 }
 
-/** Change the first money amount in the body (not the headers) and leave every other byte alone. */
+/**
+ * Edit one thing in the email body and leave every other byte alone. MoMo amounts live inside the base64 PDF
+ * attachment, so the edit flips one byte there (the decoded PDF changes, the body hash no longer matches).
+ * Emails with amounts in plain text (no base64 attachment) still get their first money amount changed.
+ */
 export function tamperAmount(eml: Uint8Array): { bytes: Uint8Array; before: string; after: string } {
   const s = new TextDecoder('latin1').decode(eml);
   const split = s.search(/\r?\n\r?\n/);
   const head = s.slice(0, split);
   const body = s.slice(split);
+  const toBytes = (edited: string) => {
+    const out = new Uint8Array(edited.length);
+    for (let i = 0; i < edited.length; i++) out[i] = edited.charCodeAt(i) & 0xff;
+    return out;
+  };
+  // The first base64 attachment: the lines after its blank line, up to the next boundary.
+  const part = body.match(/Content-Transfer-Encoding:\s*base64[^\n]*\r?\n\r?\n([A-Za-z0-9+/=\r\n]+)/i);
+  if (part && part.index !== undefined) {
+    const start = part.index + part[0].length - part[1].length;
+    const lines = part[1].split(/\r?\n/).filter((l) => l.length >= 8);
+    if (lines.length > 2) {
+      // Change one base64 character in the middle of the file (a middle line, never the padding).
+      const line = lines[Math.floor(lines.length / 2)];
+      const at = start + part[1].indexOf(line) + Math.floor(line.length / 2);
+      const was = body[at];
+      const now = was === 'A' ? 'B' : 'A';
+      const edited = head + body.slice(0, at) + now + body.slice(at + 1);
+      return { bytes: toBytes(edited), before: `${was} in the attached PDF`, after: now };
+    }
+  }
   const m = body.match(/\d[\d,]*\.\d{2}/);
   if (!m || m.index === undefined) throw new Error('Could not find an amount in this email to edit.');
   const after = `9${m[0]}`;
   const edited = head + body.slice(0, m.index) + after + body.slice(m.index + m[0].length);
-  const out = new Uint8Array(edited.length);
-  for (let i = 0; i < edited.length; i++) out[i] = edited.charCodeAt(i) & 0xff;
-  return { bytes: out, before: m[0], after };
+  return { bytes: toBytes(edited), before: m[0], after };
 }
 
 const enclaveRaw = (r: EnclaveResult) => JSON.stringify(r.ok ? { ok: true, limitUsdc: r.limitUsdc } : { ok: false, reason: r.reason }, null, 2);
@@ -92,11 +114,13 @@ export function Attacks() {
       // Even a copy of the first signed record cannot be posted twice on Solana.
       if (owner && addrs && r1) {
         const rec = recordBytes(r1);
-        const dedupe = await deriveDedupe(addrs.program, decodeRecord(rec).dedupe);
+        const decoded = decodeRecord(rec);
+        const dedupe = await deriveDedupe(addrs.program, decoded.dedupe);
+        const identity = hasIdentity(decoded.idHash) ? await deriveIdentity(addrs.program, decoded.idHash) : undefined;
         if (await accountExists(dedupe)) {
           const line = await deriveLine(addrs.program, owner);
           const uw = await getUnderwriterKey();
-          const sim = await simulate(owner, postLimitIxs(addrs, { payer: owner, borrower: owner, line, dedupe, record: rec }, uw, base64Bytes(r1.signature)));
+          const sim = await simulate(owner, postLimitIxs(addrs, { payer: owner, borrower: owner, line, dedupe, record: rec, identity }, uw, base64Bytes(r1.signature)));
           const e = explainError(new TxError(sim.err ?? 'ok', sim.logs));
           steps.push({ label: 'Same email, posted to Solana again: program', blocked: !sim.ok, friendly: sim.ok ? 'The program accepted it twice. That should not happen.' : e.message, raw: sim.logs.join('\n') || (sim.err ?? '') });
         } else {

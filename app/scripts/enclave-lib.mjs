@@ -12,10 +12,10 @@ import * as fixtures from '../../enclave/test/fixtures/emails.js';
 export { fixtures };
 
 /** Underwriter keyed from `keyFile` (created if missing; omit for a throwaway in-memory key). */
-export function makeUnderwriter(keyFile, { llm = null } = {}) {
+export function makeUnderwriter(keyFile, { llm = null, ...extra } = {}) {
   let secretKey;
   if (keyFile && fs.existsSync(keyFile)) secretKey = Uint8Array.from(JSON.parse(fs.readFileSync(keyFile, 'utf8')));
-  const u = new Underwriter({ secretKey, resolver: fixtures.resolver, trusted: [...DEFAULT_TRUSTED, 'bank.test'], llm });
+  const u = new Underwriter({ secretKey, resolver: fixtures.resolver, trusted: [...DEFAULT_TRUSTED, 'bank.test'], llm, ...extra });
   if (keyFile && !secretKey) fs.writeFileSync(keyFile, JSON.stringify(Array.from(u.keys.secretKey)), { mode: 0o600 });
   return u;
 }
@@ -31,8 +31,15 @@ export function makeServer(u) {
     // A freshly signed demo email on every request. Each carries its own transaction ID, like real
     // provider emails, so it is never a duplicate of an earlier demo run (dedupe is on the body hash).
     const sample = req.method === 'GET' && req.url.match(/^\/samples\/(momo|deel|bank)\.eml$/);
+    if (sample && sample[1] === 'momo') {
+      // MTN MoMo Ghana sends a statement: a PDF on a signed email. A fresh phone number per request, because one
+      // number may back only one wallet (a fixed demo number would lock out every wallet after the first).
+      const eml = await fixtures.momoStatementEmail({ msisdn: fixtures.randomMsisdn() });
+      res.writeHead(200, { 'content-type': 'message/rfc822', 'access-control-allow-origin': '*' });
+      return res.end(eml);
+    }
     if (sample) {
-      const f = { momo: fixtures.momoGhana, deel: fixtures.deelPayout, bank: fixtures.bankStatement }[sample[1]];
+      const f = { deel: fixtures.deelPayout, bank: fixtures.bankStatement }[sample[1]];
       const eml = await fixtures.signedEmail({ body: `${f.body}\r\nTransaction ID: ${crypto.randomUUID()}`, domain: f.domain, from: f.from, subject: f.subject });
       res.writeHead(200, { 'content-type': 'message/rfc822', 'access-control-allow-origin': '*' });
       return res.end(eml);

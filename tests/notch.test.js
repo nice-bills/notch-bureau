@@ -158,20 +158,25 @@ async function newLender(ctx, funds) {
   return l;
 }
 
-function record(ctx, { limitUsdc = 50, nonce = 1, dedupe = crypto.randomBytes(32), wallet = ctx.borrower.address, expiry } = {}) {
-  return encodeRecord({ wallet, limitUsdc, expiry: expiry ?? Number(ctx.now) + 30 * 86400, dedupe, nonce });
+function record(ctx, { limitUsdc = 50, nonce = 1, dedupe = crypto.randomBytes(32), wallet = ctx.borrower.address, expiry, idHash } = {}) {
+  return encodeRecord({ wallet, limitUsdc, expiry: expiry ?? Number(ctx.now) + 30 * 86400, dedupe, nonce, idHash });
 }
 
-async function postLimit(ctx, msg, { signKey = ctx.uw.secretKey, signedMsg = msg, borrower = ctx.borrower.address } = {}) {
+// `identity`: 'auto' passes the IdentityLink PDA for the record's id_hash when it is non-zero; false omits the
+// optional trailing account (Anchor wants the program id as the "None" placeholder); an address passes exactly that account.
+async function postLimit(ctx, msg, { signKey = ctx.uw.secretKey, signedMsg = msg, borrower = ctx.borrower.address, identity = 'auto' } = {}) {
   const sig = nacl.sign.detached(signedMsg, signKey);
   const pub = nacl.sign.keyPair.fromSecretKey(signKey).publicKey;
   const dedupe = await pda(Buffer.from('dedupe'), msg.subarray(56, 88));
   const line = await pda(Buffer.from('line'), enc.encode(borrower));
+  const idHash = msg.subarray(96, 128);
+  let identityAcct = identity;
+  if (identity === 'auto') identityAcct = idHash.length === 32 && idHash.some((b) => b) ? await pda(Buffer.from('identity'), idHash) : false;
   return send(ctx.svm, ctx.admin, [
     ed25519Ix(pub, signedMsg, sig),
     {
       programAddress: PROGRAM,
-      accounts: [meta(ctx.admin.address, WS), meta(borrower, R), meta(ctx.config, R), meta(line, W), meta(dedupe, W), meta(IX_SYSVAR, R), meta(SYSTEM, R)],
+      accounts: [meta(ctx.admin.address, WS), meta(borrower, R), meta(ctx.config, R), meta(line, W), meta(dedupe, W), meta(IX_SYSVAR, R), meta(SYSTEM, R), meta(identityAcct || PROGRAM, identityAcct ? W : R)],
       data: Buffer.concat([disc('post_limit'), vecU8(msg)]),
     },
   ]);
@@ -255,7 +260,7 @@ const readRequest = async (ctx, lender) => {
   return { lender: bs58.encode(d.subarray(8, 40)), shares: d.readBigUInt64LE(40), unlockTs: d.readBigInt64LE(48) };
 };
 const exists = async (ctx, addr) => ctx.svm.getAccount(addr).exists;
-const open = async (ctx, limitUsdc = 50) => assert.ok((await postLimit(ctx, record(ctx, { limitUsdc, expiry: Number(ctx.now) + 90 * 86400 }))).ok);
+const open = async (ctx, limitUsdc = 50) => { const r = await postLimit(ctx, record(ctx, { limitUsdc, expiry: Number(ctx.now) + 90 * 86400 })); assert.ok(r.ok, r.logs); };
 
 test('underwriter-signed limit opens a line; borrower deposits, draws, repays principal + 2% fee on time', async () => {
   const ctx = await setup();
@@ -322,6 +327,43 @@ test('attack: record for another wallet cannot open my line', async () => {
   const ctx = await setup();
   const other = await generateKeyPairSigner();
   fails(await postLimit(ctx, record(ctx, { wallet: other.address })), 'WrongWallet');
+});
+
+test('identity: one mobile-money account backs one wallet; a second wallet is refused, the first can re-post', async () => {
+  const ctx = await setup();
+  const idHash = crypto.createHash('sha256').update('notch-msisdn|233241234567').digest();
+  assert.ok((await postLimit(ctx, record(ctx, { idHash, nonce: 1 }))).ok);
+  const link = ctx.svm.getAccount(await pda(Buffer.from('identity'), idHash));
+  assert.ok(link.exists);
+  assert.equal(bs58.encode(Buffer.from(link.data).subarray(8, 40)), ctx.borrower.address);
+  // same wallet, new statement (new dedupe, newer nonce): fine
+  assert.ok((await postLimit(ctx, record(ctx, { idHash, nonce: 2, limitUsdc: 40 }))).ok);
+  assert.equal(readLine(ctx.svm, ctx.line).limit, 40n * USDC);
+  // a different wallet presenting the same identity: refused with the new error
+  const thief = await generateKeyPairSigner();
+  const r = await postLimit(ctx, record(ctx, { idHash, wallet: thief.address, nonce: 1 }), { borrower: thief.address });
+  fails(r, 'IdentityBound');
+  assert.equal(readLine(ctx.svm, await pda(Buffer.from('line'), enc.encode(thief.address))), null, 'refused post leaves no line');
+});
+
+test('identity: a record with an id_hash needs the identity account; the wrong account is refused; zero id_hash needs none', async () => {
+  const ctx = await setup();
+  const idHash = crypto.randomBytes(32);
+  fails(await postLimit(ctx, record(ctx, { idHash }), { identity: false }), 'IdentityRequired');
+  const wrong = await pda(Buffer.from('identity'), crypto.randomBytes(32));
+  fails(await postLimit(ctx, record(ctx, { idHash }), { identity: wrong }), 'ConstraintSeeds');
+  assert.equal(readLine(ctx.svm, ctx.line), null);
+  // no identity (e.g. a Deel email): no account, no link
+  assert.ok((await postLimit(ctx, record(ctx, { nonce: 3 }))).ok);
+  assert.equal(await exists(ctx, await pda(Buffer.from('identity'), Buffer.alloc(32))), false);
+});
+
+test('identity: the id_hash is covered by the signature (swapping it after signing is refused)', async () => {
+  const ctx = await setup();
+  const signed = record(ctx, { idHash: crypto.randomBytes(32) });
+  const sent = Buffer.from(signed);
+  crypto.randomBytes(32).copy(sent, 96);
+  fails(await postLimit(ctx, sent, { signedMsg: signed }), 'RecordMismatch');
 });
 
 test('past-due balance can be marked defaulted and the line is closed for good', async () => {

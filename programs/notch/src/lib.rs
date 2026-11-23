@@ -84,6 +84,23 @@ pub mod notch {
         );
         require!(r.expiry > now, NotchError::RecordExpired);
 
+        // One mobile-money account (id_hash) may back ONE wallet, ever. The first wallet to present
+        // it claims the IdentityLink; any other wallet is refused. All-zero means "no identity"
+        // (the source cannot be bound) and skips the link entirely.
+        if r.id_hash != [0u8; 32] {
+            let link = ctx
+                .accounts
+                .identity
+                .as_mut()
+                .ok_or(NotchError::IdentityRequired)?;
+            if link.wallet == Pubkey::default() {
+                link.wallet = r.wallet;
+                link.bump = ctx.bumps.identity.ok_or(NotchError::IdentityRequired)?;
+            } else {
+                require_keys_eq!(link.wallet, r.wallet, NotchError::IdentityBound);
+            }
+        }
+
         let line = &mut ctx.accounts.line;
         if line.wallet == Pubkey::default() {
             line.wallet = r.wallet;
@@ -378,6 +395,11 @@ pub fn dedupe_seed(record: &[u8]) -> &[u8] {
     record.get(56..88).unwrap_or(&[])
 }
 
+/// Bytes 96..128 of the record (the identity hash); same short-record behaviour as `dedupe_seed`.
+pub fn identity_seed(record: &[u8]) -> &[u8] {
+    record.get(96..128).unwrap_or(&[])
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
@@ -447,6 +469,15 @@ pub struct Dedupe {
     pub used_at: i64,
 }
 
+/// Sybil binding. PDA ["identity", id_hash]: the one wallet a mobile-money account (hashed, never the
+/// raw number) is allowed to back. Created by `post_limit`; never reassigned.
+#[account]
+#[derive(InitSpace)]
+pub struct IdentityLink {
+    pub wallet: Pubkey,
+    pub bump: u8,
+}
+
 #[event]
 pub struct LimitPosted {
     pub wallet: Pubkey,
@@ -498,6 +529,10 @@ pub struct PostLimit<'info> {
     #[account(address = solana_instructions_sysvar::ID)]
     pub instructions: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
+    /// Trailing and optional (pass this program's own id as the "None" placeholder): required only when the record carries a
+    /// non-zero id_hash. Created on first use; a different wallet presenting the same id_hash fails.
+    #[account(init_if_needed, payer = payer, space = 8 + IdentityLink::INIT_SPACE, seeds = [b"identity", identity_seed(&record)], bump)]
+    pub identity: Option<Account<'info, IdentityLink>>,
 }
 
 #[derive(Accounts)]
@@ -685,4 +720,8 @@ pub enum NotchError {
     MathOverflow,
     #[msg("Withdrawal cooldown has not elapsed yet")]
     CooldownActive,
+    #[msg("This identity is already linked to a different wallet")]
+    IdentityBound,
+    #[msg("Record carries an identity but the identity account was not provided")]
+    IdentityRequired,
 }

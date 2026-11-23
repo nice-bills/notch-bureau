@@ -3,9 +3,11 @@ use anchor_lang::prelude::*;
 use crate::NotchError;
 
 /// Must match enclave/src/record.js byte for byte.
-/// "NOTCHv1\0" | wallet[32] | limit_micro u64 | expiry i64 | dedupe[32] | nonce u64  (little endian)
-pub const TAG: &[u8; 8] = b"NOTCHv1\0";
-pub const RECORD_LEN: usize = 96;
+/// "NOTCHv2\0" | wallet[32] | limit_micro u64 | expiry i64 | dedupe[32] | nonce u64 | id_hash[32]  (little endian)
+/// `id_hash` is sha256("notch-msisdn"|number) (optionally peppered) for statement-backed records and
+/// all zeros when the source has no bindable identity.
+pub const TAG: &[u8; 8] = b"NOTCHv2\0";
+pub const RECORD_LEN: usize = 128;
 
 pub struct Record {
     pub wallet: Pubkey,
@@ -13,6 +15,7 @@ pub struct Record {
     pub expiry: i64,
     pub dedupe: [u8; 32],
     pub nonce: u64,
+    pub id_hash: [u8; 32],
 }
 
 impl Record {
@@ -28,6 +31,7 @@ impl Record {
             expiry: u64_at(48) as i64,
             dedupe: b[56..88].try_into().unwrap(),
             nonce: u64_at(88),
+            id_hash: b[96..128].try_into().unwrap(),
         })
     }
 }

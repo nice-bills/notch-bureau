@@ -12,7 +12,8 @@
     "setup:devnet": "node scripts/devnet-setup.mjs",
     "e2e:devnet": "node scripts/e2e-devnet.mjs",
     "keeper": "node scripts/keeper.mjs",
-    "e2e": "playwright test -c e2e/playwright.config.ts",
+    "e2e": "node scripts/e2e-browser.mjs",
+    "e2e:browser:devnet": "playwright test -c e2e/playwright.config.ts --workers=1",
     "e2e:all": "pnpm --dir .. test && pnpm --dir .. test:enclave && pnpm test && pnpm e2e:devnet && pnpm e2e"
   },
   "dependencies": {

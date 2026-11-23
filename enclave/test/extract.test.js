@@ -5,14 +5,14 @@ import bs58 from 'bs58';
 import { extractIncome, scanCreditAmounts } from '../src/extract.js';
 import { Underwriter } from '../src/underwriter.js';
 import { RECORD_LEN, verifyRecord } from '../src/record.js';
-import { signedEmail, resolver, momoGhana, deelPayout, bankStatement } from './fixtures/emails.js';
+import { signedEmail, resolver, creditNotice, deelPayout, bankStatement } from './fixtures/emails.js';
 
 const wallet = bs58.encode(nacl.sign.keyPair().publicKey);
 
 const pairs = (events) => events.map((e) => [e.amount, e.currency]);
 
 test('MTN MoMo Ghana: received amount is income, the new balance is not', async () => {
-  const eml = await signedEmail(momoGhana);
+  const eml = await signedEmail(creditNotice);
   assert.deepEqual(pairs(extractIncome(eml)), [[1250, 'GHS']]);
 });
 

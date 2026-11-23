@@ -28,6 +28,9 @@ export const APP_URL = env.E2E_APP_URL || 'http://localhost:5173';
 export const ADMIN_KEYPAIR = env.E2E_ADMIN_KEYPAIR || path.join(os.homedir(), '.config/solana/id.json');
 export const ENCLAVE_KEY_FILE = env.NOTCH_KEY_FILE || path.resolve(appDir, '..', '.underwriter-key.json');
 export const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+export const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
+/** True when the run points at a local solana-test-validator (started by scripts/e2e-browser.mjs). */
+export const IS_LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(RPC_URL);
 
 // The wallet picker name. Phantom registers itself as "Phantom"; the test wallet uses the same name so the
 // picker shows exactly what a real user would see.

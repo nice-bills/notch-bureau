@@ -17,6 +17,8 @@ import {
   deriveAddresses,
   deriveAta,
   deriveDedupe,
+  deriveIdentity,
+  decodeRecord,
   deriveLine,
   discriminator,
   drawIx,
@@ -111,11 +113,11 @@ const refRepay = (ctx: RefCtx, amount: bigint) => ({
   data: Buffer.concat([disc('repay'), u64(amount)]),
 });
 const refMarkDefault = (ctx: RefCtx) => ({ programAddress: PROGRAM, accounts: [meta(ctx.line, W), meta(ctx.pool, W)], data: disc('mark_default') });
-const refPostLimit = (ctx: RefCtx, payer: Address, msg: Buffer, dedupe: Address) => [
+const refPostLimit = (ctx: RefCtx, payer: Address, msg: Buffer, dedupe: Address, identity?: Address) => [
   ed25519Ix(uw.publicKey, msg, nacl.sign.detached(msg, uw.secretKey)),
   {
     programAddress: PROGRAM,
-    accounts: [meta(payer, WS), meta(ctx.borrower, R), meta(ctx.config, R), meta(ctx.line, W), meta(dedupe, W), meta(INSTRUCTIONS_SYSVAR, R), meta(SYSTEM_PROGRAM, R)],
+    accounts: [meta(payer, WS), meta(ctx.borrower, R), meta(ctx.config, R), meta(ctx.line, W), meta(dedupe, W), meta(INSTRUCTIONS_SYSVAR, R), meta(SYSTEM_PROGRAM, R), identity ? meta(identity, W) : meta(PROGRAM, R)],
     data: Buffer.concat([disc('post_limit'), vecU8(msg)]),
   },
 ];
@@ -158,6 +160,19 @@ describe('notch.ts matches tests/notch.test.js', () => {
     expect(mine).toHaveLength(2);
     same(mine[0], expected[0] as never);
     same(mine[1], expected[1] as never);
+  });
+
+  it('post_limit with an identity: the IdentityLink PDA is the trailing writable account', async () => {
+    const { a, ref } = await ctx();
+    const idHash = crypto.createHash('sha256').update('notch-msisdn|233241234567').digest();
+    const record = encodeRecordRef({ wallet: borrower, limitUsdc: 50, expiry: 1_800_000_000, dedupe: crypto.randomBytes(32), nonce: 7, idHash }) as Buffer;
+    expect(record.length).toBe(128);
+    const dedupe = await deriveDedupe(PROGRAM, record.subarray(56, 88));
+    const [identity] = await getProgramDerivedAddress({ programAddress: PROGRAM, seeds: [Buffer.from('identity'), idHash] });
+    expect(await deriveIdentity(PROGRAM, decodeRecord(record).idHash)).toBe(identity);
+    const sig = nacl.sign.detached(record, uw.secretKey);
+    const mine = postLimitIxs(a, { payer: lenderAddr, borrower, line: ref.line, dedupe, record, identity }, uw.publicKey, sig);
+    same(mine[1], refPostLimit(ref, lenderAddr, record, dedupe, identity)[1] as never);
   });
 
   it('draw', async () => {
@@ -240,6 +255,11 @@ describe('notch.ts matches tests/notch.test.js', () => {
     const mine = encodeRecord({ wallet: borrower, limitMicro: 42_500_000n, expiry: 1_790_000_000, dedupe, nonce: 99n });
     const ref = encodeRecordRef({ wallet: borrower, limitUsdc: 42.5, expiry: 1_790_000_000, dedupe, nonce: 99 }) as Buffer;
     expect(Buffer.from(mine).toString('hex')).toBe(ref.toString('hex'));
+    const idHash = crypto.randomBytes(32);
+    const mine2 = encodeRecord({ wallet: borrower, limitMicro: 42_500_000n, expiry: 1_790_000_000, dedupe, nonce: 99n, idHash });
+    const ref2 = encodeRecordRef({ wallet: borrower, limitUsdc: 42.5, expiry: 1_790_000_000, dedupe, nonce: 99, idHash }) as Buffer;
+    expect(Buffer.from(mine2).toString('hex')).toBe(ref2.toString('hex'));
+    expect(Buffer.from(decodeRecord(mine2).idHash).toString('hex')).toBe(idHash.toString('hex'));
   });
 
   it('PDAs: line uses ["line", borrower], dedupe uses ["dedupe", hash]', async () => {
@@ -258,7 +278,7 @@ describe('notch.ts matches tests/notch.test.js', () => {
       "accounts: [meta(lender.signer.address, WS), meta(ctx.config, R), meta(ctx.shareMint, R), meta(lender.shares, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM_ADDRESS, R)]",
       "accounts: [meta(ctx.borrower.address, RS), meta(ctx.config, R), meta(ctx.line, W), meta(ctx.mint.address, R), meta(ctx.vault, W), meta(ctx.borrowerAcct, W), meta(TOKEN_PROGRAM_ADDRESS, R), meta(ctx.pool, W)]",
       "accounts: [meta(ctx.borrower.address, RS), meta(ctx.config, R), meta(ctx.line, W), meta(ctx.mint.address, R), meta(ctx.borrowerAcct, W), meta(ctx.vault, W), meta(TOKEN_PROGRAM_ADDRESS, R), meta(ctx.pool, W), meta(ctx.borrowerAcct, W)]",
-      "accounts: [meta(ctx.admin.address, WS), meta(borrower, R), meta(ctx.config, R), meta(line, W), meta(dedupe, W), meta(IX_SYSVAR, R), meta(SYSTEM, R)]",
+      "accounts: [meta(ctx.admin.address, WS), meta(borrower, R), meta(ctx.config, R), meta(line, W), meta(dedupe, W), meta(IX_SYSVAR, R), meta(SYSTEM, R), meta(identityAcct || PROGRAM, identityAcct ? W : R)]",
     ]) expect(src).toContain(needle);
   });
 });

@@ -36,14 +36,6 @@ const re = (src) => new RegExp(src.replaceAll('{M}', MONEY_SRC), 'i');
 // phrase. {M} is one money token.
 const PROVIDER_TEMPLATES = [
   {
-    domains: ['mtn.com.gh', 'mtn.com'],
-    // "You have received GHS 1,250.00 from KWAME ASANTE (024 ...)." / "Cash In of GHS 50.00"
-    patterns: [
-      re(`^you have ${RECEIVED_VERB}\\s+{M}(?:\\s+from\\b.*)?$`),
-      re('^(?:payment received for|cash in(?: of)?)\\s+{M}(?:\\s+from\\b.*)?$'),
-    ],
-  },
-  {
     domains: ['deel.com'],
     patterns: [
       re('^your (?:payment|payout) of\\s+{M}\\s+(?:has been|was)\\s+(?:sent|paid|deposited|released|initiated)\\b'),
@@ -79,6 +71,8 @@ const PROVIDER_TEMPLATES = [
 const GENERIC_PATTERNS = [
   re('^your (?:payment|payout) of\\s+{M}\\s+(?:has been|was)\\s+(?:sent|paid|deposited|released|initiated)\\b'),
   re('^(?:payment|payout) received:?\\s*{M}'),
+  // "You have been paid 500 USDC for ..." (Superteam Earn style)
+  re("^you(?:'ve| have) been paid\\s+{M}"),
   // "You have received GHS 100" / "Received: USD 5" / "You've been credited with 5 USD"
   re(`^(?:you(?:'ve| have)\\s+)?(?:just\\s+)?${RECEIVED_VERB}\\s*:?\\s*(?:an? (?:payment|payout|transfer|deposit|credit) of\\s+)?{M}`),
   // "Payment to you: GHS 500.00 received from ACME" / "GHS 5.00 credited"

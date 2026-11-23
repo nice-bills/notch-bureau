@@ -18,12 +18,14 @@ import { fileURLToPath } from 'node:url';
 import { makeUnderwriter, makeServer, fixtures, readEnv } from './enclave-lib.mjs';
 import { llmConfigFromEnv } from '../../enclave/src/llm-extract.js';
 
-const { signedEmail, momoGhana, deelPayout, bankStatement } = fixtures;
+const { signedEmail, momoStatementEmail, randomMsisdn, deelPayout, bankStatement } = fixtures;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const samplesDir = path.join(here, '..', 'public', 'samples');
 fs.mkdirSync(samplesDir, { recursive: true });
 
-for (const [file, f] of [['momo.eml', momoGhana], ['deel.eml', deelPayout], ['bank.eml', bankStatement]]) {
+// MTN MoMo Ghana sends a statement (PDF on a signed email), not a per-payment email.
+fs.writeFileSync(path.join(samplesDir, 'momo.eml'), await momoStatementEmail({ msisdn: randomMsisdn() }));
+for (const [file, f] of [['deel.eml', deelPayout], ['bank.eml', bankStatement]]) {
   const eml = await signedEmail({ body: f.body, domain: f.domain, from: f.from, subject: f.subject });
   fs.writeFileSync(path.join(samplesDir, file), eml);
 }

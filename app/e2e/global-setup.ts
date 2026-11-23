@@ -6,7 +6,7 @@ import { createKeyPairSignerFromBytes } from '@solana/kit';
 export default async function globalSetup() {
   const { admin } = await chainContext(); // also refuses anything that is not devnet
   const bal = await solBalance(admin.address);
-  if (bal < 150_000_000n) throw new Error(`admin wallet ${admin.address} has only ${Number(bal) / 1e9} SOL on devnet; need at least 0.15`);
+  if (bal < 150_000_000n) throw new Error(`admin wallet ${admin.address} has only ${Number(bal) / 1e9} SOL on this network; need at least 0.15`);
 
   // Is the sealed computer on :8787 the one the program trusts? If not, no limit can ever be posted.
   const att = (await (await fetch(`${ENCLAVE_URL}/attestation`)).json()) as { underwriter: string; mode: string };
@@ -22,5 +22,5 @@ export default async function globalSetup() {
   clearWallets();
   resetState();
   saveState({ adminSolStart: (await solBalance(admin.address)).toString() });
-  console.log(`\n[e2e] devnet ok. admin ${admin.address} ${Number(bal) / 1e9} SOL, underwriter ${att.underwriter} (${att.mode})`);
+  console.log(`\n[e2e] chain ok. admin ${admin.address} ${Number(bal) / 1e9} SOL, underwriter ${att.underwriter} (${att.mode})`);
 }

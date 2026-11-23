@@ -10,6 +10,8 @@ import {
   depositNeededFor,
   deriveAta,
   deriveDedupe,
+  deriveIdentity,
+  hasIdentity,
   deriveLine,
   drawIx,
   feeFor,
@@ -130,9 +132,11 @@ export function Borrow() {
     postAct.run(async () => {
       if (!owner || !addrs || !signed || !uwKey) throw new Error('Missing wallet, limit or underwriter key.');
       const record = recordBytes(signed);
-      const dedupe = await deriveDedupe(addrs.program, decodeRecord(record).dedupe);
+      const { dedupe: dedupeHash, idHash } = decodeRecord(record);
+      const dedupe = await deriveDedupe(addrs.program, dedupeHash);
+      const identity = hasIdentity(idHash) ? await deriveIdentity(addrs.program, idHash) : undefined;
       const lineAddr = await deriveLine(addrs.program, owner);
-      const ixs = postLimitIxs(addrs, { payer: owner, borrower: owner, line: lineAddr, dedupe, record }, addressBytes(uwKey), signatureBytes(signed));
+      const ixs = postLimitIxs(addrs, { payer: owner, borrower: owner, line: lineAddr, dedupe, record, identity }, addressBytes(uwKey), signatureBytes(signed));
       const { signature } = await sendTransaction(owner, ixs, signTransaction);
       return { signature, note: 'Your limit is now on Solana.' };
     });

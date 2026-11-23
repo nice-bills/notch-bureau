@@ -3,13 +3,13 @@ import fs from 'node:fs';
 import bs58 from 'bs58';
 import { Underwriter } from './underwriter.js';
 import { llmConfigFromEnv } from './llm-extract.js';
-import { getCreditHistory } from './chain-history.js';
+import { getCreditHistory, getIdentityOwner } from './chain-history.js';
 
 // Key persistence for the prototype. Inside TDX this key is generated in the enclave and never written out.
 const KEY_FILE = process.env.NOTCH_KEY_FILE || '.underwriter-key.json';
 let secretKey;
 if (fs.existsSync(KEY_FILE)) secretKey = Uint8Array.from(JSON.parse(fs.readFileSync(KEY_FILE, 'utf8')));
-const u = new Underwriter({ secretKey, historyProvider: getCreditHistory, llm: llmConfigFromEnv() });
+const u = new Underwriter({ secretKey, historyProvider: getCreditHistory, identityProvider: getIdentityOwner, llm: llmConfigFromEnv() });
 if (!secretKey) fs.writeFileSync(KEY_FILE, JSON.stringify(Array.from(u.keys.secretKey)), { mode: 0o600 });
 
 const MAX = 5 * 1024 * 1024;

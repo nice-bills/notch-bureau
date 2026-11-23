@@ -37,7 +37,7 @@ import {
   type PoolStats,
   type WithdrawRequest,
 } from '../src/notch.ts';
-import { ADMIN_KEYPAIR, DEVNET_GENESIS, PROGRAM_ID, RPC_URL, USDC_MINT } from './env.ts';
+import { ADMIN_KEYPAIR, DEVNET_GENESIS, IS_LOCAL, MAINNET_GENESIS, PROGRAM_ID, RPC_URL, USDC_MINT } from './env.ts';
 
 export const rpc = createSolanaRpc(RPC_URL);
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -76,7 +76,8 @@ export async function chainContext() {
   if (!PROGRAM_ID || !USDC_MINT) throw new Error('VITE_PROGRAM_ID / VITE_USDC_MINT missing (app/.env.local)');
   if (/mainnet/i.test(RPC_URL)) throw new Error('refusing to run against a mainnet RPC URL. Devnet only.');
   const genesis = await call(rpc.getGenesisHash());
-  if (genesis !== DEVNET_GENESIS) throw new Error(`this RPC is not devnet (genesis ${genesis}). Refusing to run.`);
+  // Devnet, or a local test validator on localhost (anything but mainnet's genesis). Nothing else.
+  if (IS_LOCAL ? genesis === MAINNET_GENESIS : genesis !== DEVNET_GENESIS) throw new Error(`this RPC is not ${IS_LOCAL ? 'a local test validator' : 'devnet'} (genesis ${genesis}). Refusing to run.`);
   const admin = await createKeyPairSignerFromBytes(Uint8Array.from(JSON.parse(fs.readFileSync(ADMIN_KEYPAIR, 'utf8'))));
   const program = address(PROGRAM_ID);
   const mint = address(USDC_MINT);
