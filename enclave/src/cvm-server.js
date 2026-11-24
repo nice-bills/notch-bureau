@@ -11,6 +11,7 @@ import { reportDataFor } from './attest.js';
 import { Inbox, handleInbox } from './inbox.js';
 import { createStoreFromEnv } from './store.js';
 import { createAuthFromEnv } from './supabase-auth.js';
+import { PepperError, cvmPepper } from './pepper.js';
 
 // The underwriter as it runs inside a Phala Cloud confidential VM (Intel TDX, dstack).
 //
@@ -81,11 +82,22 @@ async function teeEvidence(reportData) {
 }
 
 // ---- the underwriter, with a key born inside the TD ----
+// The phone-number pepper is derived INSIDE the TD from the app's dstack key (stable across restarts and redeploys, never
+// exported, never in an env var). Without it the server does not start (only NOTCH_INSECURE_NO_PEPPER=1, local tests).
+let idPepper;
+try {
+  idPepper = await cvmPepper(process.env, () => [dstack.v0, dstack.v1]);
+} catch (e) {
+  if (!(e instanceof PepperError)) throw e;
+  console.error(`notch: ${e.message}`);
+  process.exit(1);
+}
 const keys = nacl.sign.keyPair();
 const fixtures = DEMO ? await import('../test/fixtures/emails.js') : null;
 const llm = llmConfigFromEnv(process.env);
 const u = new Underwriter({
   secretKey: keys.secretKey,
+  idPepper,
   llm,
   historyProvider: getCreditHistory,
   identityProvider: getIdentityOwner,
@@ -105,6 +117,8 @@ const modeInfo = () => ({
     ? 'DEMO_FIXTURES=1: trusts a synthetic DKIM key and serves fake sample emails. NOT production. Real provider mail cannot pass here.'
     : 'production mode: DKIM is checked against real DNS',
   extraction: llm ? { mode: 'llm', model: llm.model } : { mode: 'rules' },
+  // The public identity hash (PDA ["identity", id_hash]) is peppered with a secret that exists only inside the TD.
+  id_pepper: idPepper ? 'derived inside the TEE (dstack key derivation); never leaves it' : 'NONE (NOTCH_INSECURE_NO_PEPPER=1, test only)',
   // Honest disclosure: the AI reader is a normal hosted endpoint, outside this TEE, unless an operator points it at one.
   llm: {
     endpoint_host: llmHost,

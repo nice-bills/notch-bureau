@@ -75,4 +75,4 @@ and redeploy. That flag only *declares* it; a verifier must still check the LLM 
   caught by pinning). Sealed env values (LLM URL/key) are not in the compose hash, so an operator can change them.
 - **Not checked by the verifier:** MRTD/RTMR0-2 vs the published dstack OS image, and the Phala KMS release policy.
   Phala, Intel and the physical host remain trust roots (TEE.fail-style physical attacks are out of scope).
-- **State:** dedupe/identity sets are in memory (the chain enforces them too); `NOTCH_ID_PEPPER` is empty; container logs are public.
+- **State:** dedupe/identity sets are in memory (the chain enforces them too); the identity pepper (secret in the phone-number hash) is derived INSIDE the TEE by dstack key derivation (`enclave/src/pepper.js`), never an env value, and the server refuses to start without it. The compose build refuses to carry a pepper. Not yet run on a live CVM; container logs are public.

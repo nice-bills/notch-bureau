@@ -19,7 +19,7 @@ Every column is documented in the migration. In short:
 
 - `inbox_codes(code, wallet, state, created_at, expires_at)`: which statement address belongs to which wallet. The wallet is a public key. The code is the local part of an address the wallet was just shown; one statement per address, it expires, and the underwriter also demands a DKIM-signed MTN mail that names it.
 - `inbox_jobs(code, wallet, status, reason_code, attempts, ...)`: `received → checking → limit_posted | refused`. `reason_code` is one of ten fixed words (`dkim_failed`, `wrong_inbox`, `no_income`, ...), never a sentence, so it cannot carry an amount or a number.
-- `posted_records(record_sha256, code, wallet, tx_signature, cluster, ...)`: a hash of the 128-byte signed record (shows that it exists, reveals no field), and the devnet transaction that posted it. The underwriter fills `tx_signature` only after it checked on chain that the transaction succeeded, calls the Notch program, and carries a record it issued (`POST /posted {"signature"}`; `cluster` can only be `devnet` or `localnet`).
+- `posted_records(record_sha256, code, wallet, tx_signature, cluster, ...)`: a hash of the whole signed record, 128 bytes (v2) or 160 bytes (v3, device bound) (shows that it exists, reveals no field), and the devnet transaction that posted it. The underwriter fills `tx_signature` only after it checked on chain that the transaction succeeded, calls the Notch program, and carries a record it issued (`POST /posted {"signature"}`; `cluster` can only be `devnet` or `localnet`). The check reads the Ed25519 verify instruction by its own offsets and accepts both record shapes, hashing all of the signed bytes, so a v3 (Seeker) transaction links just like a v2 one. Checked against real devnet transactions in `app/scripts/e2e-devnet.mjs` steps 12 and 13.
 - `keeper_runs(...)`: counts and devnet signatures of the keeper's work. Public chain data, readable by anyone.
 - Never stored: statements, emails, PDFs, phone numbers, names, income, the limit, the poll token.
 
@@ -79,8 +79,24 @@ const token = data.session.access_token;
 const res = await fetch(`${UNDERWRITER}/inbox/new`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ wallet }) });
 supabase.channel('status').on('postgres_changes',
   { event: '*', schema: 'public', table: 'inbox_jobs', filter: `wallet=eq.${wallet}` },
-  ({ new: row }) => show(row.status)).subscribe();   // received -> checking -> limit_posted
+  ({ new: row }) => show(row.status))
+  .subscribe(async (state) => {
+    // received -> checking -> limit_posted. Do NOT rely on catching every event: a cold channel can miss the first ones
+    // (seen live, one run in three). The moment the channel says SUBSCRIBED, read the current row(s) and show those.
+    if (state !== 'SUBSCRIBED') return;
+    const { data } = await supabase.from('inbox_jobs').select('*').eq('wallet', wallet).order('updated_at');
+    for (const row of data || []) show(row.status);
+  });
 ```
+
+**The phone must never depend on catching every Realtime event.** Subscribe first, then read the current row once the channel reports
+`SUBSCRIBED`: whatever happened before the subscription was live is in that read, whatever happens after arrives as an event, and nothing
+can fall between the two. The screen shows the newest of them (compare `updated_at`; an older row never replaces a newer one).
+`enclave/scripts/supabase-watch.mjs` is the reference (`watchJobs`); `enclave/test/supabase-watch.test.js` replays the lost-event case.
+
+`/inbox/new` also takes the optional Seeker proof (`"device": {nonce, signature, signedMessage}`, the same Sign-in-with-Solana proof
+`/underwrite` takes; get a challenge from `POST /device/nonce`). It is bound to that inbox address and used when the statement arrives.
+Non-Seekers simply leave it out.
 
 From a terminal: `node enclave/scripts/supabase-watch.mjs [--keypair id.json] [--until-done]`. Without Supabase, `/inbox/new`
 still works with the wallet signature (`{wallet, ts, signature}` over `notch-inbox-v1|<wallet>|<ts>`).
@@ -108,7 +124,7 @@ Run for real, offline:
 - The cron → Edge Function chain (`private.run_keeper`), `supabase functions deploy`, and the function's behaviour on Supabase's runtime (the Deno boot above was local).
 - Web3 auth details: the shape of the Solana identity in `auth.identities` / `/auth/v1/user` (the code accepts `identity_data.address`, `identity_data.custom_claims.address`, or `provider_id = web3:solana:<address>`), and which sign-in domains the project accepts.
 - Realtime delivering `postgres_changes` through the RLS policy to a signed-in wallet.
-- `POST /posted` against a real devnet transaction (tested with a fake RPC only). The devnet program is being upgraded, so the record's place in the transaction may change; the check looks for the record tag in the Ed25519 instruction.
+- `POST /posted` is now checked against real devnet transactions (v2 and v3) in the devnet e2e (steps 12, 13). The check reads the record from the Ed25519 instruction's own offsets.
 - The Phala compose does not pass the Supabase variables yet.
 
 `enclave/scripts/e2e-supabase.mjs` covers the first four items in one run once `enclave/.env.supabase` exists.
@@ -121,4 +137,4 @@ Project `notch-bureau` (ref `rtdjnqbgpqygjkjvrcsp`, London, free tier) is live:
 - The keeper function is deployed with `supabase/deploy-keeper.sh`. The plain `functions deploy` hits a server bundler timeout on `npm:@solana/kit`. Its secrets are set, and the Vault entries exist.
 - The `pg_cron` → `pg_net` → function chain was called by hand: HTTP 200, 46 lines, 0 overdue. The keeper fee payer is a throwaway devnet key holding 0.1 SOL, stored outside the repo.
 - `node enclave/scripts/e2e-supabase.mjs --require` passes 19 of 19, and the keeper step passes with `KEEPER_SHARED_SECRET` set.
-- One run out of three missed the first two Realtime events on a cold channel. The phone must read its current row right after subscribing, so it never depends on catching every event.
+- One run out of three missed the first two Realtime events on a cold channel. The phone now reads its current row right after `SUBSCRIBED` (see "The phone"), so it never depends on catching every event.

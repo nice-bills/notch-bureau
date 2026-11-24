@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,7 +31,8 @@ export default defineConfig({
     {
       command: 'node scripts/demo-enclave.mjs',
       cwd: app,
-      env: { NOTCH_KEY_FILE: path.resolve(app, '../.underwriter-key.json') },
+      // The demo enclave refuses to start without a secret pepper (the phone-number hash on chain would be brute-forceable).
+      env: { NOTCH_KEY_FILE: path.resolve(app, '../.underwriter-key.json'), NOTCH_ID_PEPPER: process.env.NOTCH_ID_PEPPER || crypto.randomBytes(32).toString('hex') },
       url: 'http://localhost:8787/attestation',
       reuseExistingServer: true,
       timeout: 60_000,

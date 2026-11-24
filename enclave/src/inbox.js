@@ -21,7 +21,14 @@
 //         (supabase.auth.signInWithWeb3); the token's wallet, looked up at Supabase Auth, must be the requested wallet.
 //     The only way to skip this is the constructor option `insecureAllowUnsignedForTests` (tests only, never set by a server);
 //   * a code is single use: it is spent when a statement is ACCEPTED. Refusals do not spend it, but five of them lock it;
-//   * one phone number still backs one wallet (identity link), whatever the route.
+//   * one MoMo number still backs one wallet (identity link), whatever the route;
+//   * Seeker binding is OPTIONAL, like on /underwrite: /inbox/new may carry the same Sign-in-with-Solana device proof
+//     ({"device": {nonce, signature, signedMessage}} in the body, or the x-notch-device header). It is checked right
+//     then (the nonce is single use and lives 5 minutes, the address lives 14 days) and the code remembers "this wallet
+//     proved it holds its key for a device check". When the statement arrives the underwriter reads the wallet's
+//     Seeker Genesis Token (mainnet, read only) and, if there is one, the record is a v3 record with the device hash
+//     (and the Seeker limit uplift), exactly as on /underwrite. No proof, or a proof without a token: an ordinary
+//     record, nothing lost. A Seeker who skips the proof simply gets no phone binding.
 // The codes themselves stay in memory only: after a restart open codes are gone and the borrower asks for a new address.
 // A PUBLIC status row per statement (received -> checking -> limit_posted | refused) goes to the `store` (memory by
 // default, Supabase when configured) so a phone can watch it live. See supabase/README.md.
@@ -32,6 +39,8 @@ import { MemoryStore } from './store.js';
 import { JobStatus } from './status.js';
 import { verifyPostedTx } from './chain-posted.js';
 import { makeRpc } from './chain-payout.js';
+import { DeviceProofError } from './siws.js';
+import { deviceProofFrom } from './device-http.js';
 
 const DEFAULT_PROGRAM_ID = '4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz'; // same default as chain-history.js
 
@@ -87,7 +96,9 @@ export class Inbox {
 
   // -> { status, body }
   // `authedWallet`: the wallet a verified Supabase sign-in belongs to (handleInbox looks it up), or null.
-  issue({ wallet, ts, signature, authedWallet = null } = {}) {
+  // `device` (optional): the SIWS device proof; `verifyDevice(wallet, proof)` checks it (Underwriter.verifyDevice) and throws
+  // a DeviceProofError that is safe to show.
+  issue({ wallet, ts, signature, authedWallet = null, device, verifyDevice } = {}) {
     try {
       if (bs58.decode(String(wallet || '')).length !== 32) throw new Error('length');
     } catch {
@@ -104,6 +115,17 @@ export class Inbox {
       } catch { /* bad signature encoding */ }
       if (!good) return { status: 401, body: { ok: false, reason: 'the wallet signature is missing, stale or wrong' } };
     }
+    let deviceProven = false;
+    if (device !== undefined && device !== null) {
+      try {
+        if (!verifyDevice) throw new DeviceProofError('device proof: this underwriter cannot check it');
+        verifyDevice(wallet, device); // consumes the nonce; the signature must be THIS wallet's
+        deviceProven = true;
+      } catch (e) {
+        if (e instanceof DeviceProofError) return { status: 401, body: { ok: false, reason: e.message } };
+        throw e;
+      }
+    }
     this.#purge();
     if (this.codes.size >= this.maxOpen) return { status: 503, body: { ok: false, reason: 'too many open inbox addresses, try again later' } };
     const mine = [...this.codes].filter(([, e]) => e.wallet === wallet && e.state === 'open').sort((a, b) => a[1].created - b[1].created);
@@ -112,7 +134,7 @@ export class Inbox {
     while (this.codes.has(code)) code = newCode();
     const token = crypto.randomBytes(16).toString('hex');
     const created = this.now();
-    this.codes.set(code, { wallet, tokenHash: sha(token).toString('hex'), created, expires: created + this.ttlMs, state: 'open', failures: 0, busy: false, result: null });
+    this.codes.set(code, { wallet, tokenHash: sha(token).toString('hex'), created, expires: created + this.ttlMs, state: 'open', failures: 0, busy: false, result: null, deviceProven });
     this.status.issued({ code, wallet, expiresAt: created + this.ttlMs }); // public row: address -> wallet; no token, no secret
     return {
       status: 200,
@@ -122,6 +144,7 @@ export class Inbox {
         pollToken: token, // keep it: it is the only way to read the result
         expiresAt: new Date(created + this.ttlMs).toISOString(),
         domainConfigured: this.domainConfigured,
+        ...(device !== undefined && device !== null ? { deviceProof: 'accepted' } : {}),
         note: 'Ask MTN MoMo to email your statement to this address. It works once.',
       },
     };
@@ -145,7 +168,7 @@ export class Inbox {
       await this.status.checking(code);
       let r;
       try {
-        r = await underwriter.submit(eml, entry.wallet, { recipient: `${code}@${this.domain}` });
+        r = await underwriter.submit(eml, entry.wallet, { recipient: `${code}@${this.domain}`, deviceProven: entry.deviceProven });
       } catch (e) {
         await this.status.refused(code, 'internal error');
         throw e;
@@ -155,6 +178,11 @@ export class Inbox {
         entry.result = r;
         await this.status.limitPosted(code, r.message); // only the SHA-256 of the signed record goes out
         return { status: 200, body: { ok: true } }; // the limit is for the wallet, not for the mail path
+      }
+      if (r.retry) { // a Seeker-token lookup outage is nobody's fault: not a failure, the address stays usable
+        entry.result = null;
+        await this.status.refused(code, r.reason);
+        return { status: 503, body: { ok: false, retry: true, reason: r.reason } };
       }
       entry.result = { ok: false, reason: r.reason };
       if (++entry.failures >= this.maxFailures) entry.state = 'locked';
@@ -212,10 +240,13 @@ async function readBody(req, max) {
 // Returns true when the request was an inbox route (and has been answered).
 export async function handleInbox(inbox, underwriter, req, url, send) {
   if (req.method === 'POST' && url.pathname === '/inbox/new') {
-    const body = await readBody(req, 4096);
+    const body = await readBody(req, 8192);
     let json;
     try { json = JSON.parse((body || Buffer.alloc(0)).toString('utf8')); } catch { json = null; }
     if (!json || typeof json !== 'object') { send(400, { ok: false, reason: 'send JSON {"wallet": "<address>"}' }); return true; }
+    let device; // optional Seeker proof: in the body, or in the same x-notch-device header /underwrite takes
+    try { device = json.device ?? deviceProofFrom(req); } catch (e) { send(400, { ok: false, reason: e.message }); return true; }
+    if (device !== undefined && (typeof device !== 'object' || device === null || Array.isArray(device))) { send(400, { ok: false, reason: 'device proof: send {"nonce","signature","signedMessage"}' }); return true; }
     let authedWallet = null;
     const bearer = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization || ''))?.[1];
     if (bearer) {
@@ -223,7 +254,7 @@ export async function handleInbox(inbox, underwriter, req, url, send) {
       authedWallet = await inbox.auth.walletFor(bearer);
       if (!authedWallet) { send(401, { ok: false, reason: 'the Supabase sign-in is invalid, expired, or not a Solana wallet' }); return true; }
     }
-    const r = inbox.issue({ wallet: json.wallet, ts: json.ts, signature: json.signature, authedWallet });
+    const r = inbox.issue({ wallet: json.wallet, ts: json.ts, signature: json.signature, authedWallet, device, verifyDevice: (w, p) => underwriter.verifyDevice(w, p) });
     send(r.status, r.body);
     return true;
   }

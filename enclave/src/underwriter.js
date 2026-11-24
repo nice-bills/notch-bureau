@@ -68,6 +68,13 @@ export class Underwriter {
     return this.deviceNonces.issue();
   }
 
+  // Checks a device proof NOW and spends its challenge (the statement inbox does this when the address is issued, because
+  // the statement arrives days later). Throws DeviceProofError. It proves key ownership only; the Seeker token is read
+  // when the statement arrives.
+  verifyDevice(wallet, proof) {
+    verifyDeviceProof(this.deviceNonces, wallet, proof);
+  }
+
   get publicKey() {
     return bs58.encode(this.keys.publicKey);
   }
@@ -79,7 +86,9 @@ export class Underwriter {
   // deviceChallenge(). If it verifies AND the wallet holds a Seeker Genesis Token on mainnet, the record carries
   // sha256("notch-sgt"|mint) and the limit gets the Seeker uplift. A wallet with a valid proof but no SGT is simply not a
   // Seeker (limit as before). A bad proof is refused; an RPC outage is reported as retry-later, never as "not a Seeker".
-  async submit(eml, wallet, { recipient, device } = {}) {
+  // `deviceProven` (statement inbox only, set by the Inbox from its own state): the proof was already verified when the
+  // address was issued, so only the token read is left.
+  async submit(eml, wallet, { recipient, device, deviceProven = false } = {}) {
     bs58.decode(wallet); // throws on a bad address
     const v = await verifyEmail(eml, { trusted: this.trusted, resolver: this.resolver });
     if (!v.ok) return { ok: false, reason: v.reason };
@@ -119,9 +128,9 @@ export class Underwriter {
 
     // One Seeker phone backs one credit line, ever. Checked here AND by the program (DeviceLink).
     let seeker = null;
-    if (device) {
+    if (device || deviceProven) {
       try {
-        seeker = await this.#device(wallet, device);
+        seeker = await this.#device(wallet, device, deviceProven);
       } catch (e) {
         if (e instanceof DeviceProofError || e instanceof Refusal) return { ok: false, reason: e.message };
         if (e instanceof SgtUnavailable) return { ok: false, retry: true, reason: `${e.message}. This is not a "no Seeker" answer: try again in a moment` };
@@ -159,14 +168,14 @@ export class Underwriter {
       limitUsdc,
       expiry,
       nonce: this.nonce.toString(),
-      ...(device ? { seeker: !!seeker } : {}), // only said when a device proof was sent; the mint itself never leaves
+      ...(device || deviceProven ? { seeker: !!seeker } : {}), // only said when a device proof was sent; the mint itself never leaves
       ...signed,
     };
   }
 
   // The two halves of the device check. -> { hash, hex } of the phone to bind, or null (valid proof, no Seeker token).
-  async #device(wallet, proof) {
-    verifyDeviceProof(this.deviceNonces, wallet, proof); // half 1: the wallet signed our challenge just now
+  async #device(wallet, proof, proven = false) {
+    if (!proven) verifyDeviceProof(this.deviceNonces, wallet, proof); // half 1: the wallet signed our challenge just now
     const read = this.sgtReader || (this.sgtReader = createSgtReader()); // half 2: it holds an SGT (mainnet, read only)
     const mints = [...new Set(await read(wallet))].sort();
     if (!mints.length) return null;

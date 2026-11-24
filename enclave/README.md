@@ -18,7 +18,8 @@ phone number never leave the process. Run: `pnpm start`. Test: `pnpm test` (no n
      RPC). A transfer in which the wallet also sent USDC (self-transfer) does not count; one transfer cannot
      back two emails.
 3. **Identity** (statements only): the account phone number is normalised (E.164 digits), hashed as
-   `sha256("notch-msisdn"|number)` and written into the record as `id_hash`. One number may back **one** wallet:
+   `sha256("notch-msisdn"|pepper|number)` with a **secret pepper** (see "Privacy caveat on `id_hash`") and written into the record as
+   `id_hash`. One number may back **one** wallet, for everyone, Seeker or not:
    the enclave refuses a second wallet (in memory, and via the chain: `getIdentityOwner`), and the program
    refuses it too (`IdentityLink` PDA `["identity", id_hash]` created in `post_limit`, error `IdentityBound`).
    Sources with no bindable identity (Earn, Wise, ...) carry an all-zero `id_hash` and skip the link.
@@ -26,7 +27,10 @@ phone number never leave the process. Run: `pnpm start`. Test: `pnpm test` (no n
    `device_hash` to the record (`NOTCHv3`, 160 bytes) and the Seeker uplift to the limit.
 5. **Limit** (`src/underwrite.js`), then Ed25519-sign the record (`src/record.js`, `NOTCHv2`, or `NOTCHv3` with a device).
 
-### One phone = one borrower (Seeker Genesis Token): `src/siws.js`, `src/sgt.js`, `src/device-http.js`
+### One Seeker phone = one credit line (Seeker Genesis Token): `src/siws.js`, `src/sgt.js`, `src/device-http.js`
+**Optional.** The rule "one phone backs one line" applies to **Seeker-bound lines only** (lines whose record carries a `device_hash`).
+Non-Seekers work exactly as before and are not bound to any phone. The MoMo-number rule (one number = one wallet) applies to **everyone**.
+
 A MoMo number already backs one wallet; a fraudster with five SIM cards could still open five lines. A Seeker phone carries a
 **Seeker Genesis Token** (SGT, a Token-2022 NFT minted once per phone, on **mainnet**). Verification has two halves and both are required
 (doing only the second lets anyone submit a Seeker owner's public address):
@@ -42,7 +46,12 @@ No proof, or a valid proof with no SGT, is exactly the old behaviour (a plain 12
 One phone backs one wallet: the enclave refuses a phone another wallet uses (in memory and via the chain: `getDeviceOwner`), and the
 program refuses it too (`DeviceLink` PDA `["device", device_hash]`, error `DeviceBound`). A wallet holding several phones' tokens binds the
 first one nobody else uses. Tests: `test/device.test.js` (SGT reader stubbed), `enclave/scripts/sgt-real-read.mjs` (REAL mainnet read).
-**Not wired yet:** the statement inbox path (`/inbox/new` -> `/inbound`) does not carry a device proof; only `POST /underwrite` does.
+**Statement inbox path:** `POST /inbox/new` takes the same proof (`"device": {nonce, signature, signedMessage}` in the JSON body, or the
+`x-notch-device` header). It is checked right then (the challenge is single use and lives 5 minutes; the address lives 14 days), a bad proof
+is refused (401, no address issued), and the address remembers that it was proven. When the statement arrives the underwriter reads the
+wallet's SGT (mainnet, read only): with a token the record is `NOTCHv3` with the device hash and the 1.5x limit; without one, an ordinary
+v2 record and `seeker: false`. A Seeker who sends no proof gets no phone binding. An outage of the token lookup answers `503 {retry: true}`
+and is not counted as a refusal (the address is not locked or spent). Tests: `test/inbox-device.test.js`, devnet e2e step 13.
 
 ### Statement parsing (security model)
 Layout is the REAL MTN MoMo statement (made with pdfmake; read from a real file on 2026-11-23): header block
@@ -114,7 +123,7 @@ the other 13,346 GHS fell in all 3 months, counted 5,628 GHS (50%, evenness cap)
 With every move into own savings also treated as cycling the limit would stay 11.62 (what-if printed by the script).
 
 ### Statement inbox ("MTN sends the statement straight to Notch")
-`src/inbox.js`, `deploy/cloudflare/`. A wallet asks `POST /inbox/new {"wallet", ["ts","signature"]}` and gets
+`src/inbox.js`, `deploy/cloudflare/`. A wallet asks `POST /inbox/new {"wallet", ["ts","signature"], ["device"]}` (the optional Seeker proof is described above) and gets
 `{address: "<code>@<NOTCH_INBOX_DOMAIN>", pollToken}`; the code is a random 50-bit id bound to that wallet inside the
 enclave (max 3 open per wallet, 14-day life, single use). The borrower has MTN mail the statement there. A Cloudflare
 Email Worker forwards the **raw** message to `POST /inbound` (headers `x-notch-inbound-secret`, `x-notch-rcpt`). The
@@ -131,10 +140,18 @@ with `GET /record/<wallet>` + header `x-notch-token` (`waiting | ready | refused
   forgets open addresses); no domain is owned yet (`inbox.notch.invalid` placeholder). Rehearsal incl. devnet:
   `node enclave/scripts/e2e-inbox.mjs`.
 
-### Privacy caveat on `id_hash`
-There are only about 10^9 phone numbers, so a plain `sha256("notch-msisdn"|number)` on chain can be reversed by
-trying every number. Set `NOTCH_ID_PEPPER` (a long random secret, never change it afterwards) and the hash becomes
-`sha256("notch-msisdn"|pepper|number)`. Without it the key is exactly the plain form.
+### The secret pepper in `id_hash` (required)
+There are only about 10^9 phone numbers, so a plain `sha256("notch-msisdn"|number)` on chain (the public PDA `["identity", id_hash]`) can be
+matched by hashing every number. The hash is therefore `sha256("notch-msisdn"|pepper|number)` with a secret pepper, and **a real server
+refuses to start without one** (`src/pepper.js`; `src/server.js`, `src/cvm-server.js` and `app/scripts/demo-enclave.mjs`):
+- Local / your own host: `NOTCH_ID_PEPPER` = at least 32 random characters (`openssl rand -hex 32`). Keep it secret. **Never change it**:
+  a new pepper gives every number a new hash, so a number could back a second wallet and old lines would no longer be found.
+- Phala CVM: the pepper is **derived inside the TEE** with dstack key derivation (path `notch/id-pepper/v1`, hashed again with a domain
+  separator): stable across restarts and redeploys of the same app, never in an env var, never visible to the operator. An operator-supplied
+  `NOTCH_ID_PEPPER` is ignored there on purpose, and `deploy/phala/build-compose.mjs` refuses to put the pepper (or the switch below) into the
+  compose file. **Not verified on a live CVM yet** (nothing was deployed): the dstack `getKey` call is tested with a stub client only.
+- Tests and demos only: `NOTCH_INSECURE_NO_PEPPER=1` starts without a pepper and prints a loud warning every time. Never set it for real borrowers.
+Changing from no pepper to a pepper changes every `id_hash`: devnet lines made earlier are simply not matched any more (fine for test data).
 
 ### Not solved yet
 - **Statement ownership**: a statement can be mailed to any address, and anyone holding someone else's statement
@@ -151,7 +168,8 @@ trying every number. Set `NOTCH_ID_PEPPER` (a long random secret, never change i
 | `NOTCH_INBOUND_SECRET` | shared secret of the Cloudflare worker; `/inbound` is disabled without it |
 | `NOTCH_STORE` | `memory` (default) or `supabase`: where public statement status goes |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` | the live project (service key writes status; anon key checks "Sign in with Solana" tokens). Secrets: env only |
-| `NOTCH_ID_PEPPER` | secret mixed into the identity hash (see above) |
+| `NOTCH_ID_PEPPER` | **required**: secret (>= 32 chars) mixed into the identity hash (see above); derived inside the TEE on Phala |
+| `NOTCH_INSECURE_NO_PEPPER` | `1` = start without a pepper, tests/demos only, loud warning |
 | `SOLANA_RPC_URL`, `NOTCH_PROGRAM_ID` | chain reads (credit history, identity links, Earn payout proof) |
 | `NOTCH_USDC_MINT` | mint the Earn proof looks for (default mainnet USDC) |
 | `NOTCH_LLM_URL`, `NOTCH_LLM_MODEL`, `NOTCH_LLM_KEY` | AI reader (must be a confidential endpoint, see `src/llm-extract.js`) |

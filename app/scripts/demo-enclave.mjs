@@ -17,6 +17,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeUnderwriter, makeServer, fixtures, readEnv } from './enclave-lib.mjs';
 import { llmConfigFromEnv } from '../../enclave/src/llm-extract.js';
+import { pepperOrExit } from '../../enclave/src/pepper.js';
+
+// A secret pepper is required (NOTCH_ID_PEPPER, `openssl rand -hex 32`): without it the phone-number hash on chain can be
+// brute-forced. For a local rehearsal ONLY, NOTCH_INSECURE_NO_PEPPER=1 starts without one and prints a loud warning.
+// Checked first, before this script writes anything.
+const idPepper = pepperOrExit();
 
 const { signedEmail, momoStatementEmail, randomMsisdn, deelPayout, bankStatement } = fixtures;
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -32,7 +38,7 @@ for (const [file, f] of [['deel.eml', deelPayout], ['bank.eml', bankStatement]])
 
 // The AI reader is on when enclave/.env (or the shell) sets NOTCH_LLM_URL + NOTCH_LLM_MODEL; NOTCH_LLM=off forces rules only.
 const llm = process.env.NOTCH_LLM === 'off' ? null : llmConfigFromEnv({ ...readEnv(path.join(here, '..', '..', 'enclave', '.env')), ...process.env });
-const u = makeUnderwriter(process.env.NOTCH_KEY_FILE, { llm });
+const u = makeUnderwriter(process.env.NOTCH_KEY_FILE, { llm, idPepper });
 const server = makeServer(u);
 const port = Number(process.env.PORT || 8787);
 server.listen(port, () => {

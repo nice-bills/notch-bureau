@@ -13,6 +13,7 @@ import { MemoryStore, PgStore } from '../src/store.js';
 import { SupabaseAuth, walletFromUser } from '../src/supabase-auth.js';
 import { ED25519_PROGRAM, GENESIS } from '../src/chain-posted.js';
 import { resolver, momoStatementEmail, randomMsisdn } from './fixtures/emails.js';
+import { ed25519Data } from './fixtures/ed25519.js';
 import { newDb } from '../../supabase/tests/harness.js';
 
 const SECRET = 'test-inbound-secret';
@@ -169,7 +170,7 @@ test('SupabaseAuth caches a good token briefly and never trusts an unreachable S
 // ---- the devnet transaction -----------------------------------------------------------------------------------------
 
 function fakeChain({ record, genesis = GENESIS.devnet, program = PROGRAM, err = null }) {
-  const edData = Buffer.concat([Buffer.alloc(112), record]);
+  const edData = ed25519Data(record);
   const tx = { meta: { err }, transaction: { message: { accountKeys: ['payer', ED25519_PROGRAM, program], instructions: [{ programIdIndex: 1, data: bs58.encode(edData) }, { programIdIndex: 2, data: bs58.encode(Buffer.from('x')) }] } } };
   return async (method) => (method === 'getGenesisHash' ? genesis : method === 'getTransaction' ? tx : null);
 }

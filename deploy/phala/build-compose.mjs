@@ -10,6 +10,8 @@
 //   node deploy/phala/build-compose.mjs            # writes deploy/phala/docker-compose.yml
 //   node deploy/phala/build-compose.mjs --check    # exits 1 if the committed file differs from a fresh build
 //
+// The identity pepper (secret in the phone-number hash) is NOT in here and not an env value: the server derives it inside the
+// TEE with dstack key derivation and refuses to start without it (enclave/src/pepper.js, assertPepperSafe below).
 // Secrets are NEVER in here. The LLM key/url/model reach the CVM only as Phala encrypted environment variables
 // (listed by name under `environment:` with no value, so Phala injects them at boot).
 import fs from 'node:fs';
@@ -31,6 +33,16 @@ export const NOTCH_ENV = {
 };
 // Names only (values come from Phala's encrypted env): never put a value here.
 export const SEALED_ENV = ['NOTCH_LLM_URL', 'NOTCH_LLM_MODEL', 'NOTCH_LLM_KEY', 'NOTCH_LLM_TIMEOUT_MS', 'NOTCH_INBOX_DOMAIN', 'NOTCH_INBOUND_SECRET', 'NOTCH_INBOX_REQUIRE_WALLET_SIG'];
+
+// The phone-number pepper is derived INSIDE the TEE by cvm-server.js (dstack key derivation, enclave/src/pepper.js). It must
+// never be an environment value: an env value is visible to whoever deploys, and a missing pepper must stop the server, not
+// weaken it. So the compose file may carry neither a pepper nor the test-only switch that turns the requirement off.
+export const FORBIDDEN_ENV = ['NOTCH_ID_PEPPER', 'NOTCH_INSECURE_NO_PEPPER'];
+export function assertPepperSafe(notchEnv = NOTCH_ENV, sealedEnv = SEALED_ENV) {
+  for (const k of FORBIDDEN_ENV) {
+    if (k in notchEnv || sealedEnv.includes(k)) throw new Error(`${k} must not be in the compose file: the identity pepper is derived inside the TEE (see enclave/src/pepper.js)`);
+  }
+}
 
 /** Files that make up the bundle: bundle path -> repo path. Sorted, so the bundle is deterministic. */
 export function bundleFiles() {
@@ -63,6 +75,7 @@ const UNPACK = 'const z=require("zlib"),f=require("fs"),p=require("path");'
 export const START = `node -e '${UNPACK}' && npm ci --ignore-scripts --no-audit --no-fund && exec node enclave/src/cvm-server.js`;
 
 export function composeText() {
+  assertPepperSafe();
   const { b64 } = buildBundle();
   const q = (s) => JSON.stringify(s); // JSON strings are valid YAML double-quoted scalars; "$" is escaped for compose below
   const esc = (s) => s.replace(/\$/g, '$$$$');

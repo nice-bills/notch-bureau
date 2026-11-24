@@ -26,6 +26,7 @@ import { SupabaseStore } from '../src/store.js';
 import { SupabaseAuth } from '../src/supabase-auth.js';
 import * as fixtures from '../test/fixtures/emails.js';
 import { loadSupabaseEnv, newWallet, signInWithSolana } from './supabase-lib.mjs';
+import { watchJobs } from './supabase-watch.mjs';
 
 const env = loadSupabaseEnv();
 const need = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'].filter((k) => !env[k]);
@@ -69,15 +70,20 @@ try {
   check("A's own token -> an inbox address", inb.status === 200 && inb.ok, inb.address);
   const code = inb.address.split('@')[0];
 
-  step('3', 'Realtime: the phone sees the statement move');
+  step('3', 'Realtime: the phone sees the statement move (and does not depend on catching every event)');
+  // The phone's own code path (watchJobs): subscribe, then read the current row right after SUBSCRIBED. A cold channel can drop the
+  // first events (seen live, about one run in three), so this checks what the PHONE shows, not that every event arrived.
   const seen = [];
-  const sub = sa.supabase.channel('e2e').on('postgres_changes', { event: '*', schema: 'public', table: 'inbox_jobs', filter: `wallet=eq.${A.address}` }, ({ new: row }) => seen.push(row.status));
-  await new Promise((resolve, reject) => { sub.subscribe((s, e) => { if (s === 'SUBSCRIBED') resolve(); if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') reject(e || new Error(s)); }); });
+  const watching = watchJobs({ supabase: sa.supabase, wallet: A.address, untilDone: true, onRow: (row) => seen.push(row.status) });
+  const subscribed = new Promise((resolve) => { const t = setInterval(() => { if (sa.supabase.getChannels().some((c) => c.state === 'joined')) { clearInterval(t); resolve(); } }, 50); });
+  await Promise.race([subscribed, sleep(10_000)]);
   const eml = await fixtures.momoStatementEmail({ to: inb.address, msisdn: fixtures.randomMsisdn() });
   const r = await fetch(`${base}/inbound`, { method: 'POST', body: eml, headers: { 'x-notch-rcpt': inb.address, 'x-notch-inbound-secret': SECRET } });
   check('the statement was accepted', r.status === 200, `HTTP ${r.status}`);
-  for (let i = 0; i < 40 && !seen.includes('limit_posted'); i++) await sleep(250);
-  check('Realtime delivered received -> checking -> limit_posted in order', seen.join('>') === 'received>checking>limit_posted', seen.join(' > '));
+  await Promise.race([watching, sleep(15_000)]);
+  const rank = { received: 1, checking: 2, limit_posted: 3 };
+  const forward = seen.every((st, i) => i === 0 || rank[st] >= rank[seen[i - 1]]);
+  check('the phone ends on limit_posted and never shows a step backwards (events or the read after SUBSCRIBED)', seen.at(-1) === 'limit_posted' && forward, seen.join(' > '));
   await sa.supabase.removeAllChannels();
 
   step('4', 'row-level security on the live project');

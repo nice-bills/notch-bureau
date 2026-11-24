@@ -14,6 +14,7 @@
 //   5  stops the validator and deletes its ledger
 // Local only: mainnet is never touched.
 import { spawn, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -134,6 +135,7 @@ try {
     VITE_PROGRAM_ID: PROGRAM_ID,
     VITE_USDC_MINT: mint,
     E2E_ADMIN_KEYPAIR: adminFile,
+    NOTCH_ID_PEPPER: process.env.NOTCH_ID_PEPPER || crypto.randomBytes(32).toString('hex'), // the demo enclave refuses to start without a secret pepper
   };
   log(`running Playwright against ${RPC} (mint ${mint})`);
   const pw = spawn('pnpm', ['exec', 'playwright', 'test', '-c', 'e2e/playwright.config.ts', '--workers=1', ...extra], { cwd: app, env, stdio: 'inherit' });

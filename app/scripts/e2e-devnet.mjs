@@ -34,6 +34,11 @@ import crypto from 'node:crypto';
 //      Sign-in-with-Solana signature, gets a v3 record (device_hash) and a higher limit, the program's DeviceLink lets
 //      one phone back one wallet. The SGT reader is a STUB for the full flow; a REAL mainnet read (read only) is checked too.
 //
+//  13  Statement inbox on the real HTTP app (Inbox + underwriter, devnet program): a non-Seeker and a Seeker (optional SIWS
+//      proof at /inbox/new, used when the statement arrives) get v2 / v3 records, post_limit lands on devnet, and POST /posted
+//      verifies those REAL transactions (v2 and v3) and links them to the stored record hash; the MoMo number hash on chain
+//      is peppered (the plain hash of the number finds no identity account); the same phone / the same number are refused.
+//
 // The underwriter runs inside this process (same Underwriter class and same key file as the demo
 // enclave on :8787) because only the process that holds the synthetic DKIM key can sign fresh emails.
 // The demo enclave on :8787 is untouched; its /attestation key is compared with the one used here.
@@ -113,6 +118,11 @@ import { getDeviceOwner, getIdentityOwner } from '../../enclave/src/chain-histor
 import { deviceMessage } from '../../enclave/src/siws.js';
 import { SgtUnavailable, createSgtReader, sgtHash } from '../../enclave/src/sgt.js';
 import { Underwriter } from '../../enclave/src/underwriter.js';
+import { Inbox } from '../../enclave/src/inbox.js';
+import { createApp } from '../../enclave/src/http-app.js';
+import { MemoryStore } from '../../enclave/src/store.js';
+import { verifyPostedTx } from '../../enclave/src/chain-posted.js';
+import { recordSha256 } from '../../enclave/src/store.js';
 import { makeRpc } from '../../enclave/src/chain-payout.js';
 import { buildCheckCreditIx, decodeCreditCheck, getCredit as sdkGetCredit } from '../../sdk/src/index.js';
 
@@ -290,7 +300,11 @@ console.log(`program     ${program}\nmint        ${mint}\nadmin       ${admin.ad
 // STUB (labelled in step 12): we own no Seeker phone, so the SGT reader is a table of test wallets -> fake mints. The real
 // mainnet read is proven separately in step 12 (read only). Everything else (SIWS, signatures, record, program) is real.
 const fakeSgt = new Map();
+// The secret pepper of the phone-number hash (real servers refuse to start without one). A fresh one per run: every number in
+// this run is fresh too, so the identity PDAs of earlier runs are simply not in play.
+const E2E_PEPPER = crypto.randomBytes(32).toString('hex');
 const underwriter = makeUnderwriter(opts.enclaveKey, {
+  idPepper: E2E_PEPPER,
   identityProvider: (idHash) => getIdentityOwner(idHash, { endpoint: opts.rpc, programId: opts.program }),
   deviceProvider: (deviceHash) => getDeviceOwner(deviceHash, { endpoint: opts.rpc, programId: opts.program }),
   sgtReader: async (w) => { const v = fakeSgt.get(w); if (v instanceof Error) throw v; return v || []; },
@@ -319,6 +333,19 @@ async function underwrite(eml, wallet) {
   const r = await fetch(`${ENCLAVE}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', 'x-wallet': wallet }, body: eml });
   return { status: r.status, body: await r.json() };
 }
+// POST /posted's chain check, against a REAL devnet transaction (retries: the public RPC may not have indexed it yet).
+const postedRpc = makeRpc({ endpoint: opts.rpc });
+async function verifyReal(signature) {
+  let last;
+  for (let i = 0; i < 8; i++) {
+    try { return await verifyPostedTx(postedRpc, { signature, programId: opts.program }); } catch (e) {
+      last = e;
+      if (!/not found/.test(e.message)) throw e;
+      await sleep(1500 * (i + 1));
+    }
+  }
+  throw last;
+}
 // Real provider emails carry a unique transaction ID, so two payments never share a body.
 // Dedupe keys on the body hash, so each run needs its own reference or it is (correctly) a duplicate.
 const freshEmail = (f = fixtures.deelPayout) => fixtures.signedEmail({
@@ -342,6 +369,7 @@ console.log(`borrower    ${borrower.address}\nlender      ${lender.address}`);
 const bureauWallets = []; // step 10 throwaways, swept at the end
 const trancheWallets = []; // step 11 throwaways, swept at the end
 const deviceWallets = []; // step 12 throwaways (kit signers), swept at the end
+let traderPostSig = null; // step 12's direct (not inbox) post_limit, reused by step 13
 let failed = false;
 try {
   // -------------------------------------------------------------------------------------------
@@ -602,7 +630,7 @@ try {
 
     // ---- 9a. the synthetic statement covers every class; only earned income and regular peer payers count
     const msisdn = randomMsisdn();
-    const idHash = identityHash(normalizeMsisdn(msisdn));
+    const idHash = identityHash(normalizeMsisdn(msisdn), E2E_PEPPER);
     const baseRows = syntheticRows().map((r) => ({ ...r, txid: newTx() })); // fixed ids, so a later statement can repeat these rows
     const st = await underwrite(await momoStatementEmail({ msisdn, rows: baseRows }), momoUser.address);
     check('MoMo statement PDF accepted by the HTTP underwriter', st.status === 200 && st.body.ok === true, jsonSafe(st.body).slice(0, 140));
@@ -616,7 +644,8 @@ try {
     const stRec = base64ToBytes(st.body.message);
     const stSig = base64ToBytes(st.body.signature);
     const stDec = decodeRecord(stRec);
-    check('record is 128 bytes and carries id_hash = sha256("notch-msisdn"|number)', stRec.length === 128 && Buffer.from(stDec.idHash).equals(idHash));
+    check('record is 128 bytes and carries the PEPPERED id_hash of the number', stRec.length === 128 && Buffer.from(stDec.idHash).equals(idHash));
+    check('the id_hash is NOT the plain sha256("notch-msisdn"|number) anyone could compute for every number', !Buffer.from(stDec.idHash).equals(identityHash(normalizeMsisdn(msisdn))));
     check('no raw phone number in the reply or the record', !jsonSafe(st.body).includes(msisdn.slice(1)) && !Buffer.from(stRec).toString('latin1').includes(msisdn.slice(1)));
 
     // ---- 9b. on chain: identity link is created by post_limit
@@ -1051,8 +1080,18 @@ try {
     const tRec = base64ToBytes(tRes.body.message);
     const tDec = decodeRecord(tRec);
     check('non-Seeker record is still a plain 128 byte v2 record with no device', tRec.length === 128 && !Buffer.from(tDec.deviceHash).some((b) => b !== 0) && tRes.body.seeker === undefined);
-    await send('post_limit for the cash trader (MoMo identity link, no device)', admin, postLimitIxs(A, { payer: admin.address, borrower: trader.address, line: await lineOf(trader.address), dedupe: await deriveDedupe(program, tDec.dedupe), record: tRec, identity: await deriveIdentity(program, tDec.idHash) }, uwKey, base64ToBytes(tRes.body.signature)));
+    const tPost = await send('post_limit for the cash trader (MoMo identity link, no device)', admin, postLimitIxs(A, { payer: admin.address, borrower: trader.address, line: await lineOf(trader.address), dedupe: await deriveDedupe(program, tDec.dedupe), record: tRec, identity: await deriveIdentity(program, tDec.idHash) }, uwKey, base64ToBytes(tRes.body.signature)));
+    traderPostSig = tPost.sig;
     check('CreditLine limit == the cash trader\'s limit', decodeLine(await accountBytes(await lineOf(trader.address))).limit === tDec.limitMicro);
+    {
+      const v = await verifyReal(tPost.sig);
+      check('REAL devnet tx, v2 record: /posted\'s verifier hashes the whole 128 byte record (same digest the store saves) and reads the wallet',
+        v.version === 2 && v.recordSha256 === recordSha256(tRes.body.message) && v.wallet === trader.address && v.cluster === 'devnet', `${v.version} ${v.recordSha256.slice(0, 12)}`);
+      const n = normalizeMsisdn(tMsisdn);
+      check('the on-chain identity account is the PEPPERED hash; the plain hash of the number finds nothing',
+        Buffer.from(tDec.idHash).equals(identityHash(n, E2E_PEPPER)) && !Buffer.from(tDec.idHash).equals(identityHash(n))
+        && !!(await accountBytes(await deriveIdentity(program, tDec.idHash))) && (await accountBytes(await deriveIdentity(program, identityHash(n)))) === null);
+    }
 
     // ---- 12b. JOB 2: one phone = one borrower. Half 1: real SIWS; half 2: SGT reader (STUB here) ------------------
     console.log('  note  SGT reader in this step is a STUB table (no Seeker phone here); SIWS signatures, the HTTP server, the record and the program are real');
@@ -1100,11 +1139,14 @@ try {
       const r2 = await send('ATTACK post_limit with someone else\'s device account', admin, postS({ device: await deriveDevice(program, crypto.randomBytes(32)) }), { expectFail: true });
       check('wrong device account -> ConstraintSeeds (2006)', programError(r2).name === 'ConstraintSeeds' && programError(r2).code === 2006, jsonSafe(programError(r2)));
     }
-    await send('post_limit for the Seeker (v3 record: MoMo identity + phone)', admin, postS());
+    const sPost = await send('post_limit for the Seeker (v3 record: MoMo identity + phone)', admin, postS());
     {
       const link = await accountBytes(sDevice);
       check('DeviceLink exists, stores the wallet only (no mint, no hash payload)', !!link && getAddressDecoder().decode(link.subarray(8, 40)) === seeker.address && link.length === 8 + 33);
       check('CreditLine limit == the Seeker\'s limit', decodeLine(await accountBytes(sLine)).limit === sDec.limitMicro);
+      const v = await verifyReal(sPost.sig);
+      check('REAL devnet tx, v3 record: /posted\'s verifier hashes ALL 160 bytes (the digest the store saves), not the 128 byte prefix',
+        v.version === 3 && v.recordSha256 === recordSha256(sRes.body.message) && v.recordSha256 !== crypto.createHash('sha256').update(sRec.subarray(0, 128)).digest('hex') && v.wallet === seeker.address, `${v.version} ${v.recordSha256.slice(0, 12)}`);
       const chainOwner = await getDeviceOwner(sDec.deviceHash, { endpoint: opts.rpc, programId: opts.program });
       check('the enclave\'s chain reader (getDeviceOwner) sees the phone bound to the Seeker; an unused phone is free', chainOwner === seeker.address && (await getDeviceOwner(crypto.randomBytes(32), { endpoint: opts.rpc, programId: opts.program })) === null);
     }
@@ -1183,6 +1225,124 @@ try {
       } else {
         console.log(`  SKIP  REAL mainnet read: the public mainnet RPC did not answer (${err.slice(0, 100)}). Run: node enclave/scripts/sgt-real-read.mjs`);
       }
+    }
+  }
+
+  // -------------------------------------------------------------------------------------------
+  step('13', 'Statement inbox on the real HTTP app: optional Seeker proof, v2 and v3 records on devnet, POST /posted on real transactions, peppered MoMo hash');
+  {
+    const { momoStatementEmail, randomMsisdn, syntheticCashRows } = fixtures;
+    const traderRows = () => syntheticCashRows().map((r) => ({ ...r, txid: String(crypto.randomInt(1e10, 1e11)) }));
+    const newWallet = () => { const kp = nacl.sign.keyPair(); return { kp, address: getAddressDecoder().decode(kp.publicKey) }; };
+    const fakeMint = () => getAddressDecoder().decode(crypto.randomBytes(32));
+    const SECRET = crypto.randomBytes(16).toString('hex');
+    const store = new MemoryStore();
+    const inboxApp = createApp(underwriter, new Inbox({ domain: 'inbox.notch.test', secret: SECRET, store })); // strict: wallet signature required
+    await new Promise((r) => inboxApp.listen(0, '127.0.0.1', r));
+    const INBOX = `http://127.0.0.1:${inboxApp.address().port}`;
+    // /posted reads these at request time: it must look at THIS devnet and THIS program
+    process.env.SOLANA_RPC_URL = opts.rpc;
+    process.env.NOTCH_PROGRAM_ID = opts.program;
+    try {
+      const nonce = async () => { const { ok, ...issued } = await (await fetch(`${INBOX}/device/nonce`, { method: 'POST' })).json(); return issued; };
+      const proof = async (w) => {
+        const iss = await nonce();
+        const msg = deviceMessage(iss, w.address);
+        return { nonce: iss.nonce, signature: Buffer.from(nacl.sign.detached(msg, w.kp.secretKey)).toString('base64'), signedMessage: Buffer.from(msg).toString('base64') };
+      };
+      const newInbox = async (w, device) => {
+        const ts = Date.now();
+        const body = { wallet: w.address, ts, signature: Buffer.from(nacl.sign.detached(Buffer.from(`notch-inbox-v1|${w.address}|${ts}`), w.kp.secretKey)).toString('base64'), ...(device ? { device } : {}) };
+        const r = await fetch(`${INBOX}/inbox/new`, { method: 'POST', body: JSON.stringify(body) });
+        return { status: r.status, ...(await r.json()) };
+      };
+      const inbound = async (eml, rcpt) => {
+        const r = await fetch(`${INBOX}/inbound`, { method: 'POST', body: eml, headers: { 'x-notch-rcpt': rcpt, 'x-notch-inbound-secret': SECRET } });
+        return { status: r.status, body: await r.json() };
+      };
+      const getRecord = async (w, token) => (await fetch(`${INBOX}/record/${w.address}`, { headers: { 'x-notch-token': token } })).json();
+      const posted = async (signature) => { const r = await fetch(`${INBOX}/posted`, { method: 'POST', body: JSON.stringify({ signature }) }); return { status: r.status, body: await r.json() }; };
+      const postLimit = async (label, w, rec, extra = {}) => {
+        const bytes = base64ToBytes(rec.message);
+        const d = decodeRecord(bytes);
+        const res = await send(label, admin, postLimitIxs(A, {
+          payer: admin.address, borrower: w.address, line: await deriveLine(program, w.address), dedupe: await deriveDedupe(program, d.dedupe), record: bytes,
+          identity: await deriveIdentity(program, d.idHash), ...(extra.device ? { device: await deriveDevice(program, d.deviceHash) } : {}),
+        }, uwKey, base64ToBytes(rec.signature)));
+        return { ...res, bytes, dec: d };
+      };
+
+      // ---- 13a. a non-Seeker through the inbox: v2 record, same as before the change
+      const plainW = newWallet();
+      const plainNum = randomMsisdn();
+      const pIn = await newInbox(plainW);
+      check('/inbox/new without a device proof still works (Seeker binding is optional)', pIn.status === 200 && pIn.ok === true && pIn.deviceProof === undefined, pIn.address);
+      const pGot = await inbound(await momoStatementEmail({ to: pIn.address, msisdn: plainNum, rows: traderRows() }), pIn.address);
+      check('statement accepted through /inbound', pGot.status === 200, jsonSafe(pGot.body));
+      const pRec = await getRecord(plainW, pIn.pollToken);
+      check('non-Seeker inbox record: plain 128 byte v2, no `seeker` key', pRec.status === 'ready' && base64ToBytes(pRec.message).length === 128 && pRec.seeker === undefined, jsonSafe(pRec).slice(0, 120));
+      const pPost = await postLimit('post_limit for the inbox non-Seeker (v2 record)', plainW, pRec);
+      const n13 = normalizeMsisdn(plainNum);
+      check('inbox record carries the PEPPERED id_hash; the plain hash of the number has no identity account on chain',
+        Buffer.from(pPost.dec.idHash).equals(identityHash(n13, E2E_PEPPER)) && (await accountBytes(await deriveIdentity(program, identityHash(n13)))) === null && !!(await accountBytes(await deriveIdentity(program, pPost.dec.idHash))));
+      const pRep = await posted(pPost.sig);
+      check('POST /posted on the REAL devnet v2 transaction: 200 and linked to the stored record hash', pRep.status === 200 && pRep.body.ok === true && pRep.body.cluster === 'devnet', jsonSafe(pRep));
+      const stored = (h) => store.records.get(h);
+      check('the store now holds that transaction signature next to the record hash', stored(recordSha256(pRec.message))?.txSignature === pPost.sig && stored(recordSha256(pRec.message))?.cluster === 'devnet');
+      const direct = await posted(traderPostSig);
+      check('POST /posted for a real post_limit whose record this inbox never issued (direct /underwrite) is refused, nothing linked', direct.status === 404, jsonSafe(direct));
+
+      // ---- 13b. a Seeker through the inbox: v3 record, device bound, and /posted accepts the real v3 transaction
+      const seekerW = newWallet();
+      const phone = fakeMint();
+      fakeSgt.set(seekerW.address, [phone]);
+      const sIn = await newInbox(seekerW, await proof(seekerW));
+      check('/inbox/new with a valid SIWS device proof: address issued, proof accepted', sIn.status === 200 && sIn.deviceProof === 'accepted', jsonSafe(sIn).slice(0, 120));
+      const sGot = await inbound(await momoStatementEmail({ to: sIn.address, msisdn: randomMsisdn(), rows: traderRows() }), sIn.address);
+      check('statement accepted for the Seeker address', sGot.status === 200, jsonSafe(sGot.body));
+      const sRec13 = await getRecord(seekerW, sIn.pollToken);
+      const sBytes13 = base64ToBytes(sRec13.message);
+      check('Seeker inbox record: 160 byte v3 with device_hash = sha256("notch-sgt"|mint), seeker=true, x1.5 limit',
+        sRec13.status === 'ready' && sRec13.seeker === true && sBytes13.length === 160 && Buffer.from(decodeRecord(sBytes13).deviceHash).equals(sgtHash(phone))
+        && Math.abs(sRec13.limitUsdc - pRec.limitUsdc * 1.5) <= 0.02 && !jsonSafe(sRec13).includes(phone), `${pRec.limitUsdc} -> ${sRec13.limitUsdc}`);
+      const sPost13 = await postLimit('post_limit for the inbox Seeker (v3 record, DeviceLink)', seekerW, sRec13, { device: true });
+      check('DeviceLink created for the inbox Seeker', getAddressDecoder().decode((await accountBytes(await deriveDevice(program, sPost13.dec.deviceHash))).subarray(8, 40)) === seekerW.address);
+      const sRep = await posted(sPost13.sig);
+      check('POST /posted on the REAL devnet v3 transaction: 200 (all 160 bytes hashed) and linked', sRep.status === 200 && sRep.body.ok === true && stored(recordSha256(sRec13.message))?.txSignature === sPost13.sig, jsonSafe(sRep));
+
+      // ---- 13c. the rules that bind: phone, number, forged proof
+      const thief = newWallet();
+      fakeSgt.set(thief.address, [phone]);
+      const tIn = await newInbox(thief, await proof(thief));
+      const tGot = await inbound(await momoStatementEmail({ to: tIn.address, msisdn: randomMsisdn(), rows: traderRows() }), tIn.address);
+      check('a second wallet holding the SAME phone, through the inbox, is refused when its statement arrives', tGot.status === 422 && /already linked to a different wallet/.test(tGot.body.reason || '') && !jsonSafe(tGot.body).includes(phone), jsonSafe(tGot.body));
+      const sameNumber = newWallet();
+      const nIn = await newInbox(sameNumber);
+      const nGot = await inbound(await momoStatementEmail({ to: nIn.address, msisdn: plainNum, rows: traderRows() }), nIn.address);
+      check('the MoMo number rule applies to a non-Seeker too: same number, second wallet -> refused', nGot.status === 422 && /mobile-money account is already linked/.test(nGot.body.reason || ''), jsonSafe(nGot.body));
+      const victim = newWallet();
+      fakeSgt.set(victim.address, [fakeMint()]);
+      const forged = await newInbox(victim, await proof(newWallet()));
+      check('ATTACK a proof signed by someone else\'s key for a Seeker owner\'s address: /inbox/new refuses, no address issued', forged.status === 401 && !forged.address, jsonSafe(forged).slice(0, 120));
+      const noProofSeeker = newWallet();
+      fakeSgt.set(noProofSeeker.address, [fakeMint()]);
+      const npIn = await newInbox(noProofSeeker);
+      await inbound(await momoStatementEmail({ to: npIn.address, msisdn: randomMsisdn(), rows: traderRows() }), npIn.address);
+      const npRec = await getRecord(noProofSeeker, npIn.pollToken);
+      check('a Seeker who sends no proof is an ordinary borrower (v2, no binding): optional means optional', npRec.status === 'ready' && base64ToBytes(npRec.message).length === 128 && npRec.seeker === undefined);
+
+      // ---- 13d. a token-lookup outage is "try again", the address survives
+      const flaky = newWallet();
+      fakeSgt.set(flaky.address, new SgtUnavailable('mainnet RPC unreachable (simulated)'));
+      const fIn = await newInbox(flaky, await proof(flaky));
+      const fEml = await momoStatementEmail({ to: fIn.address, msisdn: randomMsisdn(), rows: traderRows() });
+      const f1 = await inbound(fEml, fIn.address);
+      check('SGT outage through the inbox: 503 retry, not "not a Seeker"', f1.status === 503 && f1.body.retry === true, jsonSafe(f1.body));
+      fakeSgt.set(flaky.address, [fakeMint()]);
+      const f2 = await inbound(fEml, fIn.address);
+      check('...and the same statement to the same address goes through once the RPC is back', f2.status === 200 && (await getRecord(flaky, fIn.pollToken)).seeker === true, jsonSafe(f2.body));
+    } finally {
+      inboxApp.close();
     }
   }
 } catch (e) {

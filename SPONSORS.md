@@ -6,7 +6,7 @@ Status: plan only. Mobile and Pollar are UI-phase work and wait for the user's g
 
 ## 1. Solana Mobile (Seeker phones for Best Mobile App)
 
-Job it does: **one phone = one borrower**.
+Job it does: **one Seeker phone = one credit line** (optional: it binds only lines that carry the device proof; the MoMo-number rule covers everyone).
 
 - The Seeker Genesis Token (SGT) is a Token-2022 NFT minted once per Seeker device (docs.solanamobile.com/solana-mobile-stack/seeker-genesis-token).
 - Today one MoMo number = one wallet. A fraudster with five SIM cards can still open five credit lines. Adding SGT closes that hole: the sealed underwriter checks Sign-in-with-Solana plus SGT ownership (mainnet read only, `@solana-mobile/skr-genesis-token`). It then writes `sgt_hash` into the signed record. The program keeps a `["device", sgt_hash]` PDA, the same pattern as `IdentityLink`, so one device backs one credit line.
