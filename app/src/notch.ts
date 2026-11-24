@@ -158,6 +158,10 @@ export const deriveDedupe = (program: Address, dedupeHash: Uint8Array) =>
 export const deriveIdentity = (program: Address, idHash: Uint8Array) =>
   pda(program, text('identity'), idHash);
 
+/** DeviceLink PDA ["device", device_hash] (bytes 128..160 of a v3 record): one Seeker phone, one credit line. */
+export const deriveDevice = (program: Address, deviceHash: Uint8Array) =>
+  pda(program, text('device'), deviceHash);
+
 /**
  * The lender's share escrow (a token account that owns itself) and pending-withdrawal record, per tranche:
  * ["escrow", share_mint, lender] and ["withdraw", share_mint, lender]. One pending request per lender per tranche.
@@ -184,13 +188,17 @@ export async function deriveAta(owner: Address, mint: Address): Promise<Address>
 }
 
 // ---------------------------------------------------------------------------
-// Signed record (128 bytes). Must match enclave/src/record.js and record.rs.
+// Signed record (128 bytes, or 160 for a Seeker phone). Must match enclave/src/record.js and record.rs.
 //   "NOTCHv2\0" | wallet[32] | limit_micro u64 | expiry i64 | dedupe[32] | nonce u64 | id_hash[32]
 // id_hash is all zeros when the income source has no bindable identity (see IdentityLink in the program).
+//   "NOTCHv3\0" | ...the same 120 bytes... | device_hash[32]   (160 bytes): sha256("notch-sgt"|mint) of the phone's Seeker
+// Genesis Token (see DeviceLink). A record without a bound phone is still a plain v2 record.
 // ---------------------------------------------------------------------------
 
 export const RECORD_LEN = 128;
+export const RECORD_LEN_V3 = 160;
 const RECORD_TAG = new Uint8Array([0x4e, 0x4f, 0x54, 0x43, 0x48, 0x76, 0x32, 0x00]);
+const RECORD_TAG_V3 = new Uint8Array([0x4e, 0x4f, 0x54, 0x43, 0x48, 0x76, 0x33, 0x00]);
 const NO_IDENTITY = new Uint8Array(32);
 
 export interface RecordFields {
@@ -201,27 +209,33 @@ export interface RecordFields {
   nonce: bigint | number;
   /** sha256("notch-msisdn"|number) of the backing mobile-money account; omit (zeros) for none. */
   idHash?: Uint8Array;
+  /** sha256("notch-sgt"|mint) of the borrower's Seeker phone; omit (or zeros) for a plain v2 record. */
+  deviceHash?: Uint8Array;
 }
 
 export function encodeRecord(f: RecordFields): Uint8Array {
   if (f.dedupe.length !== 32) throw new Error('dedupe hash must be 32 bytes');
   const idHash = f.idHash ?? NO_IDENTITY;
   if (idHash.length !== 32) throw new Error('id_hash must be 32 bytes');
+  if (f.deviceHash && f.deviceHash.length !== 32) throw new Error('device_hash must be 32 bytes');
+  const withDevice = !!f.deviceHash && f.deviceHash.some((b) => b !== 0);
   return concat(
-    RECORD_TAG,
+    withDevice ? RECORD_TAG_V3 : RECORD_TAG,
     new Uint8Array(addressEncoder.encode(f.wallet)),
     u64Le(f.limitMicro),
     i64Le(f.expiry),
     f.dedupe,
     u64Le(f.nonce),
     idHash,
+    ...(withDevice ? [f.deviceHash as Uint8Array] : []),
   );
 }
 
-export function decodeRecord(bytes: Uint8Array): { limitMicro: bigint; expiry: bigint; dedupe: Uint8Array; nonce: bigint; idHash: Uint8Array } {
-  if (bytes.length !== RECORD_LEN) throw new Error(`record must be ${RECORD_LEN} bytes`);
+export function decodeRecord(bytes: Uint8Array): { limitMicro: bigint; expiry: bigint; dedupe: Uint8Array; nonce: bigint; idHash: Uint8Array; deviceHash: Uint8Array } {
+  if (bytes.length !== RECORD_LEN && bytes.length !== RECORD_LEN_V3) throw new Error(`record must be ${RECORD_LEN} or ${RECORD_LEN_V3} bytes`);
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return {
+    deviceHash: bytes.length === RECORD_LEN_V3 ? bytes.slice(128, 160) : NO_IDENTITY,
     limitMicro: v.getBigUint64(40, true),
     expiry: v.getBigInt64(48, true),
     dedupe: bytes.slice(56, 88),
@@ -232,6 +246,9 @@ export function decodeRecord(bytes: Uint8Array): { limitMicro: bigint; expiry: b
 
 /** True when the record carries a mobile-money identity (non-zero id_hash). */
 export const hasIdentity = (idHash: Uint8Array) => idHash.some((b) => b !== 0);
+
+/** True when the record carries a Seeker phone (a v3 record with a non-zero device_hash). */
+export const hasDevice = (deviceHash: Uint8Array) => deviceHash.some((b) => b !== 0);
 
 // ---------------------------------------------------------------------------
 // Instructions
@@ -330,6 +347,8 @@ export interface PostLimitParams {
   record: Uint8Array;
   /** IdentityLink PDA; needed only when the record has a non-zero id_hash. Omitted => "None" placeholder. */
   identity?: Address;
+  /** DeviceLink PDA; needed only when the record is a v3 record (non-zero device_hash). Omitted => "None" placeholder. */
+  device?: Address;
 }
 
 /** Returns [ed25519 verify, post_limit]; the verify ix must sit directly before post_limit. */
@@ -346,8 +365,10 @@ export function postLimitIx(a: NotchAddresses, p: PostLimitParams): Instruction 
   return ix(
     a.program,
     [meta(p.payer, WS), meta(p.borrower, R), meta(a.config, R), meta(p.line, W), meta(p.dedupe, W), meta(INSTRUCTIONS_SYSVAR, R), meta(SYSTEM_PROGRAM, R),
-      // Optional trailing account: Anchor reads the program's own id as "None".
-      p.identity ? meta(p.identity, W) : meta(a.program, R)],
+      // Optional trailing accounts, in this order: Anchor reads the program's own id as "None". Always send both slots:
+      // Anchor errors (AccountNotEnoughKeys) if a trailing optional account is left out entirely.
+      p.identity ? meta(p.identity, W) : meta(a.program, R),
+      p.device ? meta(p.device, W) : meta(a.program, R)],
     concat(discriminator('post_limit'), vecU8(p.record)),
   );
 }

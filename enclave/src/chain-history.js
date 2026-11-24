@@ -48,17 +48,17 @@ export async function getCreditHistory(wallet, {
   };
 }
 
-const IDENTITY_DISC = crypto.createHash('sha256').update('account:IdentityLink').digest().subarray(0, 8);
-
-// Which wallet (if any) the program has already bound this identity hash to. null = unbound. Throws on RPC
-// trouble or a malformed account so underwriting fails closed.
-export async function getIdentityOwner(idHash, {
+// Which wallet (if any) the program has already bound to a PDA of the form [seed, hash]: IdentityLink ["identity", id_hash]
+// and DeviceLink ["device", device_hash] have the same layout (8 byte discriminator | wallet[32] | bump). null = unbound.
+// Throws on RPC trouble or a malformed account so underwriting fails closed.
+async function linkOwner(seed, accountName, hash, {
   endpoint = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
   programId = process.env.NOTCH_PROGRAM_ID || DEFAULT_PROGRAM_ID,
   fetchImpl = fetch,
 } = {}) {
+  const disc = crypto.createHash('sha256').update(`account:${accountName}`).digest().subarray(0, 8);
   const program = address(programId);
-  const [link] = await getProgramDerivedAddress({ programAddress: program, seeds: [Buffer.from('identity'), Buffer.from(idHash)] });
+  const [link] = await getProgramDerivedAddress({ programAddress: program, seeds: [Buffer.from(seed), Buffer.from(hash)] });
   const response = await fetchImpl(endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -69,8 +69,11 @@ export async function getIdentityOwner(idHash, {
   if (result.error) throw new Error(`Solana RPC error: ${result.error.message || 'unknown error'}`);
   const account = result.result?.value;
   if (!account) return null;
-  if (account.owner !== program.toString()) throw new Error('Identity link is owned by an unexpected program');
+  if (account.owner !== program.toString()) throw new Error(`${accountName} is owned by an unexpected program`);
   const data = Buffer.from(account.data?.[0] || '', 'base64');
-  if (data.length < 41 || !data.subarray(0, 8).equals(IDENTITY_DISC)) throw new Error('Identity link account data is malformed');
+  if (data.length < 41 || !data.subarray(0, 8).equals(disc)) throw new Error(`${accountName} account data is malformed`);
   return getAddressDecoder().decode(data.subarray(8, 40));
 }
+
+export const getIdentityOwner = (idHash, opts) => linkOwner('identity', 'IdentityLink', idHash, opts);
+export const getDeviceOwner = (deviceHash, opts) => linkOwner('device', 'DeviceLink', deviceHash, opts);

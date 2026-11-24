@@ -4,7 +4,8 @@ import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { Underwriter, DEFAULT_TRUSTED } from './underwriter.js';
 import { llmConfigFromEnv } from './llm-extract.js';
-import { getCreditHistory, getIdentityOwner } from './chain-history.js';
+import { getCreditHistory, getDeviceOwner, getIdentityOwner } from './chain-history.js';
+import { deviceProofFrom, handleDevice, statusOf } from './device-http.js';
 import { makeRpc } from './chain-payout.js';
 import { reportDataFor } from './attest.js';
 import { Inbox, handleInbox } from './inbox.js';
@@ -88,6 +89,7 @@ const u = new Underwriter({
   llm,
   historyProvider: getCreditHistory,
   identityProvider: getIdentityOwner,
+  deviceProvider: getDeviceOwner,
   chainRpc: makeRpc(),
   usdcMint: process.env.NOTCH_USDC_MINT || undefined,
   ...(DEMO ? { resolver: fixtures.resolver, trusted: [...DEFAULT_TRUSTED, 'bank.test'] } : {}),
@@ -145,7 +147,7 @@ const server = http.createServer(async (req, res) => {
   };
   const url = new URL(req.url, 'http://x');
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token, authorization' });
+    res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token, x-notch-device, authorization' });
     return res.end();
   }
   if (req.method === 'GET' && url.pathname === '/health') return send(200, { ok: true });
@@ -154,6 +156,7 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     return send(500, { ok: false, reason: e.message });
   }
+  if (await handleDevice(u, req, url, send)) return;
   if (req.method === 'GET' && url.pathname === '/attestation') {
     try {
       return send(200, await attestation(url.searchParams.get('nonce')));
@@ -181,6 +184,8 @@ const server = http.createServer(async (req, res) => {
     } catch {
       return send(400, { ok: false, reason: 'x-wallet header must be a base58 address' });
     }
+    let device;
+    try { device = deviceProofFrom(req); } catch (e) { return send(400, { ok: false, reason: e.message }); }
     const chunks = [];
     let size = 0;
     for await (const c of req) {
@@ -189,8 +194,8 @@ const server = http.createServer(async (req, res) => {
       chunks.push(c);
     }
     try {
-      const r = await u.submit(Buffer.concat(chunks), String(wallet));
-      return send(r.ok ? 200 : 422, r);
+      const r = await u.submit(Buffer.concat(chunks), String(wallet), { device });
+      return send(statusOf(r), r);
     } catch (e) {
       console.error('underwrite error:', e.message);
       return send(500, { ok: false, reason: e.message });

@@ -175,13 +175,14 @@ async function newLender(ctx, funds) {
   return l;
 }
 
-function record(ctx, { limitUsdc = 50, nonce = 1, dedupe = crypto.randomBytes(32), wallet = ctx.borrower.address, expiry, idHash } = {}) {
-  return encodeRecord({ wallet, limitUsdc, expiry: expiry ?? Number(ctx.now) + 30 * 86400, dedupe, nonce, idHash });
+function record(ctx, { limitUsdc = 50, nonce = 1, dedupe = crypto.randomBytes(32), wallet = ctx.borrower.address, expiry, idHash, deviceHash } = {}) {
+  return encodeRecord({ wallet, limitUsdc, expiry: expiry ?? Number(ctx.now) + 30 * 86400, dedupe, nonce, idHash, deviceHash });
 }
 
 // `identity`: 'auto' passes the IdentityLink PDA for the record's id_hash when it is non-zero; false omits the
 // optional trailing account (Anchor wants the program id as the "None" placeholder); an address passes exactly that account.
-async function postLimit(ctx, msg, { signKey = ctx.uw.secretKey, signedMsg = msg, borrower = ctx.borrower.address, identity = 'auto' } = {}) {
+// `device` is the same for the DeviceLink PDA (v3 records, bytes 128..160), in the 9th slot (placeholder when there is none).
+async function postLimit(ctx, msg, { signKey = ctx.uw.secretKey, signedMsg = msg, borrower = ctx.borrower.address, identity = 'auto', device = 'auto' } = {}) {
   const sig = nacl.sign.detached(signedMsg, signKey);
   const pub = nacl.sign.keyPair.fromSecretKey(signKey).publicKey;
   const dedupe = await pda(Buffer.from('dedupe'), msg.subarray(56, 88));
@@ -189,11 +190,15 @@ async function postLimit(ctx, msg, { signKey = ctx.uw.secretKey, signedMsg = msg
   const idHash = msg.subarray(96, 128);
   let identityAcct = identity;
   if (identity === 'auto') identityAcct = idHash.length === 32 && idHash.some((b) => b) ? await pda(Buffer.from('identity'), idHash) : false;
+  const deviceHash = msg.subarray(128, 160);
+  let deviceAcct = device;
+  if (device === 'auto') deviceAcct = deviceHash.length === 32 && deviceHash.some((b) => b) ? await pda(Buffer.from('device'), deviceHash) : false;
   return send(ctx.svm, ctx.admin, [
     ed25519Ix(pub, signedMsg, sig),
     {
       programAddress: PROGRAM,
-      accounts: [meta(ctx.admin.address, WS), meta(borrower, R), meta(ctx.config, R), meta(line, W), meta(dedupe, W), meta(IX_SYSVAR, R), meta(SYSTEM, R), meta(identityAcct || PROGRAM, identityAcct ? W : R)],
+      accounts: [meta(ctx.admin.address, WS), meta(borrower, R), meta(ctx.config, R), meta(line, W), meta(dedupe, W), meta(IX_SYSVAR, R), meta(SYSTEM, R), meta(identityAcct || PROGRAM, identityAcct ? W : R),
+        meta(deviceAcct || PROGRAM, deviceAcct ? W : R)],
       data: Buffer.concat([disc('post_limit'), vecU8(msg)]),
     },
   ]);

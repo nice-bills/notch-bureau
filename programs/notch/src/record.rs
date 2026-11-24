@@ -6,8 +6,14 @@ use crate::NotchError;
 /// "NOTCHv2\0" | wallet[32] | limit_micro u64 | expiry i64 | dedupe[32] | nonce u64 | id_hash[32]  (little endian)
 /// `id_hash` is sha256("notch-msisdn"|number) (optionally peppered) for statement-backed records and
 /// all zeros when the source has no bindable identity.
+///
+/// "NOTCHv3\0" is the same 128 bytes plus `device_hash[32]` at 128..160 (160 bytes): the phone behind the wallet,
+/// sha256("notch-sgt"|mint) of its Seeker Genesis Token. The underwriter writes a v3 record only when a device is bound;
+/// a v2 record is still accepted exactly as before and has no device (all zeros).
 pub const TAG: &[u8; 8] = b"NOTCHv2\0";
+pub const TAG_V3: &[u8; 8] = b"NOTCHv3\0";
 pub const RECORD_LEN: usize = 128;
+pub const RECORD_LEN_V3: usize = 160;
 
 pub struct Record {
     pub wallet: Pubkey,
@@ -16,12 +22,14 @@ pub struct Record {
     pub dedupe: [u8; 32],
     pub nonce: u64,
     pub id_hash: [u8; 32],
+    /// All zeros for a v2 record (no Seeker phone bound).
+    pub device_hash: [u8; 32],
 }
 
 impl Record {
     pub fn parse(b: &[u8]) -> Result<Self> {
         require!(
-            b.len() == RECORD_LEN && &b[..8] == TAG,
+            (b.len() == RECORD_LEN && &b[..8] == TAG) || (b.len() == RECORD_LEN_V3 && &b[..8] == TAG_V3),
             NotchError::BadRecord
         );
         let u64_at = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
@@ -32,6 +40,7 @@ impl Record {
             dedupe: b[56..88].try_into().unwrap(),
             nonce: u64_at(88),
             id_hash: b[96..128].try_into().unwrap(),
+            device_hash: if b.len() == RECORD_LEN_V3 { b[128..160].try_into().unwrap() } else { [0u8; 32] },
         })
     }
 }

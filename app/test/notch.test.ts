@@ -25,7 +25,10 @@ import {
   deriveAddresses,
   deriveAta,
   deriveDedupe,
+  deriveDevice,
+  hasDevice,
   deriveIdentity,
+  RECORD_LEN_V3,
   decodeRecord,
   deriveLine,
   discriminator,
@@ -126,11 +129,11 @@ const refRepay = (ctx: RefCtx, amount: bigint) => ({
   data: Buffer.concat([disc('repay'), u64(amount)]),
 });
 const refMarkDefault = (ctx: RefCtx) => ({ programAddress: PROGRAM, accounts: [meta(ctx.line, W), meta(ctx.pool, W)], data: disc('mark_default') });
-const refPostLimit = (ctx: RefCtx, payer: Address, msg: Buffer, dedupe: Address, identity?: Address) => [
+const refPostLimit = (ctx: RefCtx, payer: Address, msg: Buffer, dedupe: Address, identity?: Address, device?: Address) => [
   ed25519Ix(uw.publicKey, msg, nacl.sign.detached(msg, uw.secretKey)),
   {
     programAddress: PROGRAM,
-    accounts: [meta(payer, WS), meta(ctx.borrower, R), meta(ctx.config, R), meta(ctx.line, W), meta(dedupe, W), meta(INSTRUCTIONS_SYSVAR, R), meta(SYSTEM_PROGRAM, R), identity ? meta(identity, W) : meta(PROGRAM, R)],
+    accounts: [meta(payer, WS), meta(ctx.borrower, R), meta(ctx.config, R), meta(ctx.line, W), meta(dedupe, W), meta(INSTRUCTIONS_SYSVAR, R), meta(SYSTEM_PROGRAM, R), identity ? meta(identity, W) : meta(PROGRAM, R), device ? meta(device, W) : meta(PROGRAM, R)],
     data: Buffer.concat([disc('post_limit'), vecU8(msg)]),
   },
 ];
@@ -186,6 +189,31 @@ describe('notch.ts matches tests/notch.test.js', () => {
     const sig = nacl.sign.detached(record, uw.secretKey);
     const mine = postLimitIxs(a, { payer: lenderAddr, borrower, line: ref.line, dedupe, record, identity }, uw.publicKey, sig);
     same(mine[1], refPostLimit(ref, lenderAddr, record, dedupe, identity)[1] as never);
+  });
+
+  it('post_limit with a Seeker phone: a 160 byte v3 record and the DeviceLink PDA in the last slot', async () => {
+    const { a, ref } = await ctx();
+    const idHash = crypto.createHash('sha256').update('notch-msisdn|233241234567').digest();
+    const deviceHash = crypto.createHash('sha256').update('notch-sgt|5mXbkqKz883aufhAsx3p5Z1NcvD2ppZbdTTznM6oUKLj').digest();
+    const fields = { wallet: borrower, limitUsdc: 75, expiry: 1_800_000_000, dedupe: crypto.randomBytes(32), nonce: 7, idHash, deviceHash };
+    const record = encodeRecordRef(fields) as Buffer;
+    expect(record.length).toBe(RECORD_LEN_V3);
+    expect(record.subarray(0, 8).toString('latin1')).toBe('NOTCHv3\0');
+    // the TypeScript encoder and the enclave's JS encoder write the same bytes, and decode reads the device back
+    expect(Buffer.from(encodeRecord({ wallet: borrower, limitMicro: 75_000_000n, expiry: 1_800_000_000, dedupe: fields.dedupe, nonce: 7, idHash, deviceHash }))).toEqual(record);
+    expect(Buffer.from(decodeRecord(record).deviceHash)).toEqual(deviceHash);
+    expect(hasDevice(decodeRecord(record).deviceHash)).toBe(true);
+    const dedupe = await deriveDedupe(PROGRAM, record.subarray(56, 88));
+    const [identity] = await getProgramDerivedAddress({ programAddress: PROGRAM, seeds: [Buffer.from('identity'), idHash] });
+    const [device] = await getProgramDerivedAddress({ programAddress: PROGRAM, seeds: [Buffer.from('device'), deviceHash] });
+    expect(await deriveDevice(PROGRAM, decodeRecord(record).deviceHash)).toBe(device);
+    const sig = nacl.sign.detached(record, uw.secretKey);
+    const mine = postLimitIxs(a, { payer: lenderAddr, borrower, line: ref.line, dedupe, record, identity, device }, uw.publicKey, sig);
+    same(mine[1], refPostLimit(ref, lenderAddr, record, dedupe, identity, device)[1] as never);
+    // a v2 record is untouched: 128 bytes, decodes with an all-zero device
+    const v2 = encodeRecordRef({ ...fields, deviceHash: undefined }) as Buffer;
+    expect(v2.length).toBe(128);
+    expect(hasDevice(decodeRecord(v2).deviceHash)).toBe(false);
   });
 
   it('draw', async () => {
@@ -327,7 +355,8 @@ describe('notch.ts matches tests/notch.test.js', () => {
       "accounts: [meta(lender.signer.address, WS), meta(ctx.pool, R), meta(t.mint, R), meta(t.shares, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM_ADDRESS, R)]",
       "accounts: [meta(ctx.borrower.address, RS), meta(ctx.config, R), meta(ctx.pool, W), meta(ctx.line, W), meta(ctx.mint.address, R), meta(ctx.vault, W), meta(ctx.borrowerAcct, W), meta(TOKEN_PROGRAM_ADDRESS, R)]",
       "accounts: [meta(ctx.borrower.address, RS), meta(ctx.config, R), meta(ctx.pool, W), meta(ctx.line, W), meta(ctx.mint.address, R), meta(ctx.borrowerAcct, W), meta(ctx.vault, W), meta(TOKEN_PROGRAM_ADDRESS, R), meta(ctx.borrowerAcct, W)]",
-      "accounts: [meta(ctx.admin.address, WS), meta(borrower, R), meta(ctx.config, R), meta(line, W), meta(dedupe, W), meta(IX_SYSVAR, R), meta(SYSTEM, R), meta(identityAcct || PROGRAM, identityAcct ? W : R)]",
+      "accounts: [meta(ctx.admin.address, WS), meta(borrower, R), meta(ctx.config, R), meta(line, W), meta(dedupe, W), meta(IX_SYSVAR, R), meta(SYSTEM, R), meta(identityAcct || PROGRAM, identityAcct ? W : R),",
+      "meta(deviceAcct || PROGRAM, deviceAcct ? W : R)]",
     ]) expect(src).toContain(needle);
   });
 });

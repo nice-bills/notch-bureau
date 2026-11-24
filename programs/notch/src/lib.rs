@@ -181,6 +181,22 @@ pub mod notch {
             }
         }
 
+        // One Seeker phone (device_hash = sha256("notch-sgt"|mint), a v3 record) may back ONE wallet, ever: the same
+        // pattern as the identity link. A v2 record has no device (all zeros) and skips this entirely.
+        if r.device_hash != [0u8; 32] {
+            let link = ctx
+                .accounts
+                .device
+                .as_mut()
+                .ok_or(NotchError::DeviceRequired)?;
+            if link.wallet == Pubkey::default() {
+                link.wallet = r.wallet;
+                link.bump = ctx.bumps.device.ok_or(NotchError::DeviceRequired)?;
+            } else {
+                require_keys_eq!(link.wallet, r.wallet, NotchError::DeviceBound);
+            }
+        }
+
         let line = &mut ctx.accounts.line;
         if line.wallet == Pubkey::default() {
             line.wallet = r.wallet;
@@ -570,6 +586,12 @@ pub fn identity_seed(record: &[u8]) -> &[u8] {
     record.get(96..128).unwrap_or(&[])
 }
 
+/// Bytes 128..160 of a v3 record (the Seeker phone hash). A v2 record is only 128 bytes, so it yields an empty seed,
+/// which is fine: the optional `device` account is simply not passed for it.
+pub fn device_seed(record: &[u8]) -> &[u8] {
+    record.get(128..160).unwrap_or(&[])
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
@@ -748,6 +770,15 @@ pub struct IdentityLink {
     pub bump: u8,
 }
 
+/// Sybil binding for phones. PDA ["device", device_hash]: the one wallet a Seeker phone (hashed Seeker Genesis Token mint,
+/// never the mint itself) is allowed to back. Created by `post_limit` from a v3 record; never reassigned.
+#[account]
+#[derive(InitSpace)]
+pub struct DeviceLink {
+    pub wallet: Pubkey,
+    pub bump: u8,
+}
+
 /// Coarse bucket for available credit, in base units of the 6-decimal USDC mint:
 /// 0 = under 25, 1 = 25 to under 100, 2 = 100 to under 500, 3 = 500 or more.
 pub fn available_bucket(available: u64) -> u8 {
@@ -865,6 +896,10 @@ pub struct PostLimit<'info> {
     /// non-zero id_hash. Created on first use; a different wallet presenting the same id_hash fails.
     #[account(init_if_needed, payer = payer, space = 8 + IdentityLink::INIT_SPACE, seeds = [b"identity", identity_seed(&record)], bump)]
     pub identity: Option<Account<'info, IdentityLink>>,
+    /// Trailing and optional after `identity` (pass the program id as the placeholder for either): required only when the
+    /// record is a v3 record with a non-zero device_hash. A different wallet presenting the same phone fails with DeviceBound.
+    #[account(init_if_needed, payer = payer, space = 8 + DeviceLink::INIT_SPACE, seeds = [b"device", device_seed(&record)], bump)]
+    pub device: Option<Account<'info, DeviceLink>>,
 }
 
 #[derive(Accounts)]
@@ -1071,4 +1106,8 @@ pub enum NotchError {
     InvalidTrancheParams,
     #[msg("Loan term must be between 10 seconds and 30 days")]
     InvalidTerm,
+    #[msg("This Seeker phone is already linked to a different wallet")]
+    DeviceBound,
+    #[msg("Record carries a Seeker phone but the device account was not provided")]
+    DeviceRequired,
 }

@@ -1,6 +1,6 @@
 # Notch enclave (underwriter)
 
-Reads a DKIM-signed income email, returns a signed 128-byte credit record. Raw email, amounts, sender and
+Reads a DKIM-signed income email, returns a signed 128-byte credit record (160 bytes when a Seeker phone is bound). Raw email, amounts, sender and
 phone number never leave the process. Run: `pnpm start`. Test: `pnpm test` (no network).
 
 ## How an email becomes a limit
@@ -22,7 +22,27 @@ phone number never leave the process. Run: `pnpm start`. Test: `pnpm test` (no n
    the enclave refuses a second wallet (in memory, and via the chain: `getIdentityOwner`), and the program
    refuses it too (`IdentityLink` PDA `["identity", id_hash]` created in `post_limit`, error `IdentityBound`).
    Sources with no bindable identity (Earn, Wise, ...) carry an all-zero `id_hash` and skip the link.
-4. **Limit** (`src/underwrite.js`), then Ed25519-sign the record (`src/record.js`, `NOTCHv2`).
+4. **Device** (optional, see "One phone = one borrower" below): a Sign-in-with-Solana proof + a Seeker Genesis Token adds
+   `device_hash` to the record (`NOTCHv3`, 160 bytes) and the Seeker uplift to the limit.
+5. **Limit** (`src/underwrite.js`), then Ed25519-sign the record (`src/record.js`, `NOTCHv2`, or `NOTCHv3` with a device).
+
+### One phone = one borrower (Seeker Genesis Token): `src/siws.js`, `src/sgt.js`, `src/device-http.js`
+A MoMo number already backs one wallet; a fraudster with five SIM cards could still open five lines. A Seeker phone carries a
+**Seeker Genesis Token** (SGT, a Token-2022 NFT minted once per phone, on **mainnet**). Verification has two halves and both are required
+(doing only the second lets anyone submit a Seeker owner's public address):
+1. **Sign-in-with-Solana** proves the user holds the wallet key now. `POST /device/nonce` returns the whole payload (domain, uri,
+   statement, `chainId: solana:mainnet`, nonce, 5 minute expiry); the wallet signs it (plus its own address). The nonce is single use,
+   consumed before anything else is checked. The verifying key comes from the wallet being underwritten, never from the request.
+2. **The wallet holds an SGT**: `@solana-mobile/skr-genesis-token` reads the wallet's Token-2022 accounts on a mainnet RPC (read only, no
+   transaction is ever sent; `NOTCH_SGT_RPC_URL`, default the public RPC). An RPC failure is `503 retry`, never "not a Seeker".
+`POST /underwrite` takes the proof in header `x-notch-device` = base64 of `{"nonce","signature","signedMessage"}`. If it verifies and the wallet
+holds an SGT, the record becomes `NOTCHv3` (v2 + `device_hash[32]` = `sha256("notch-sgt"|mint)`) and the limit is multiplied by **1.5**
+(`SEEKER_MULTIPLIER`: both the 30% share and the first-timer cap; never past the 2000 hard cap). The mint itself never leaves the enclave.
+No proof, or a valid proof with no SGT, is exactly the old behaviour (a plain 128 byte v2 record). A bad proof is refused (422).
+One phone backs one wallet: the enclave refuses a phone another wallet uses (in memory and via the chain: `getDeviceOwner`), and the
+program refuses it too (`DeviceLink` PDA `["device", device_hash]`, error `DeviceBound`). A wallet holding several phones' tokens binds the
+first one nobody else uses. Tests: `test/device.test.js` (SGT reader stubbed), `enclave/scripts/sgt-real-read.mjs` (REAL mainnet read).
+**Not wired yet:** the statement inbox path (`/inbox/new` -> `/inbound`) does not carry a device proof; only `POST /underwrite` does.
 
 ### Statement parsing (security model)
 Layout is the REAL MTN MoMo statement (made with pdfmake; read from a real file on 2026-11-23): header block

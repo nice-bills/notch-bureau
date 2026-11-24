@@ -29,6 +29,10 @@ import crypto from 'node:crypto';
 //      borrower) and mark_default is called once the chain clock passes the due time. The app uses plain `draw`.
 //      A loss BIGGER than the junior tranche is not forced on the shared devnet pool (that would drain it);
 //      that case, the subordination floor on junior exits and the 3-day claim itself are covered by LiteSVM.
+//  12  Cash deposits as trading income + one phone = one borrower (Seeker Genesis Token): a trader's statement of agent
+//      cash deposits earns a limit, looped / cycled cash earns nothing; a Seeker wallet proves itself with a real
+//      Sign-in-with-Solana signature, gets a v3 record (device_hash) and a higher limit, the program's DeviceLink lets
+//      one phone back one wallet. The SGT reader is a STUB for the full flow; a REAL mainnet read (read only) is checked too.
 //
 // The underwriter runs inside this process (same Underwriter class and same key file as the demo
 // enclave on :8787) because only the process that holds the synthetic DKIM key can sign fresh emails.
@@ -87,6 +91,7 @@ import {
   deriveLine,
   deriveWithdrawRequest,
   drawIx,
+  deriveDevice,
   WITHDRAW_COOLDOWN_SECONDS,
   ed25519VerifyIx,
   feeFor,
@@ -104,7 +109,10 @@ import {
 import { fixtures, makeServer, makeUnderwriter } from './enclave-lib.mjs';
 import { signRecord } from '../../enclave/src/record.js';
 import { identityHash, normalizeMsisdn } from '../../enclave/src/statement.js';
-import { getIdentityOwner } from '../../enclave/src/chain-history.js';
+import { getDeviceOwner, getIdentityOwner } from '../../enclave/src/chain-history.js';
+import { deviceMessage } from '../../enclave/src/siws.js';
+import { SgtUnavailable, createSgtReader, sgtHash } from '../../enclave/src/sgt.js';
+import { Underwriter } from '../../enclave/src/underwriter.js';
 import { makeRpc } from '../../enclave/src/chain-payout.js';
 import { buildCheckCreditIx, decodeCreditCheck, getCredit as sdkGetCredit } from '../../sdk/src/index.js';
 
@@ -248,6 +256,7 @@ const PROGRAM_ERRORS = [
   'InvalidAmount', 'NothingToRepay', 'InsufficientDeposit', 'FeeRequired', 'InsufficientLiquidity',
   'InvalidPoolState', 'BalanceOutstanding', 'MathOverflow', 'CooldownActive', 'IdentityBound', 'IdentityRequired',
   'NoCreditLine', 'InsufficientCredit', 'SubordinationBreached', 'BadTrancheMint', 'InvalidTrancheParams', 'InvalidTerm',
+  'DeviceBound', 'DeviceRequired',
 ];
 /** Name of the Anchor error in the logs, plus the custom code number from the status. */
 function programError(res) {
@@ -278,8 +287,13 @@ console.log(`program     ${program}\nmint        ${mint}\nadmin       ${admin.ad
 
 // Real chain providers: identity links are read from the redeployed program, Earn payouts are proven against
 // devnet token transfers of the program's test USDC mint.
+// STUB (labelled in step 12): we own no Seeker phone, so the SGT reader is a table of test wallets -> fake mints. The real
+// mainnet read is proven separately in step 12 (read only). Everything else (SIWS, signatures, record, program) is real.
+const fakeSgt = new Map();
 const underwriter = makeUnderwriter(opts.enclaveKey, {
   identityProvider: (idHash) => getIdentityOwner(idHash, { endpoint: opts.rpc, programId: opts.program }),
+  deviceProvider: (deviceHash) => getDeviceOwner(deviceHash, { endpoint: opts.rpc, programId: opts.program }),
+  sgtReader: async (w) => { const v = fakeSgt.get(w); if (v instanceof Error) throw v; return v || []; },
   chainRpc: makeRpc({ endpoint: opts.rpc }),
   usdcMint: opts.mint,
 });
@@ -327,6 +341,7 @@ console.log(`borrower    ${borrower.address}\nlender      ${lender.address}`);
 
 const bureauWallets = []; // step 10 throwaways, swept at the end
 const trancheWallets = []; // step 11 throwaways, swept at the end
+const deviceWallets = []; // step 12 throwaways (kit signers), swept at the end
 let failed = false;
 try {
   // -------------------------------------------------------------------------------------------
@@ -1003,6 +1018,173 @@ try {
     check('final invariants: NAVs sum to idle + outstanding; vault == idle + borrower deposits', inv(fin) && (await vaultAmount()) === fin.idle + fin.borrowerDeposits);
     console.log(`  note  tranche state: senior NAV ${usd(fin.seniorNav)}, junior NAV ${usd(fin.juniorNav)} (junior losses ${usd(fin.juniorLosses)}, senior losses ${usd(fin.seniorLosses)})`);
   }
+
+  // -------------------------------------------------------------------------------------------
+  step('12', 'Cash deposits as income + one phone = one borrower (Seeker Genesis Token): real HTTP underwriter, real SIWS signatures, real devnet program');
+  {
+    const { momoStatementEmail, randomMsisdn, syntheticCashRows, syntheticCashLoopRows, momoAt } = fixtures;
+    const traderRows = () => syntheticCashRows().map((r) => ({ ...r, txid: String(crypto.randomInt(1e10, 1e11)) }));
+    const newWallet = () => { const kp = nacl.sign.keyPair(); return { kp, address: getAddressDecoder().decode(kp.publicKey) }; };
+    const fakeMint = () => getAddressDecoder().decode(crypto.randomBytes(32));
+    const lineOf = (w) => deriveLine(program, w);
+
+    // ---- 12a. JOB 1: steady cash deposits are a trader's income, cycled cash is not -------------------------------
+    const trader = newWallet();
+    const tMsisdn = randomMsisdn();
+    const tRes = await underwrite(await momoStatementEmail({ msisdn: tMsisdn, rows: traderRows() }), trader.address);
+    check('trader statement (agent cash deposits, no earned income) now earns a limit', tRes.status === 200 && tRes.body.ok === true && tRes.body.limitUsdc > 8 && tRes.body.limitUsdc < 9, jsonSafe(tRes.body).slice(0, 160));
+    const loop = await underwrite(await momoStatementEmail({ msisdn: randomMsisdn(), rows: syntheticCashLoopRows() }), newWallet().address);
+    check('ATTACK same cash in and out every month (deposit, withdraw 2 days later, repeat): refused, nothing counts', loop.status === 422 && /no earned income/.test(loop.body.reason || ''), jsonSafe(loop.body));
+    {
+      const oneMonth = [25, 20, 15].map((d) => ({ date: momoAt(d), type: 'CASH IN', party: '233244001234', acct: 'AGENT', ref: 'Cashin', amount: 1000, txid: String(crypto.randomInt(1e10, 1e11)) }));
+      const r = await underwrite(await momoStatementEmail({ msisdn: randomMsisdn(), rows: oneMonth }), newWallet().address);
+      check('ATTACK three big cash deposits all in one month: refused (not regular)', r.status === 422, jsonSafe(r.body));
+      const split = [];
+      for (const d of [80, 50, 20]) {
+        for (let i = 0; i < 10; i++) split.push({ date: momoAt(d), type: 'CASH IN', party: '233244001234', acct: 'AGENT', ref: 'Cashin', amount: 99, txid: String(crypto.randomInt(1e10, 1e11)) });
+        split.push({ date: momoAt(d - 2), type: 'CASH OUT', party: '233244001234', acct: 'AGENT', ref: 'NationalId--', amount: -990, fee: 5, txid: String(crypto.randomInt(1e10, 1e11)) });
+      }
+      const r2 = await underwrite(await momoStatementEmail({ msisdn: randomMsisdn(), rows: split }), newWallet().address);
+      check('ATTACK ten deposits of 99 (under the 100 floor) every month, withdrawn after 2 days: refused', r2.status === 422, jsonSafe(r2.body));
+    }
+    // the trader's record goes on chain with the MoMo identity link, like any statement (a plain v2 record, no phone)
+    const tRec = base64ToBytes(tRes.body.message);
+    const tDec = decodeRecord(tRec);
+    check('non-Seeker record is still a plain 128 byte v2 record with no device', tRec.length === 128 && !Buffer.from(tDec.deviceHash).some((b) => b !== 0) && tRes.body.seeker === undefined);
+    await send('post_limit for the cash trader (MoMo identity link, no device)', admin, postLimitIxs(A, { payer: admin.address, borrower: trader.address, line: await lineOf(trader.address), dedupe: await deriveDedupe(program, tDec.dedupe), record: tRec, identity: await deriveIdentity(program, tDec.idHash) }, uwKey, base64ToBytes(tRes.body.signature)));
+    check('CreditLine limit == the cash trader\'s limit', decodeLine(await accountBytes(await lineOf(trader.address))).limit === tDec.limitMicro);
+
+    // ---- 12b. JOB 2: one phone = one borrower. Half 1: real SIWS; half 2: SGT reader (STUB here) ------------------
+    console.log('  note  SGT reader in this step is a STUB table (no Seeker phone here); SIWS signatures, the HTTP server, the record and the program are real');
+    const nonce = async () => { const { ok, ...issued } = await (await fetch(`${ENCLAVE}/device/nonce`, { method: 'POST' })).json(); return issued; };
+    // what the wallet app does: sign the issued SIWS payload (plus its own address) with the wallet key
+    async function proof(w, { signer = w.kp, address = w.address, issued } = {}) {
+      const iss = issued || await nonce();
+      const msg = deviceMessage(iss, address);
+      const sig = nacl.sign.detached(msg, signer.secretKey);
+      return Buffer.from(JSON.stringify({ nonce: iss.nonce, signature: Buffer.from(sig).toString('base64'), signedMessage: Buffer.from(msg).toString('base64') })).toString('base64');
+    }
+    const underwriteDev = async (eml, wallet, header) => {
+      const r = await fetch(`${ENCLAVE}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', 'x-wallet': wallet, ...(header ? { 'x-notch-device': header } : {}) }, body: eml });
+      return { status: r.status, body: await r.json() };
+    };
+    const nowS = () => Math.floor(Date.now() / 1000);
+
+    const challenge = await nonce();
+    check('GET challenge: server-issued SIWS payload pinned to solana:mainnet, single-use nonce', challenge.chainId === 'solana:mainnet' && /^[0-9a-f]{32}$/.test(challenge.nonce) && !!challenge.domain && !!challenge.expirationTime, jsonSafe(challenge).slice(0, 160));
+
+    const seeker = newWallet();
+    const phoneMint = fakeMint();
+    fakeSgt.set(seeker.address, [phoneMint]);
+    const base = await underwrite(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), newWallet().address); // same rows, not a Seeker
+    const sMsisdn = randomMsisdn();
+    const sHeader = await proof(seeker);
+    const sRes = await underwriteDev(await momoStatementEmail({ msisdn: sMsisdn, rows: traderRows() }), seeker.address, sHeader);
+    check('Seeker (valid SIWS + SGT) accepted over HTTP', sRes.status === 200 && sRes.body.ok === true && sRes.body.seeker === true, jsonSafe(sRes.body).slice(0, 160));
+    const sRec = base64ToBytes(sRes.body.message);
+    const sDec = decodeRecord(sRec);
+    const wantHash = crypto.createHash('sha256').update(`notch-sgt|${phoneMint}`).digest();
+    check('record is a 160 byte v3 record with device_hash = sha256("notch-sgt"|mint)', sRec.length === 160 && Buffer.from(sRec.subarray(0, 8)).toString('latin1') === 'NOTCHv3\0' && Buffer.from(sDec.deviceHash).equals(wantHash) && Buffer.from(sDec.deviceHash).equals(sgtHash(phoneMint)));
+    check('the mint itself is nowhere in the reply or the record', !jsonSafe(sRes.body).includes(phoneMint) && !Buffer.from(sRec).toString('latin1').includes(phoneMint));
+    check('Seeker limit is 1.5x the same statement\'s limit (modest uplift)', Math.abs(sRes.body.limitUsdc - base.body.limitUsdc * 1.5) <= 0.02, `${base.body.limitUsdc} -> ${sRes.body.limitUsdc}`);
+
+    // ---- 12c. on chain: DeviceLink is created, refuses a second wallet, needs the right account
+    const sLine = await lineOf(seeker.address);
+    const sDedupe = await deriveDedupe(program, sDec.dedupe);
+    const sId = await deriveIdentity(program, sDec.idHash);
+    const sDevice = await deriveDevice(program, sDec.deviceHash);
+    const postS = (extra = {}, record = sRec, sig = base64ToBytes(sRes.body.signature)) => postLimitIxs(A, { payer: admin.address, borrower: seeker.address, line: sLine, dedupe: sDedupe, record, identity: sId, device: sDevice, ...extra }, uwKey, sig);
+    {
+      const r1 = await send('ATTACK post_limit with a v3 record but the device account left out', admin, postS({ device: undefined }), { expectFail: true });
+      expectProgramError('device account omitted for a v3 record', r1, 'DeviceRequired');
+      const r2 = await send('ATTACK post_limit with someone else\'s device account', admin, postS({ device: await deriveDevice(program, crypto.randomBytes(32)) }), { expectFail: true });
+      check('wrong device account -> ConstraintSeeds (2006)', programError(r2).name === 'ConstraintSeeds' && programError(r2).code === 2006, jsonSafe(programError(r2)));
+    }
+    await send('post_limit for the Seeker (v3 record: MoMo identity + phone)', admin, postS());
+    {
+      const link = await accountBytes(sDevice);
+      check('DeviceLink exists, stores the wallet only (no mint, no hash payload)', !!link && getAddressDecoder().decode(link.subarray(8, 40)) === seeker.address && link.length === 8 + 33);
+      check('CreditLine limit == the Seeker\'s limit', decodeLine(await accountBytes(sLine)).limit === sDec.limitMicro);
+      const chainOwner = await getDeviceOwner(sDec.deviceHash, { endpoint: opts.rpc, programId: opts.program });
+      check('the enclave\'s chain reader (getDeviceOwner) sees the phone bound to the Seeker; an unused phone is free', chainOwner === seeker.address && (await getDeviceOwner(crypto.randomBytes(32), { endpoint: opts.rpc, programId: opts.program })) === null);
+    }
+    {
+      // the program refuses a second wallet even if the signer misbehaves (a record signed straight with the real underwriter key)
+      const thief = newWallet();
+      const forged = signRecord({ wallet: thief.address, limitUsdc: 40, expiry: nowS() + 30 * 86400, dedupe: crypto.randomBytes(32), nonce: BigInt(Date.now()) + 2000n, deviceHash: sDec.deviceHash }, underwriter.keys.secretKey);
+      const rec = base64ToBytes(forged.message);
+      const lineT = await lineOf(thief.address);
+      const r = await send('ATTACK post_limit: same phone, second wallet (signed by the real underwriter key)', admin,
+        postLimitIxs(A, { payer: admin.address, borrower: thief.address, line: lineT, dedupe: await deriveDedupe(program, decodeRecord(rec).dedupe), record: rec, device: sDevice }, uwKey, base64ToBytes(forged.signature)), { expectFail: true });
+      expectProgramError('second wallet presents the same device_hash', r, 'DeviceBound');
+      check('the refused post left no credit line for the second wallet', (await accountBytes(lineT)) === null);
+    }
+
+    // ---- 12d. the enclave's own refusals (HTTP)
+    {
+      const thief = newWallet();
+      fakeSgt.set(thief.address, [phoneMint]); // the same phone's token shows up in another wallet (an SGT can move)
+      const r1 = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), thief.address, await proof(thief));
+      check('enclave refuses a second wallet holding the same phone', r1.status === 422 && /already linked to a different wallet/.test(r1.body.reason || '') && !jsonSafe(r1.body).includes(phoneMint), jsonSafe(r1.body));
+
+      const r2 = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), seeker.address, sHeader);
+      check('ATTACK replay of a used SIWS proof refused', r2.status === 422 && /unknown, already used or expired/.test(r2.body.reason || ''), jsonSafe(r2.body));
+
+      const victim = newWallet();
+      fakeSgt.set(victim.address, [fakeMint()]);
+      const forgery = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), victim.address, await proof(victim, { signer: newWallet().kp }));
+      check('ATTACK a real Seeker owner\'s public address signed by someone else\'s key: refused', forgery.status === 422 && /signature does not match/.test(forgery.body.reason || ''), jsonSafe(forgery.body));
+      const mismatch = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), victim.address, await proof(thief));
+      check('ATTACK a proof signed by one wallet presented for another wallet: refused', mismatch.status === 422 && /signature does not match/.test(mismatch.body.reason || ''), jsonSafe(mismatch.body));
+      const noProof = await underwrite(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), victim.address);
+      check('the same address with NO proof is just an ordinary borrower (no uplift, no device)', noProof.status === 200 && noProof.body.seeker === undefined && base64ToBytes(noProof.body.message).length === 128 && Math.abs(noProof.body.limitUsdc - base.body.limitUsdc) < 0.005);
+
+      const plain = newWallet();
+      const none = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), plain.address, await proof(plain));
+      check('valid proof but no SGT: ordinary limit, v2 record, seeker=false', none.status === 200 && none.body.seeker === false && base64ToBytes(none.body.message).length === 128 && Math.abs(none.body.limitUsdc - base.body.limitUsdc) < 0.005);
+
+      const down = newWallet();
+      fakeSgt.set(down.address, new SgtUnavailable('mainnet RPC unreachable (simulated)'));
+      const dEml = await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() });
+      const outage = await underwriteDev(dEml, down.address, await proof(down));
+      check('an SGT RPC outage is 503 "try again", never "not a Seeker"', outage.status === 503 && outage.body.retry === true, jsonSafe(outage.body));
+      fakeSgt.set(down.address, [fakeMint()]);
+      const back = await underwriteDev(dEml, down.address, await proof(down));
+      check('...and the same email goes through once the RPC is back (nothing was spent)', back.status === 200 && back.body.seeker === true, jsonSafe(back.body));
+
+      const junk = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), down.address, 'not-base64-json');
+      check('a junk device header is a 400', junk.status === 400, jsonSafe(junk.body));
+    }
+
+    // ---- 12e. a restarted enclave still refuses: the chain says the phone is taken (fresh process state, chain reader only)
+    {
+      const restarted = new Underwriter({ resolver: fixtures.resolver, trusted: underwriter.trusted, llm: null,
+        deviceProvider: (h) => getDeviceOwner(h, { endpoint: opts.rpc, programId: opts.program }),
+        sgtReader: async () => [phoneMint] });
+      const thief = newWallet();
+      const iss = restarted.deviceChallenge();
+      const sig = nacl.sign.detached(deviceMessage(iss, thief.address), thief.kp.secretKey);
+      const r = await restarted.submit(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), thief.address, { device: { nonce: iss.nonce, signature: Array.from(sig), signedMessage: Array.from(deviceMessage(iss, thief.address)) } });
+      check('a restarted enclave (empty memory) refuses the taken phone by reading the chain', r.ok === false && /already linked to a different wallet/.test(r.reason || ''), r.reason);
+    }
+
+    // ---- 12f. REAL mainnet read (read only, no transaction ever): a publicly known SGT holder
+    {
+      const holder = process.env.NOTCH_KNOWN_SGT_HOLDER || 'D2ehKLUQApN8ZxcANjwuTJC7bk7BMJn2voofXy17tCrs'; // Solana Mobile's own docs; also found on chain by enclave/scripts/sgt-real-read.mjs
+      const reader = createSgtReader();
+      let mints = null;
+      let err = '';
+      for (let i = 0; i < 4 && !mints; i++) {
+        try { mints = await reader(holder); } catch (e) { err = e.message; await sleep(2500 * (i + 1)); }
+      }
+      if (mints) {
+        check('REAL mainnet read: a publicly known SGT holder holds one Seeker Genesis Token; an empty wallet holds none',
+          mints.length >= 1 && (await reader(address('11111111111111111111111111111112'))).length === 0, `${mints.length} SGT mint(s) read from mainnet`);
+      } else {
+        console.log(`  SKIP  REAL mainnet read: the public mainnet RPC did not answer (${err.slice(0, 100)}). Run: node enclave/scripts/sgt-real-read.mjs`);
+      }
+    }
+  }
 } catch (e) {
   failed = true;
   console.error(`\nABORTED in step ${currentStep}: ${e.message}`);
@@ -1010,7 +1192,7 @@ try {
 } finally {
   // ---- cleanup: sweep leftover SOL back to the admin wallet ----
   if (opts.sweep) {
-    for (const w of [borrower, lender, momoUser, momoOther, ...bureauWallets, ...trancheWallets]) {
+    for (const w of [borrower, lender, momoUser, momoOther, ...bureauWallets, ...trancheWallets, ...deviceWallets]) {
       try {
         const bal = await solBal(w.address);
         if (bal > 10_000n) {

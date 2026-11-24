@@ -3,6 +3,9 @@
 export const FIRST_CAP_USDC = 50;
 export const HARD_CAP_USDC = 2000;
 export const SHARE = 0.3;
+// A Seeker holder has put real money on the table (a ~$450 phone that is checked on chain, one phone per credit line), so their
+// affordable share and their first-timer cap are both x1.5: a modest uplift, never a way past the hard cap.
+export const SEEKER_MULTIPLIER = 1.5;
 const DAY = 86400_000;
 
 // Static FX for the prototype; replaced by a live rate feed later.
@@ -16,12 +19,14 @@ export const USD_PER = { USD: 1, USDC: 1, GHS: 0.065, NGN: 0.00065, KES: 0.0077,
 //   bettingShareOfSpend     betting stakes / all spend    -> scales by max(0, 1 - 2 * share): half the spend on betting = 0
 //   loanRepaymentsPerMonth  existing loan repayments      -> deducted from monthly income BEFORE the 30% share
 //   avgEodBalance           average end-of-day balance    -> computed and reported, not used in the limit yet
-export function computeLimit(events, { now = new Date(), repaidOnTime = 0, frozen = false, signals = null } = {}) {
+// seeker: true (a verified Seeker Genesis Token, see src/underwriter.js) multiplies both the 30% share and the cap by SEEKER_MULTIPLIER.
+export function computeLimit(events, { now = new Date(), repaidOnTime = 0, frozen = false, signals = null, seeker = false } = {}) {
   if (frozen) return { limitUsdc: 0, monthlyUsd: 0 };
   const recent = events.filter((e) => now - e.date <= 90 * DAY && USD_PER[e.currency]);
   const totalUsd = recent.reduce((s, e) => s + e.amount * (e.weight ?? 1) * USD_PER[e.currency], 0);
   const monthlyUsd = totalUsd / 3;
-  const cap = Math.min(HARD_CAP_USDC, FIRST_CAP_USDC * 2 ** Math.min(repaidOnTime, 6));
+  const boost = seeker ? SEEKER_MULTIPLIER : 1;
+  const cap = Math.min(HARD_CAP_USDC, FIRST_CAP_USDC * boost * 2 ** Math.min(repaidOnTime, 6));
   let affordable = monthlyUsd;
   let factor = 1;
   if (signals) {
@@ -29,6 +34,6 @@ export function computeLimit(events, { now = new Date(), repaidOnTime = 0, froze
     affordable = Math.max(0, monthlyUsd - (signals.loanRepaymentsPerMonth || 0) * cur);
     factor = (0.5 + 0.5 * (signals.incomeRegularity ?? 1)) * Math.max(0, 1 - 2 * (signals.bettingShareOfSpend || 0));
   }
-  const limitUsdc = Math.floor(Math.min(cap, affordable * SHARE * factor) * 100) / 100;
+  const limitUsdc = Math.floor(Math.min(cap, affordable * SHARE * boost * factor) * 100) / 100;
   return { limitUsdc, monthlyUsd: Math.round(monthlyUsd * 100) / 100 };
 }
