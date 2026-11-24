@@ -26,7 +26,8 @@ export class JobStatus {
   // caller does not wait for the previous one.
   #do(code, what, fn) {
     const prev = this.tails.get(code) || Promise.resolve();
-    const p = prev.then(fn).catch((e) => this.log(`status store (${what}): ${String(e?.message || e).split('\n')[0]}`));
+    // Resolves true when the row was written, false when the store failed (logged, never thrown).
+    const p = prev.then(fn).then(() => true, (e) => { this.log(`status store (${what}): ${String(e?.message || e).split('\n')[0]}`); return false; });
     this.tails.set(code, p);
     p.then(() => { if (this.tails.get(code) === p) this.tails.delete(code); });
     return p;

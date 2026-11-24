@@ -83,7 +83,7 @@ async function teeEvidence(reportData) {
 
 // ---- the underwriter, with a key born inside the TD ----
 // The phone-number pepper is derived INSIDE the TD from the app's dstack key (stable across restarts and redeploys, never
-// exported, never in an env var). Without it the server does not start (only NOTCH_INSECURE_NO_PEPPER=1, local tests).
+// exported, never in an env var). Without it the server does not start; there is no insecure fallback in the CVM.
 let idPepper;
 try {
   idPepper = await cvmPepper(process.env, () => [dstack.v0, dstack.v1]);
@@ -118,7 +118,7 @@ const modeInfo = () => ({
     : 'production mode: DKIM is checked against real DNS',
   extraction: llm ? { mode: 'llm', model: llm.model } : { mode: 'rules' },
   // The public identity hash (PDA ["identity", id_hash]) is peppered with a secret that exists only inside the TD.
-  id_pepper: idPepper ? 'derived inside the TEE (dstack key derivation); never leaves it' : 'NONE (NOTCH_INSECURE_NO_PEPPER=1, test only)',
+  id_pepper: 'derived inside the TEE (dstack key derivation); never leaves it',
   // Honest disclosure: the AI reader is a normal hosted endpoint, outside this TEE, unless an operator points it at one.
   llm: {
     endpoint_host: llmHost,

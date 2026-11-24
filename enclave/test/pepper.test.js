@@ -102,7 +102,8 @@ test('cvmPepper: derives in the TEE and ignores an operator-supplied NOTCH_ID_PE
   assert.ok(said.some((m) => /ignored inside the CVM/.test(m)));
   await assert.rejects(cvmPepper({}, () => [broken('no socket')], { warn }), /refusing to start/);
   await assert.rejects(cvmPepper({ NOTCH_ID_PEPPER: GOOD }, () => [broken('no socket')], { warn }), /refusing to start/, 'no silent fallback to an env value');
-  const loud = []; assert.equal(await cvmPepper({ [INSECURE_FLAG]: '1' }, () => [broken('no socket')], { warn: (m) => loud.push(m) }), ''); assert.match(loud[0], /WARNING/);
+  const loud = []; await assert.rejects(cvmPepper({ [INSECURE_FLAG]: '1' }, () => [broken('no socket')], { warn: (m) => loud.push(m) }), /refusing to start/, 'the insecure flag never works inside the CVM');
+  assert.match(loud[0], /ignored inside the CVM/);
 });
 
 test('the Phala compose never carries a pepper or the insecure switch, and the build refuses if someone adds one', () => {

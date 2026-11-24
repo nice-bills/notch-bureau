@@ -98,7 +98,7 @@ export class Inbox {
   // `authedWallet`: the wallet a verified Supabase sign-in belongs to (handleInbox looks it up), or null.
   // `device` (optional): the SIWS device proof; `verifyDevice(wallet, proof)` checks it (Underwriter.verifyDevice) and throws
   // a DeviceProofError that is safe to show.
-  issue({ wallet, ts, signature, authedWallet = null, device, verifyDevice } = {}) {
+  async issue({ wallet, ts, signature, authedWallet = null, device, verifyDevice } = {}) {
     try {
       if (bs58.decode(String(wallet || '')).length !== 32) throw new Error('length');
     } catch {
@@ -134,8 +134,10 @@ export class Inbox {
     while (this.codes.has(code)) code = newCode();
     const token = crypto.randomBytes(16).toString('hex');
     const created = this.now();
-    this.codes.set(code, { wallet, tokenHash: sha(token).toString('hex'), created, expires: created + this.ttlMs, state: 'open', failures: 0, busy: false, result: null, deviceProven });
-    this.status.issued({ code, wallet, expiresAt: created + this.ttlMs }); // public row: address -> wallet; no token, no secret
+    this.codes.set(code, { wallet, tokenHash: sha(token).toString('hex'), created, expires: created + this.ttlMs, state: 'open', failures: 0, busy: false, result: null, deviceProven, deviceWallet: deviceProven ? wallet : null });
+    // Public row: address -> wallet; no token, no secret. Awaited so the phone's live view knows the address before the
+    // reply goes out. A store that is down does not block the inbox (the poll token still works): the reply says so.
+    const liveStatus = await this.status.issued({ code, wallet, expiresAt: created + this.ttlMs });
     return {
       status: 200,
       body: {
@@ -145,6 +147,7 @@ export class Inbox {
         expiresAt: new Date(created + this.ttlMs).toISOString(),
         domainConfigured: this.domainConfigured,
         ...(device !== undefined && device !== null ? { deviceProof: 'accepted' } : {}),
+        liveStatus: liveStatus !== false,
         note: 'Ask MTN MoMo to email your statement to this address. It works once.',
       },
     };
@@ -168,7 +171,7 @@ export class Inbox {
       await this.status.checking(code);
       let r;
       try {
-        r = await underwriter.submit(eml, entry.wallet, { recipient: `${code}@${this.domain}`, deviceProven: entry.deviceProven });
+        r = await underwriter.submit(eml, entry.wallet, { recipient: `${code}@${this.domain}`, deviceProven: entry.deviceProven === true && entry.deviceWallet === entry.wallet });
       } catch (e) {
         await this.status.refused(code, 'internal error');
         throw e;
@@ -254,7 +257,7 @@ export async function handleInbox(inbox, underwriter, req, url, send) {
       authedWallet = await inbox.auth.walletFor(bearer);
       if (!authedWallet) { send(401, { ok: false, reason: 'the Supabase sign-in is invalid, expired, or not a Solana wallet' }); return true; }
     }
-    const r = inbox.issue({ wallet: json.wallet, ts: json.ts, signature: json.signature, authedWallet, device, verifyDevice: (w, p) => underwriter.verifyDevice(w, p) });
+    const r = await inbox.issue({ wallet: json.wallet, ts: json.ts, signature: json.signature, authedWallet, device, verifyDevice: (w, p) => underwriter.verifyDevice(w, p) });
     send(r.status, r.body);
     return true;
   }

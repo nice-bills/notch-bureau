@@ -187,6 +187,38 @@ test('wallet proof: a signed request is accepted, a wrong or stale one is not, a
   assert.equal(await post({ wallet: w }), 401);
   assert.equal(await post({ wallet: w, ts, signature: sign(w, ts) }), 200);
   // and `new Inbox()` with no options is strict too
-  assert.equal(new Inbox().issue({ wallet: w }).status, 401);
+  assert.equal((await new Inbox().issue({ wallet: w })).status, 401);
   assert.equal(new Inbox().requireWalletSig, true);
+});
+
+test('a device proof stays bound to the wallet that made it: a changed inbox wallet loses the proof', async () => {
+  const kp = nacl.sign.keyPair();
+  const w = bs58.encode(kp.publicKey);
+  const other = bs58.encode(nacl.sign.keyPair().publicKey);
+  const inbox = new Inbox({ domain: 'inbox.test', secret: 's3cret', insecureAllowUnsignedForTests: true });
+  const r = await inbox.issue({ wallet: w, device: { nonce: 'n' }, verifyDevice: (wallet) => assert.equal(wallet, w) });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.deviceProof, 'accepted');
+  assert.equal(r.body.liveStatus, true);
+  const code = r.body.address.split('@')[0];
+  const seen = [];
+  const fakeUnderwriter = { submit: async (_eml, wallet, opts) => { seen.push({ wallet, deviceProven: opts.deviceProven }); return { ok: false, reason: 'no income found' }; } };
+  // honest path: the proof applies to the wallet that signed it
+  await inbox.receive(fakeUnderwriter, { rcpt: r.body.address, eml: Buffer.from('x'), secret: 's3cret' });
+  assert.deepEqual(seen.at(-1), { wallet: w, deviceProven: true });
+  // a state mismatch (the entry now names another wallet): the deferred proof must NOT carry over
+  const entry = inbox.codes.get(code);
+  entry.wallet = other; entry.state = 'open'; entry.busy = false;
+  await inbox.receive(fakeUnderwriter, { rcpt: r.body.address, eml: Buffer.from('x'), secret: 's3cret' });
+  assert.deepEqual(seen.at(-1), { wallet: other, deviceProven: false });
+});
+
+test('issue reports when the public status row could not be written (the inbox still works)', async () => {
+  const w = bs58.encode(nacl.sign.keyPair().publicKey);
+  const failing = new Proxy({}, { get: () => async () => { throw new Error('store down'); } });
+  const inbox = new Inbox({ domain: 'inbox.test', insecureAllowUnsignedForTests: true, store: failing });
+  inbox.status.log = () => {};
+  const r = await inbox.issue({ wallet: w });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.liveStatus, false);
 });

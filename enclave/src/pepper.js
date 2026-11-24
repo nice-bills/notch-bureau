@@ -58,13 +58,14 @@ export async function pepperFromDstack(clients) {
   throw new PepperError(`could not derive the identity pepper inside the TEE (${String(last?.message || last)})`);
 }
 
-// The CVM's rule: derive it in the TEE; if dstack is unreachable, only the explicit insecure flag lets the server start.
+// The CVM's rule: derive it in the TEE, or do not start. There is NO insecure fallback here: an operator could set any
+// env var through Phala's encrypted settings, so the CVM ignores both NOTCH_ID_PEPPER and the insecure flag.
 export async function cvmPepper(env, clients, { warn = (m) => console.error(m) } = {}) {
   if (env.NOTCH_ID_PEPPER) warn('notch: NOTCH_ID_PEPPER is ignored inside the CVM: the pepper is derived inside the TEE and never leaves it');
+  if (env[INSECURE_FLAG]) warn(`notch: ${INSECURE_FLAG} is ignored inside the CVM: it never starts without the TEE-derived pepper`);
   try {
     return await pepperFromDstack(clients());
   } catch (e) {
-    if (env[INSECURE_FLAG] === '1') { warn(insecureBanner()); return ''; }
-    throw new PepperError(`refusing to start: ${e.message}. Set ${INSECURE_FLAG}=1 only for a local test.`);
+    throw new PepperError(`refusing to start: ${e.message}`);
   }
 }
