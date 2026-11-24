@@ -81,6 +81,7 @@ test('check_credit buckets what is LEFT after a draw, and reports on-time repaym
   let r = await sendB(ctx, await checkIx(ctx.borrower.address, 60n * USDC, 60));
   assert.ok(r.ok, r.logs);
   assert.deepEqual([decode(r.returnData).bucket, decode(r.returnData).onTime], [1, 0]); // 90 left
+  advance(ctx, 31); // held long enough for the repayment to count
   assert.ok((await sendB(ctx, repayIx(ctx, U(30.6)))).ok);
   r = await sendB(ctx, await checkIx(ctx.borrower.address, 60n * USDC, 60));
   assert.ok(r.ok, r.logs);
@@ -238,13 +239,13 @@ test('hostel: one booking per student', async () => {
   assert.equal(r.ok, false);
 });
 
-// ---------- legacy lines (created before posted_at existed: 98 bytes instead of 106) ----------
+// ---------- legacy lines (created before posted_at existed: 98 bytes instead of the current 154) ----------
 
 test('legacy 98-byte lines keep working: draw, repay and default still save; check_credit reads them as posted long ago', async () => {
   const ctx = await bureauSetup();
   await open(ctx, 50);
   const a = ctx.svm.getAccount(ctx.line);
-  assert.equal(a.data.length, 106);
+  assert.equal(a.data.length, 154);
   ctx.svm.setAccount({ ...a, data: a.data.slice(0, 98), space: 98n });
   assert.equal(ctx.svm.getAccount(ctx.line).data.length, 98);
   assert.equal(readLine(ctx.svm, ctx.line).limit, 50n * USDC);
@@ -260,7 +261,10 @@ test('legacy 98-byte lines keep working: draw, repay and default still save; che
   assert.ok(r.ok, r.logs);
   assert.equal(decode(r.returnData).bucket, 0); // 20 left
   assert.ok((await sendB(ctx, repayIx(ctx, U(30.6)))).ok);
-  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 1);
+  // A line without the trailing fields has no draw clock, so it cannot prove how long the loan was held: the repayment
+  // is made in full but is not a track-record entry until the next post_limit grows the line (see tests/audit.test.js).
+  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 0);
+  assert.equal(ctx.svm.getAccount(ctx.line).data.length, 98);
 
   assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(6)))).ok);
   assert.ok((await sendB(ctx, drawIx(ctx, 30n * USDC))).ok);

@@ -26,6 +26,21 @@ pub const MIN_LOAN_TERM_S: i64 = 10;
 /// during the cooldown) before the claim unlocks. It is deliberately a small fraction of
 /// `LOAN_TERM_S` so honest lenders are not locked up for long.
 pub const WITHDRAW_COOLDOWN_S: i64 = 3 * 86_400;
+/// How long a matured withdraw request stays claimable (from `unlock_ts`). After that the request has lapsed:
+/// `claim_withdraw` refuses it, the lender cancels (shares come back and earn normally) and must file again, which
+/// costs a new cooldown. See WITHDRAWALS in the math block below.
+pub const CLAIM_WINDOW_S: i64 = 2 * 86_400;
+/// A repayment only counts as a track-record entry (`repaid_on_time`) when ALL of these hold:
+///   * principal repaid >= `min(limit, max(MIN_COUNTED_PRINCIPAL, limit / 4))`: a real loan, not dust;
+///   * the loan (counted from the LAST draw) was held at least `MIN_COUNTED_HOLD_S`: no draw+repay in one
+///     transaction or one slot;
+///   * it is the first counted repayment under the current posted record (`line.last_nonce > counted_nonce`):
+///     at most one per posted limit, and a posted limit needs a fresh DKIM-signed statement.
+pub const MIN_COUNTED_PRINCIPAL: u64 = 5_000_000;
+pub const MIN_COUNTED_HOLD_S: i64 = 30;
+/// The first deposit into an empty tranche, and what a claim may leave behind, is at least this many base units
+/// (1 USDC). Stops the "1 micro-unit first depositor, then compound the share price" trick.
+pub const MIN_FIRST_DEPOSIT: u64 = 1_000_000;
 
 // ===========================================================================================
 // SENIOR / JUNIOR TRANCHES (pool v2)
@@ -64,10 +79,33 @@ pub const WITHDRAW_COOLDOWN_S: i64 = 3 * 86_400;
 //   A loss can push the ratio below the floor; then senior deposits and junior exits stay refused
 //   until junior is topped up. Senior exits are never blocked by the guard.
 //
-// WITHDRAWALS are the same two-step escrow as before, per tranche (escrow/request PDAs are keyed by
-// the tranche's share mint). The claim is priced at THAT tranche's NAV at claim time, so a default
-// marked during the cooldown is priced in. A payout is capped by idle lender cash and by the
-// tranche's own NAV.
+// WITHDRAWALS are a two-step escrow, per tranche (escrow/request PDAs are keyed by the tranche's share
+// mint): `request_withdraw` -> 3-day cooldown -> `claim_withdraw` inside a 2-day CLAIM WINDOW.
+//   * The request LOCKS the price: it stores `nav` and `supply` of the tranche at request time.
+//   * The claim pays   min( shares * nav_request / supply_request , shares * nav_claim / supply_claim ).
+//     So a share in escrow EARNS NOTHING (fees that arrive after the request are ignored: the lender gets at most the
+//     request-time price) and CARRIES LOSSES (a default marked after the request lowers the claim-time price and the
+//     lender gets that lower one). The money a leaving lender does not take (forfeited fees) stays in the tranche
+//     NAV and goes to the lenders who stay. Escrowed shares are still in the supply, so the price is not distorted.
+//   * The claim must land in [unlock_ts, unlock_ts + CLAIM_WINDOW_S]. After that the request has lapsed:
+//     `claim_withdraw` fails with ClaimWindowClosed, `cancel_withdraw` hands the shares back (they earn normally again)
+//     and a new request needs a new cooldown. WHY: before this, a matured request never expired and kept earning in
+//     escrow, so a lender could keep one armed for ever, earn full yield, and leave at full price the moment any loan
+//     went overdue (before anyone had called `mark_default`). Now an armed request is dead after 2 days, it earns
+//     nothing while armed, and the cooldown (3 days) is again the time a keeper has to mark an overdue loan.
+//   * HONEST LIMIT: a loss only reaches the price when `mark_default` runs. A lender whose claim lands in the
+//     minutes between "a loan went overdue" and "the keeper marked it" still leaves at the pre-loss price. That window
+//     is the keeper's latency (about an hour, hourly keeper), no longer unbounded; the lender also has to time a
+//     2-day window for it.
+//   A payout is capped by idle lender cash and by the tranche's own NAV, and a junior exit may not break the floor.
+//   A claim may not leave a tranche with a dust supply (0 < remaining supply < MIN_FIRST_DEPOSIT), and the first
+//   deposit into an empty tranche is at least MIN_FIRST_DEPOSIT (1 USDC): that closes the first-depositor
+//   "tiny stake + compounding fees" price-inflation path.
+//
+// TRACK RECORD (`repaid_on_time`, read by the underwriter and `check_credit`). A repayment counts only when it is a
+// real loan: principal >= min(limit, max(5 USDC, limit/4)), held >= 30 s since the last draw, and at most once per
+// posted record (`counted_nonce`). Drawing while a loan is overdue is refused (`LoanOverdue`). A wallet is pinned to ONE
+// mobile-money identity (`id_hash` in the line), so one wallet cannot stack several phone numbers.
 //
 // DEAD TRANCHE: a tranche whose NAV hit zero while shares exist refuses deposits (nobody can buy
 // into a hole that existing zero-value shares would share). Dust note: if a tranche's supply is
@@ -197,7 +235,17 @@ pub mod notch {
             }
         }
 
-        let line = &mut ctx.accounts.line;
+        // Open the line: create it, or grow one made before the trailing fields existed (the borrower's own post pays the
+        // few lamports of extra rent), then work on it as a plain `CreditLine` and save it at the end.
+        let line_info = ctx.accounts.line.to_account_info();
+        let mut line = open_line(
+            &line_info,
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            &r.wallet,
+            ctx.bumps.line,
+        )?;
+        let line = &mut line;
         if line.wallet == Pubkey::default() {
             line.wallet = r.wallet;
             line.bump = ctx.bumps.line;
@@ -205,10 +253,20 @@ pub mod notch {
         require!(!line.defaulted, NotchError::Defaulted);
         // Per-wallet ordering: an older signed record can't overwrite a newer one.
         require!(r.nonce > line.last_nonce, NotchError::StaleRecord);
+        // One wallet, ONE mobile-money identity: a wallet cannot stack several phone numbers (each would add its own
+        // income). A record with no identity (id_hash all zero) leaves the pin alone.
+        if r.id_hash != [0u8; 32] {
+            require!(
+                line.ext.id_hash == [0u8; 32] || line.ext.id_hash == r.id_hash,
+                NotchError::WalletIdentityPinned
+            );
+            line.ext.id_hash = r.id_hash;
+        }
         line.last_nonce = r.nonce;
         line.limit = r.limit;
         line.expiry = r.expiry;
-        line.posted_at = now;
+        line.ext.posted_at = now;
+        save_line(&line_info, line)?;
         ctx.accounts.dedupe.used_at = now;
         emit!(LimitPosted {
             wallet: r.wallet,
@@ -238,7 +296,7 @@ pub mod notch {
         let available = line.limit.saturating_sub(line.drawn);
         require!(available >= min_available, NotchError::InsufficientCredit);
         require!(
-            now.saturating_sub(line.posted_at) <= max_age_s,
+            now.saturating_sub(line.ext.posted_at) <= max_age_s,
             NotchError::StaleRecord
         );
         let out = CreditCheck {
@@ -267,6 +325,9 @@ pub mod notch {
         // token donation to the vault cannot move it (no first-depositor inflation attack).
         let nav = pool.nav(t);
         let supply = ctx.accounts.share_mint.supply;
+        if supply == 0 {
+            require!(amount >= MIN_FIRST_DEPOSIT, NotchError::DepositTooSmall);
+        }
         let shares = if supply == 0 { amount } else {
             require!(nav > 0, NotchError::InvalidPoolState);
             let s = (amount as u128).checked_mul(supply as u128).ok_or(NotchError::MathOverflow)?
@@ -324,10 +385,14 @@ pub mod notch {
         do_draw(&mut ctx.accounts, amount, term_s)
     }
 
-    /// Pay back. Clearing the balance before the due date counts as an on-time repayment,
-    /// which the underwriter reads to raise the next limit cap.
+    /// Pay back. Clearing the balance before the due date counts as an on-time repayment, which the underwriter
+    /// reads to raise the next limit cap, but only a REAL one: see MIN_COUNTED_PRINCIPAL / MIN_COUNTED_HOLD_S and the
+    /// "once per posted record" rule at the top of this file. A repayment that does not qualify still repays in full.
     pub fn repay(ctx: Context<Repay>, amount: u64) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
+        // A line saved before the trailing fields existed has no room for them: it cannot earn a count until its next
+        // `post_limit` grows it (it can still repay).
+        let full_len = ctx.accounts.line.to_account_info().data_len() >= 8 + CreditLine::INIT_SPACE;
         let line = &mut ctx.accounts.line;
         require!(amount > 0, NotchError::InvalidAmount);
         require!(line.drawn > 0, NotchError::NothingToRepay);
@@ -365,7 +430,12 @@ pub mod notch {
         line.borrower_deposit = 0;
         pool.borrower_deposits = pool.borrower_deposits.checked_sub(deposit_return).ok_or(NotchError::MathOverflow)?;
         if now <= line.due {
-            line.repaid_on_time = line.repaid_on_time.checked_add(1).ok_or(NotchError::MathOverflow)?;
+            let counts = counts_as_track_record(line, principal, now, full_len);
+            if counts {
+                line.repaid_on_time = line.repaid_on_time.checked_add(1).ok_or(NotchError::MathOverflow)?;
+                line.ext.counted_nonce = line.last_nonce;
+            }
+            emit!(Repaid { wallet: line.wallet, principal, counted: counts });
         } else {
             line.repaid_late = line.repaid_late.checked_add(1).ok_or(NotchError::MathOverflow)?;
         }
@@ -414,7 +484,11 @@ pub mod notch {
     pub fn request_withdraw(ctx: Context<RequestWithdraw>, shares: u64) -> Result<()> {
         require!(shares > 0 && shares <= ctx.accounts.share_account.amount, NotchError::InvalidAmount);
         let now = Clock::get()?.unix_timestamp;
+        // Lock the price now: the claim can never pay more than this (escrowed shares earn nothing).
+        let t = ctx.accounts.pool.tranche_of(&ctx.accounts.share_mint.key())?;
         let r = &mut ctx.accounts.request;
+        r.nav_at_request = ctx.accounts.pool.nav(t);
+        r.supply_at_request = ctx.accounts.share_mint.supply;
         r.lender = ctx.accounts.lender.key();
         r.shares = shares;
         r.unlock_ts = now.checked_add(WITHDRAW_COOLDOWN_S).ok_or(NotchError::MathOverflow)?;
@@ -442,16 +516,32 @@ pub mod notch {
     pub fn claim_withdraw(ctx: Context<ClaimWithdraw>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         require!(now >= ctx.accounts.request.unlock_ts, NotchError::CooldownActive);
+        // A matured request lapses after the claim window: cancel (shares come back) and file again.
+        require!(
+            now <= ctx.accounts.request.unlock_ts.checked_add(CLAIM_WINDOW_S).ok_or(NotchError::MathOverflow)?,
+            NotchError::ClaimWindowClosed
+        );
         let shares = ctx.accounts.request.shares;
         let pool = &mut ctx.accounts.pool;
         pool.check_invariant()?;
         let t = pool.tranche_of(&ctx.accounts.share_mint.key())?;
         // Escrowed shares are still in `supply`, so the price per share is unaffected by the escrow.
         let nav = pool.nav(t);
-        let amount = (shares as u128).checked_mul(nav as u128).ok_or(NotchError::MathOverflow)?
+        let at_claim = (shares as u128).checked_mul(nav as u128).ok_or(NotchError::MathOverflow)?
             .checked_div(ctx.accounts.share_mint.supply as u128).ok_or(NotchError::MathOverflow)?;
-        let amount = u64::try_from(amount).map_err(|_| NotchError::MathOverflow)?;
+        // The price locked at request time: shares in escrow earn nothing. Paying the LOWER of the two prices also
+        // makes them carry any loss marked since. The difference stays in the NAV for the lenders who stay.
+        let req = &ctx.accounts.request;
+        let at_request = if req.supply_at_request == 0 { at_claim } else {
+            (shares as u128).checked_mul(req.nav_at_request as u128).ok_or(NotchError::MathOverflow)?
+                .checked_div(req.supply_at_request as u128).ok_or(NotchError::MathOverflow)?
+        };
+        let amount = u64::try_from(at_claim.min(at_request)).map_err(|_| NotchError::MathOverflow)?;
         require!(amount > 0, NotchError::InvalidAmount);
+        // Never leave a dust supply behind (first-depositor inflation path): all of it goes, or a real stake stays.
+        let escrowed_now = ctx.accounts.escrow.amount;
+        let left = ctx.accounts.share_mint.supply.checked_sub(escrowed_now).ok_or(NotchError::MathOverflow)?;
+        require!(left == 0 || left >= MIN_FIRST_DEPOSIT, NotchError::DustSupply);
         // Only idle lender cash can leave; USDC out on loan and borrower deposits cannot.
         require!(amount <= pool.idle, NotchError::InsufficientLiquidity);
         // A junior exit may not drop junior below the floor (senior must keep its cushion).
@@ -535,9 +625,12 @@ pub mod notch {
 fn do_draw(acc: &mut Draw, amount: u64, term_s: i64) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     require!(amount > 0, NotchError::InvalidAmount);
+    let full_len = acc.line.to_account_info().data_len() >= 8 + CreditLine::INIT_SPACE;
     let line = &mut acc.line;
     require!(!line.defaulted, NotchError::Defaulted);
     require!(now < line.expiry, NotchError::RecordExpired);
+    // No new money while any loan of this borrower is past due (it is only a matter of time before the keeper marks it).
+    require!(line.drawn == 0 || now <= line.due, NotchError::LoanOverdue);
     let drawn = line
         .drawn
         .checked_add(amount)
@@ -554,6 +647,9 @@ fn do_draw(acc: &mut Draw, amount: u64, term_s: i64) -> Result<()> {
         line.due = now.checked_add(term_s).ok_or(NotchError::MathOverflow)?;
     }
     line.drawn = drawn;
+    if full_len {
+        line.ext.last_draw_at = now; // the hold clock for the track-record rule restarts at every draw
+    }
     acc.pool.idle = acc.pool.idle.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
     acc.pool.total_lent = acc.pool.total_lent.checked_add(amount).ok_or(NotchError::MathOverflow)?;
     acc.pool.outstanding = acc.pool.outstanding.checked_add(amount).ok_or(NotchError::MathOverflow)?;
@@ -620,33 +716,130 @@ pub struct CreditLine {
     pub bump: u8,
     /// First-loss deposit held in the vault for this borrower. Not lender money.
     pub borrower_deposit: u64,
-    /// Unix time the current signed record was posted (`post_limit`). Appended last so older readers keep working.
-    /// Lines created before this field existed are 8 bytes shorter: they read as 0 here and, because a zero is
-    /// never written, they can still be saved. (`check_credit` treats 0 as "posted long ago".)
-    #[borsh(deserialize_with = "read_trailing_i64", serialize_with = "write_trailing_i64")]
-    pub posted_at: i64,
+    /// Trailing fields, appended in later versions. A line saved before they existed is shorter: they read as zero
+    /// there, and `post_limit` grows the account the next time a record is posted (see `LineExt`).
+    #[borsh(deserialize_with = "read_ext", serialize_with = "write_ext")]
+    pub ext: LineExt,
 }
 
-/// Read the last field; a legacy account that ends before it reads as 0.
-fn read_trailing_i64<R: std::io::Read>(reader: &mut R) -> std::io::Result<i64> {
-    let mut b = [0u8; 8];
+/// The tail of a `CreditLine` (offset 98 in the account data after the discriminator), 56 bytes:
+///   posted_at       unix time the current signed record was posted (`check_credit` treats 0 as "posted long ago");
+///   last_draw_at    unix time of the latest draw (the hold clock for the track-record rule);
+///   counted_nonce   the `last_nonce` under which a repayment was last counted (once per posted record);
+///   id_hash         the mobile-money identity this wallet is pinned to (all zero = none yet).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
+pub struct LineExt {
+    pub posted_at: i64,
+    pub last_draw_at: i64,
+    pub counted_nonce: u64,
+    pub id_hash: [u8; 32],
+}
+
+/// Load the borrower's line for `post_limit`: create the PDA if it does not exist yet, grow it (topping up the rent
+/// from `payer`) if it was made before the trailing fields existed, and return it deserialized.
+fn open_line<'info>(
+    info: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    borrower: &Pubkey,
+    bump: u8,
+) -> Result<CreditLine> {
+    let want = 8 + CreditLine::INIT_SPACE;
+    let rent = Rent::get()?;
+    let topup = |info: &AccountInfo<'info>| -> Result<()> {
+        let need = rent.minimum_balance(want).saturating_sub(info.lamports());
+        if need > 0 {
+            anchor_lang::system_program::transfer(
+                CpiContext::new(
+                    system_program.key(),
+                    anchor_lang::system_program::Transfer { from: payer.clone(), to: info.clone() },
+                ),
+                need,
+            )?;
+        }
+        Ok(())
+    };
+    if info.owner == &anchor_lang::system_program::ID {
+        // Not created yet (it may already hold lamports somebody sent it, like Anchor's own `init`).
+        let seeds: &[&[u8]] = &[b"line", borrower.as_ref(), &[bump]];
+        topup(info)?;
+        anchor_lang::system_program::allocate(
+            CpiContext::new_with_signer(system_program.key(), anchor_lang::system_program::Allocate { account_to_allocate: info.clone() }, &[seeds]),
+            want as u64,
+        )?;
+        anchor_lang::system_program::assign(
+            CpiContext::new_with_signer(system_program.key(), anchor_lang::system_program::Assign { account_to_assign: info.clone() }, &[seeds]),
+            &crate::ID,
+        )?;
+        let mut data = info.try_borrow_mut_data()?;
+        data[..8].copy_from_slice(&CreditLine::DISCRIMINATOR);
+    } else {
+        require_keys_eq!(*info.owner, crate::ID, anchor_lang::error::ErrorCode::AccountOwnedByWrongProgram);
+        if info.data_len() < want {
+            topup(info)?;
+            info.resize(want)?;
+        }
+    }
+    let data = info.try_borrow_data()?;
+    CreditLine::try_deserialize(&mut &data[..])
+}
+
+/// Write the line back (discriminator + fields) into its account.
+fn save_line(info: &AccountInfo, line: &CreditLine) -> Result<()> {
+    let mut data = info.try_borrow_mut_data()?;
+    let mut w: &mut [u8] = &mut data[..];
+    line.try_serialize(&mut w)
+}
+
+/// Read the tail; a legacy account that ends early reads the missing bytes as zero.
+fn read_ext<R: std::io::Read>(reader: &mut R) -> std::io::Result<LineExt> {
+    let mut b = [0u8; 56];
     let mut n = 0;
-    while n < 8 {
+    while n < b.len() {
         match reader.read(&mut b[n..])? {
             0 => break,
             k => n += k,
         }
     }
-    Ok(if n == 8 { i64::from_le_bytes(b) } else { 0 })
+    Ok(LineExt {
+        posted_at: i64::from_le_bytes(b[0..8].try_into().unwrap()),
+        last_draw_at: i64::from_le_bytes(b[8..16].try_into().unwrap()),
+        counted_nonce: u64::from_le_bytes(b[16..24].try_into().unwrap()),
+        id_hash: b[24..56].try_into().unwrap(),
+    })
 }
 
-/// Write the last field only when it is non-zero. New accounts are zero-filled, so skipping a zero is the same
-/// bytes, and it keeps a legacy (shorter) account from overflowing its buffer when the line is saved.
-fn write_trailing_i64<W: std::io::Write>(v: &i64, writer: &mut W) -> std::io::Result<()> {
-    if *v != 0 {
-        writer.write_all(&v.to_le_bytes())?;
+/// Write the tail as far as the account has room. A legacy (shorter) account can still be saved as long as the bytes
+/// that do not fit are zero (they would read back as zero anyway); non-zero bytes that do not fit are an error, never
+/// silently dropped. (`post_limit` grows the account before it sets any of them, so this only guards the other paths.)
+fn write_ext<W: std::io::Write>(v: &LineExt, writer: &mut W) -> std::io::Result<()> {
+    let mut b = [0u8; 56];
+    b[0..8].copy_from_slice(&v.posted_at.to_le_bytes());
+    b[8..16].copy_from_slice(&v.last_draw_at.to_le_bytes());
+    b[16..24].copy_from_slice(&v.counted_nonce.to_le_bytes());
+    b[24..56].copy_from_slice(&v.id_hash);
+    let mut done = 0;
+    while done < b.len() {
+        match writer.write(&b[done..])? {
+            0 => break,
+            k => done += k,
+        }
+    }
+    if b[done..].iter().any(|x| *x != 0) {
+        return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "credit line account too small for its trailing fields"));
     }
     Ok(())
+}
+
+/// Does a full repayment of `principal` count as a track-record entry? (See MIN_COUNTED_PRINCIPAL.)
+fn counts_as_track_record(line: &CreditLine, principal: u64, now: i64, full_len: bool) -> bool {
+    if !full_len || line.ext.last_draw_at == 0 {
+        return false; // a legacy line with no draw clock cannot prove how long the loan was held
+    }
+    let floor = (line.limit / 4).max(MIN_COUNTED_PRINCIPAL).min(line.limit);
+    principal >= floor
+        && now.saturating_sub(line.ext.last_draw_at) >= MIN_COUNTED_HOLD_S
+        && line.last_nonce > line.ext.counted_nonce
 }
 
 /// The v2 lender pool. PDA ["pool-v2"]. The first seven fields keep the v1 `TranchePool` byte layout
@@ -753,6 +946,9 @@ pub struct WithdrawRequest {
     pub unlock_ts: i64,
     pub bump: u8,
     pub escrow_bump: u8,
+    /// The tranche NAV and share supply when the request was filed: the claim never pays above this price.
+    pub nav_at_request: u64,
+    pub supply_at_request: u64,
 }
 
 #[account]
@@ -829,6 +1025,14 @@ pub struct CheckCredit<'info> {
     pub line: UncheckedAccount<'info>,
 }
 
+/// Emitted by `repay`: whether this repayment counted as a track-record entry.
+#[event]
+pub struct Repaid {
+    pub wallet: Pubkey,
+    pub principal: u64,
+    pub counted: bool,
+}
+
 #[event]
 pub struct LimitPosted {
     pub wallet: Pubkey,
@@ -883,8 +1087,10 @@ pub struct PostLimit<'info> {
     pub borrower: UncheckedAccount<'info>,
     #[account(seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, Config>,
-    #[account(init_if_needed, payer = payer, space = 8 + CreditLine::INIT_SPACE, seeds = [b"line", borrower.key().as_ref()], bump)]
-    pub line: Account<'info, CreditLine>,
+    /// CHECK: PDA ["line", borrower]. `post_limit` creates it, or grows a line made before the trailing fields existed
+    /// (an `init_if_needed` account would refuse an old, shorter line), then reads and writes it as a `CreditLine`.
+    #[account(mut, seeds = [b"line", borrower.key().as_ref()], bump)]
+    pub line: UncheckedAccount<'info>,
     /// `init` fails if this email was already used.
     #[account(init, payer = payer, space = 8 + Dedupe::INIT_SPACE, seeds = [b"dedupe", dedupe_seed(&record)], bump)]
     pub dedupe: Account<'info, Dedupe>,
@@ -1110,4 +1316,14 @@ pub enum NotchError {
     DeviceBound,
     #[msg("Record carries a Seeker phone but the device account was not provided")]
     DeviceRequired,
+    #[msg("This withdraw request is past its claim window: cancel it and file a new one")]
+    ClaimWindowClosed,
+    #[msg("A loan is past due: repay it before borrowing again")]
+    LoanOverdue,
+    #[msg("This wallet is already pinned to a different mobile-money identity")]
+    WalletIdentityPinned,
+    #[msg("The first deposit into an empty tranche must be at least 1 USDC")]
+    DepositTooSmall,
+    #[msg("The withdrawal would leave a dust supply of shares behind")]
+    DustSupply,
 }

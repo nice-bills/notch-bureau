@@ -30,13 +30,15 @@ import {
 import { encodeRecord } from '../enclave/src/record.js';
 
 const PROGRAM = address(fs.readFileSync(new URL('../Anchor.toml', import.meta.url), 'utf8').match(/notch = "(\w+)"/)[1]);
-const SO = new URL('../target/deploy/notch.so', import.meta.url).pathname;
+// NOTCH_SO lets the audit tests run against an older build (to show they fail before a fix).
+const SO = process.env.NOTCH_SO || new URL('../target/deploy/notch.so', import.meta.url).pathname;
 const ED25519 = address('Ed25519SigVerify111111111111111111111111111');
 const IX_SYSVAR = address('Sysvar1nstructions1111111111111111111111111');
 const SYSTEM = address('11111111111111111111111111111111');
 const enc = getAddressEncoder();
 const USDC = 1_000_000n;
 const COOLDOWN = 3 * 86_400; // WITHDRAW_COOLDOWN_S in programs/notch/src/lib.rs
+const CLAIM_WINDOW = 2 * 86_400; // CLAIM_WINDOW_S
 
 const disc = (name) => crypto.createHash('sha256').update(`global:${name}`).digest().subarray(0, 8);
 const u64 = (n) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; };
@@ -80,6 +82,8 @@ function readLine(svm, line) {
     limit: d.readBigUInt64LE(40), expiry: d.readBigInt64LE(48), drawn: d.readBigUInt64LE(56), due: d.readBigInt64LE(64),
     repaidOnTime: d.readUInt32LE(72), repaidLate: d.readUInt32LE(76), lastNonce: d.readBigUInt64LE(80), defaulted: d[88] === 1,
     deposit: d.readBigUInt64LE(90), postedAt: d.length >= 106 ? d.readBigInt64LE(98) : 0n,
+    lastDrawAt: d.length >= 114 ? d.readBigInt64LE(106) : 0n, countedNonce: d.length >= 122 ? d.readBigUInt64LE(114) : 0n,
+    idHash: d.length >= 154 ? d.subarray(122, 154).toString('hex') : null, dataLen: d.length,
   };
 }
 
@@ -110,6 +114,8 @@ async function setup({ seed = 500n * USDC, borrowerFunds = 10n * USDC, minJunior
   const borrower = await generateKeyPairSigner();
   const mint = await generateKeyPairSigner();
   for (const s of [admin, borrower]) svm.airdrop(s.address, lamports(10_000_000_000n));
+  // A realistic clock: LiteSVM starts at 0, but on a real chain `last_draw_at == 0` means "no draw clock" (a legacy line).
+  { const c = svm.getClock(); c.unixTimestamp = 1_800_000_000n; svm.setClock(c); }
   const now = svm.getClock().unixTimestamp;
 
   const mkAcct = async (owner, mintAddr = mint.address) => {
@@ -297,9 +303,9 @@ const readRequest = async (ctx, lender, tranche = 'junior') => {
   const a = ctx.svm.getAccount((await lenderPdas(lender, tranche)).request);
   if (!a.exists) return null;
   const d = Buffer.from(a.data);
-  return { lender: bs58.encode(d.subarray(8, 40)), shares: d.readBigUInt64LE(40), unlockTs: d.readBigInt64LE(48) };
+  return { lender: bs58.encode(d.subarray(8, 40)), shares: d.readBigUInt64LE(40), unlockTs: d.readBigInt64LE(48), navAtRequest: d.length >= 74 ? d.readBigUInt64LE(58) : null, supplyAtRequest: d.length >= 74 ? d.readBigUInt64LE(66) : null };
 };
 const exists = async (ctx, addr) => ctx.svm.getAccount(addr).exists;
 const open = async (ctx, limitUsdc = 50) => { const r = await postLimit(ctx, record(ctx, { limitUsdc, expiry: Number(ctx.now) + 90 * 86400 })); assert.ok(r.ok, r.logs); };
 
-export { drawWithTermIx, trancheOf, COOLDOWN, ED25519, IX_SYSVAR, PROGRAM, R, RS, SO, SYSTEM, U, USDC, W, WS, advance, cancelWithdrawIx, claimWithdrawIx, depositBorrowerIx, depositIx, disc, drawIx, ed25519Ix, enc, exists, fails, i64, lenderPdas, markDefaultIx, meta, mintSupply, newLender, open, pda, postLimit, readLine, readPool, readRequest, record, redeem, repayIx, requestWithdrawIx, send, sendB, sendL, setup, tokenBalance, u64, vecU8, warp, withdrawBorrowerIx };
+export { CLAIM_WINDOW, drawWithTermIx, trancheOf, COOLDOWN, ED25519, IX_SYSVAR, PROGRAM, R, RS, SO, SYSTEM, U, USDC, W, WS, advance, cancelWithdrawIx, claimWithdrawIx, depositBorrowerIx, depositIx, disc, drawIx, ed25519Ix, enc, exists, fails, i64, lenderPdas, markDefaultIx, meta, mintSupply, newLender, open, pda, postLimit, readLine, readPool, readRequest, record, redeem, repayIx, requestWithdrawIx, send, sendB, sendL, setup, tokenBalance, u64, vecU8, warp, withdrawBorrowerIx };

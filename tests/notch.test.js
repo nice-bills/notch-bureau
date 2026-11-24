@@ -41,6 +41,7 @@ test('underwriter-signed limit opens a line; borrower deposits, draws, repays pr
   assert.equal(tokenBalance(ctx.svm, ctx.borrowerAcct), U(10 - 6 + 30));
   fails(await sendB(ctx, drawIx(ctx, 21n * USDC)), 'OverLimit');
 
+  advance(ctx, 31); // a repayment only counts once the loan was held 30 s (MIN_COUNTED_HOLD_S)
   assert.ok((await sendB(ctx, repayIx(ctx, U(30.6)))).ok);
   const l = readLine(ctx.svm, ctx.line);
   assert.equal(l.drawn, 0n);
@@ -193,6 +194,7 @@ test('fee required: the line only clears when principal + 2% is paid', async () 
   assert.equal(l.drawn, 30n * USDC);
   assert.equal(l.repaidOnTime, 0);
   assert.equal(l.deposit, 6n * USDC);
+  advance(ctx, 31); // held long enough to count
   // Overpaying only charges the exact payoff.
   const before = tokenBalance(ctx.svm, ctx.borrowerAcct);
   assert.ok((await sendB(ctx, repayIx(ctx, 40n * USDC))).ok);
@@ -208,6 +210,7 @@ test('deposit is returned after on-time repayment; a late full repayment is coun
   assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(8)))).ok);
   assert.ok((await sendB(ctx, drawIx(ctx, 40n * USDC))).ok);
   const mid = tokenBalance(ctx.svm, ctx.borrowerAcct);
+  advance(ctx, 31); // held long enough to count
   assert.ok((await sendB(ctx, repayIx(ctx, U(40.8)))).ok);
   assert.equal(tokenBalance(ctx.svm, ctx.borrowerAcct), mid - U(40.8) + 8n * USDC);
   assert.equal(readLine(ctx.svm, ctx.line).deposit, 0n);
@@ -357,23 +360,24 @@ test('attack: first depositor + direct token donation to the vault cannot steal 
   const ctx = await setup({ seed: 0n });
   const attacker = ctx.lender;
   const victim = await newLender(ctx, 200n * USDC);
-  assert.ok((await sendL(ctx, attacker, depositIx(ctx, attacker, 1n))).ok); // 1 base unit -> 1 share
-  assert.equal(tokenBalance(ctx.svm, attacker.shares), 1n);
+  assert.ok((await sendL(ctx, attacker, depositIx(ctx, attacker, 1n))).ok === false); // below the 1 USDC first-deposit minimum
+  assert.ok((await sendL(ctx, attacker, depositIx(ctx, attacker, 1n * USDC))).ok); // smallest allowed first deposit -> 1:1 shares
+  assert.equal(tokenBalance(ctx.svm, attacker.shares), 1n * USDC);
   // Donate 100 USDC straight into the vault token account (inflates a balance-based share price).
   await ctx.mintTo(ctx.vault, 100n * USDC);
-  assert.equal(tokenBalance(ctx.svm, ctx.vault), 100n * USDC + 1n);
+  assert.equal(tokenBalance(ctx.svm, ctx.vault), 101n * USDC);
   const p = readPool(ctx.svm, ctx.pool);
-  assert.equal(p.idle + p.outstanding, 1n); // share price is untouched by the donation
+  assert.equal(p.idle + p.outstanding, 1n * USDC); // share price is untouched by the donation
 
   // The victim still gets full 1:1 shares (not rounded to ~0), and gets all of it back.
   assert.ok((await sendL(ctx, victim, depositIx(ctx, victim, 100n * USDC))).ok);
   assert.equal(tokenBalance(ctx.svm, victim.shares), 100n * USDC);
   assert.ok((await redeem(ctx, victim, 100n * USDC)).ok);
   assert.equal(tokenBalance(ctx.svm, victim.usdc), 200n * USDC);
-  // The attacker gets back only their own 1 unit; the donation is simply stranded.
+  // The attacker gets back only their own 1 USDC; the donation is simply stranded.
   const before = tokenBalance(ctx.svm, attacker.usdc);
-  assert.ok((await redeem(ctx, attacker, 1n)).ok);
-  assert.equal(tokenBalance(ctx.svm, attacker.usdc) - before, 1n);
+  assert.ok((await redeem(ctx, attacker, 1n * USDC)).ok);
+  assert.equal(tokenBalance(ctx.svm, attacker.usdc) - before, 1n * USDC);
   assert.equal(tokenBalance(ctx.svm, ctx.vault), 100n * USDC);
 });
 
@@ -504,7 +508,7 @@ test('cancel returns the escrowed shares (before or after unlock) and closes the
   assert.ok((await sendL(ctx, a, await requestWithdrawIx(ctx, a, 500n * USDC))).ok);
 });
 
-test('claim pays at the share price at claim time, not at request time; escrowed shares stay in supply', async () => {
+test('claim pays the LOWER of the request-time and claim-time price: escrowed shares earn nothing; they stay in supply', async () => {
   const ctx = await setup({ seed: 0n });
   const a = ctx.lender;
   const b = await newLender(ctx, 500n * USDC);
@@ -527,10 +531,11 @@ test('claim pays at the share price at claim time, not at request time; escrowed
   advance(ctx, COOLDOWN);
   const before = tokenBalance(ctx.svm, a.usdc);
   assert.ok((await sendL(ctx, a, await claimWithdrawIx(ctx, a))).ok);
-  assert.equal(tokenBalance(ctx.svm, a.usdc) - before, U(101)); // 100 shares * 1.01, not the 100 at request time
+  // The price was locked at request time (1.00): the 1.01 earned while A sat in escrow is NOT paid to A.
+  assert.equal(tokenBalance(ctx.svm, a.usdc) - before, 100n * USDC);
   assert.equal(mintSupply(ctx.svm, ctx.shareMint), 200n * USDC);
   const p = readPool(ctx.svm, ctx.pool);
-  assert.equal(p.idle + p.outstanding, 202n * USDC); // 303 after C's deposit, minus the 101 paid to A
+  assert.equal(p.idle + p.outstanding, 203n * USDC); // 303 after C's deposit, minus the 100 paid to A; the forfeited 1 stays
 });
 
 test('claim cannot exceed idle cash: it is rejected and the request stays open until liquidity returns', async () => {
@@ -548,7 +553,7 @@ test('claim cannot exceed idle cash: it is rejected and the request stays open u
   assert.ok((await sendB(ctx, repayIx(ctx, U(51)))).ok);
   const before = tokenBalance(ctx.svm, a.usdc);
   assert.ok((await sendL(ctx, a, await claimWithdrawIx(ctx, a))).ok);
-  assert.equal(tokenBalance(ctx.svm, a.usdc) - before, 501n * USDC); // principal back + 1 USDC fee
+  assert.equal(tokenBalance(ctx.svm, a.usdc) - before, 500n * USDC); // principal back; the 1 USDC fee earned in escrow stays with the pool
 });
 
 test('shares sent into someone\'s escrow cannot block their claim or cancel', async () => {

@@ -308,19 +308,19 @@ test('attack (senior tranche): first depositor + direct token donation cannot st
   assert.ok((await sendL(ctx, j, depositIx(ctx, j, 100n * USDC))).ok); // junior cushion so senior may deposit
   const attacker = await newLender(ctx, 10n * USDC);
   const victim = await newLender(ctx, 200n * USDC);
-  assert.ok((await sendL(ctx, attacker, depositIx(ctx, attacker, 1n, 'senior'))).ok); // 1 unit -> 1 senior share
-  assert.equal(bal(ctx, attacker.seniorShares), 1n);
+  assert.ok((await sendL(ctx, attacker, depositIx(ctx, attacker, 1n * USDC, 'senior'))).ok); // 1 USDC (the minimum first deposit) -> 1 senior share unit each
+  assert.equal(bal(ctx, attacker.seniorShares), 1n * USDC);
   await ctx.mintTo(ctx.vault, 100n * USDC); // donate straight into the vault
   const p = inv(ctx);
-  assert.equal(p.seniorNav, 1n); // senior price untouched by the donation
+  assert.equal(p.seniorNav, 1n * USDC); // senior price untouched by the donation
   assert.equal(p.juniorNav, 100n * USDC);
   assert.ok((await sendL(ctx, victim, depositIx(ctx, victim, 100n * USDC, 'senior'))).ok);
   assert.equal(bal(ctx, victim.seniorShares), 100n * USDC); // full 1:1 shares, not rounded to ~0
   assert.ok((await redeem(ctx, victim, 100n * USDC, 'senior')).ok);
   assert.equal(bal(ctx, victim.usdc), 200n * USDC);
   const before = bal(ctx, attacker.usdc);
-  assert.ok((await redeem(ctx, attacker, 1n, 'senior')).ok);
-  assert.equal(bal(ctx, attacker.usdc) - before, 1n); // only their own unit; the donation is stranded
+  assert.ok((await redeem(ctx, attacker, 1n * USDC, 'senior')).ok);
+  assert.equal(bal(ctx, attacker.usdc) - before, 1n * USDC); // only their own stake; the donation is stranded
   assert.equal(bal(ctx, ctx.vault), 200n * USDC); // 100 junior + 100 stranded donation
   assert.equal(pool(ctx).juniorNav, 100n * USDC);
 });
@@ -329,16 +329,16 @@ test('attack (junior tranche): donation cannot move the junior price or the seni
   const ctx = await setup({ seed: 0n });
   const attacker = await newLender(ctx, 10n * USDC);
   const victim = await newLender(ctx, 200n * USDC);
-  assert.ok((await sendL(ctx, attacker, depositIx(ctx, attacker, 1n))).ok);
+  assert.ok((await sendL(ctx, attacker, depositIx(ctx, attacker, 1n * USDC))).ok);
   await ctx.mintTo(ctx.vault, 100n * USDC);
-  assert.equal(pool(ctx).juniorNav, 1n);
+  assert.equal(pool(ctx).juniorNav, 1n * USDC);
   assert.ok((await sendL(ctx, victim, depositIx(ctx, victim, 100n * USDC))).ok);
   assert.equal(bal(ctx, victim.shares), 100n * USDC);
   assert.ok((await redeem(ctx, victim, 100n * USDC)).ok);
   assert.equal(bal(ctx, victim.usdc), 200n * USDC);
   const before = bal(ctx, attacker.usdc);
-  assert.ok((await redeem(ctx, attacker, 1n)).ok);
-  assert.equal(bal(ctx, attacker.usdc) - before, 1n);
+  assert.ok((await redeem(ctx, attacker, 1n * USDC)).ok);
+  assert.equal(bal(ctx, attacker.usdc) - before, 1n * USDC);
   assert.equal(bal(ctx, ctx.vault), 100n * USDC); // the donation, stranded
   inv(ctx);
 });
