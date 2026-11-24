@@ -51,6 +51,7 @@ const out = {
   perClass: Object.fromEntries(Object.entries(x.totals).map(([k, v]) => [k, { count: v.count, sum: v.amount }])),
   countedIncomeSum: x.countedTotal,
   regularPeerPayers: x.regularPeers,
+  netFlow: x.netFlow, // soft income (cash + peers) counted vs the real spending behind it (audit #6/#7): backing 1 = untouched
   cashRules: x.cash, // deposits, total, cycled (left again within 7 days), unmatchedCashOut, monthsWithCash, countable, counted (after the 50% weight)
   signals: x.signals,
   whatIf: {

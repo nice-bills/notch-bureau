@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { Underwriter, DEFAULT_TRUSTED } from '../src/underwriter.js';
+import { InboxedUnderwriter } from './fixtures/inboxed.js';
 import { verifyEmail } from '../src/dkim.js';
 import { pdfAttachments } from '../src/mime.js';
 import { parseStatements, identityHash, normalizeMsisdn } from '../src/statement.js';
@@ -16,7 +17,7 @@ import {
 } from './fixtures/emails.js';
 
 const newWallet = () => bs58.encode(nacl.sign.keyPair().publicKey);
-const make = (extra = {}) => new Underwriter({ resolver, llm: null, ...extra });
+const make = (extra = {}) => new InboxedUnderwriter({ resolver, llm: null, ...extra });
 const idOf = (reply) => Buffer.from(reply.message, 'base64').subarray(96, 128);
 // A statement with fixed transaction ids, so two emails can overlap.
 const fixed = (rows = syntheticRows()) => rows.map((r, i) => ({ ...r, txid: `9${String(100000000 + i)}` }));

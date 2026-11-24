@@ -14,6 +14,7 @@ import { INSECURE_FLAG, MIN_PEPPER_CHARS, PepperError, cvmPepper, pepperFromDsta
 import { identityHash, normalizeMsisdn } from '../src/statement.js';
 import { assertPepperSafe, composeText } from '../../deploy/phala/build-compose.mjs';
 import { Underwriter } from '../src/underwriter.js';
+import { InboxedUnderwriter } from './fixtures/inboxed.js';
 import { resolver, momoStatementEmail, randomMsisdn, syntheticRows } from './fixtures/emails.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -55,7 +56,7 @@ test('the pepper really changes the hash: the unpeppered hash of a number cannot
 
 test('an Underwriter with a pepper puts the peppered hash in the record, not the guessable one', async () => {
   const msisdn = randomMsisdn();
-  const mk = (idPepper) => new Underwriter({ resolver, llm: null, idPepper });
+  const mk = (idPepper) => new InboxedUnderwriter({ resolver, llm: null, idPepper });
   const rows = syntheticRows();
   const run = async (u) => {
     const w = bs58.encode(nacl.sign.keyPair().publicKey);

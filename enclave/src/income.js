@@ -48,6 +48,14 @@
 //   4. Evenness. A month may count for at most CASH_MONTH_CAP times the (lower) median month, so a token deposit in a
 //      second month cannot unlock one huge deposit.
 //
+// PEER RETURNS (audit #7: helper SIMs send money in and the holder sends it straight back). A peer credit whose money goes back
+// to the SAME counterparty within PEER_RETURN_WINDOW_MS (14 days, before or after the credit) counts only for the part that did not
+// go back (each debit used once). A return under PEER_RETURN_DEADZONE (10%) of the credit is change, not a loop.
+// SPEND BACKING (audits #6 and #7: anything that waits longer than the windows above). Soft income, cash deposits plus peer
+// transfers, may not exceed SPEND_BACKING (2x) the REAL spending of the window: merchant payments, bills, airtime, i.e. money that
+// left for goods. Transfers, cash-outs, savings, betting and loan repayments prove nothing and do not count as spending. So
+// cycling money through a wallet buys a limit only for as much real money as it spends. Result: `netFlow` {realSpend, backing}.
+//
 // BEHAVIOUR SIGNALS (computed here, used by src/underwrite.js, never leave the enclave): months with income, income
 // regularity, average end-of-day balance, share of spend on betting, existing loan repayments.
 import { USD_PER } from './underwrite.js';
@@ -69,6 +77,15 @@ export const CASH_WEIGHT = 0.5;
 export const CASH_MIN_MONTHS = 2;
 export const CASH_CYCLE_WINDOW_MS = 7 * DAY;
 export const CASH_MONTH_CAP = 2;
+// Audit #7 (peer income cycled through helper SIMs): a peer credit whose money goes back to the same counterparty within
+// PEER_RETURN_WINDOW_MS (before or after) counts only for the part that did NOT go back; returns under PEER_RETURN_DEADZONE of
+// the credit are change, not a loop. Audit #6/#7 (cash and peers): soft income (cash deposits + peer transfers) may not
+// exceed SPEND_BACKING x the REAL spending of the window (merchant payments, bills, airtime: money that left for goods and
+// services, not transfers, cash-outs, own accounts, betting or loans). A real earner spends most of what they earn, so this
+// never touches an honest statement, but a float that only ever moves between wallets backs nothing.
+export const PEER_RETURN_WINDOW_MS = 14 * DAY;
+export const PEER_RETURN_DEADZONE = 0.1;
+export const SPEND_BACKING = 2;
 export const PASS_MIN = 100; // in statement currency units (GHS); smaller credits are never judged pass-through
 export const WINDOW_DAYS = 90;
 export const BUCKETS = 3; // 30-day buckets in the window
@@ -206,6 +223,7 @@ export function finalizeIncome(rows, { now = new Date(), cashOwnMoney = 'bank' }
   }
   const regular = new Set([...months].filter(([, m]) => m.size >= 2).map(([k]) => k));
   const peerWeight = regular.size >= 2 ? PEER_WEIGHT : PEER_WEIGHT * SINGLE_PAYER_FACTOR;
+  const returned = peerReturns(rows);
 
   const cash = cashStep(rows, now, inWindow, { cashOwnMoney });
 
@@ -217,9 +235,20 @@ export function finalizeIncome(rows, { now = new Date(), cashOwnMoney = 'bank' }
     totals[cls].amount = round2(totals[cls].amount + r.amount);
     let weight = 0;
     if (cls === 'earned_income') weight = 1;
-    else if (cls === 'peer_transfer' && regular.has(counterparty(r))) weight = peerWeight;
+    else if (cls === 'peer_transfer' && regular.has(counterparty(r))) weight = peerWeight * (1 - (returned.get(r) || 0));
     else if (cls === 'cash_deposit') weight = cash.weights.get(r) || 0;
     r.weight = weight;
+  }
+  // Net-flow check over the window: soft income needs real spending behind it.
+  const soft = credits.filter((r) => (r.cls === 'peer_transfer' || r.cls === 'cash_deposit') && r.weight > 0 && inWindow(r));
+  const softCounted = sum(soft.map((r) => r.amount * r.weight));
+  const realSpend = sum(rows.filter((d) => d.amount < 0 && inWindow(d) && isRealSpend(d)).map((d) => -d.amount - (d.passUsed || 0)));
+  const spendLimit = SPEND_BACKING * Math.max(0, realSpend);
+  const backing = softCounted > spendLimit ? (softCounted > 0 ? spendLimit / softCounted : 0) : 1;
+  if (backing < 1) for (const r of soft) r.weight *= backing;
+  for (const r of credits) {
+    const cls = r.cls || 'unknown';
+    const weight = r.weight || 0;
     if (weight > 0 && inWindow(r)) {
       events.push({ amount: r.amount, currency: r.currency, date: r.date, kind: cls === 'earned_income' ? 'salary' : cls === 'cash_deposit' ? 'cash_deposit' : 'transfer_in', txKey: r.txKey, cls, weight });
     }
@@ -241,7 +270,42 @@ export function finalizeIncome(rows, { now = new Date(), cashOwnMoney = 'bank' }
     currency: rows[0]?.currency || 'GHS',
   };
   const counted = round2(sum(events.map((e) => e.amount * e.weight)));
-  return { events, totals, signals, countedTotal: counted, regularPeers: regular.size, cash: cash.summary };
+  return {
+    events, totals, signals, countedTotal: counted, regularPeers: regular.size, cash: cash.summary,
+    netFlow: { softCounted: round2(softCounted), realSpend: round2(realSpend), backing: round2(backing) },
+  };
+}
+
+// Money that left for goods and services: a payment to a merchant, a bill, airtime or data. NOT a person-to-person
+// transfer, a cash-out, a move to the holder's own accounts, betting or a loan repayment (none of those prove the holder
+// earned anything: they can all be undone or looped back).
+function isRealSpend(d) {
+  return d.dcls === 'spend' && !isCashOut(d) && !LEAVING_TYPE.test(d.type) && !d.untrusted;
+}
+
+// For each peer credit: the share (0..1) that went straight back to the same counterparty within PEER_RETURN_WINDOW_MS,
+// before or after it. Every debit is used once (oldest credit first), so splitting buys nothing. Shares under the dead zone
+// read as 0 (change, small repayments).
+function peerReturns(rows) {
+  const peers = rows.filter((r) => r.amount > 0 && r.cls === 'peer_transfer' && !r.untrusted && r.date).sort((a, b) => a.date - b.date);
+  const debits = rows.filter((r) => r.amount < 0 && r.date && r.party).sort((a, b) => a.date - b.date);
+  const used = new Map();
+  const out = new Map();
+  for (const c of peers) {
+    let need = c.amount;
+    for (const d of debits) {
+      if (need <= 0.004) break;
+      if (counterparty(d) !== counterparty(c) || Math.abs(d.date - c.date) > PEER_RETURN_WINDOW_MS) continue;
+      const free = -d.amount - (d.passUsed || 0) - (used.get(d) || 0);
+      if (free <= 0.004) continue;
+      const take = Math.min(free, need);
+      used.set(d, (used.get(d) || 0) + take);
+      need -= take;
+    }
+    const share = (c.amount - need) / c.amount;
+    out.set(c, share < PEER_RETURN_DEADZONE ? 0 : share);
+  }
+  return out;
 }
 
 // ---- cash deposits (see CASH RULES at the top) ------------------------------------------------------------------------

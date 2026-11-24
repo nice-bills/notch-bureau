@@ -97,13 +97,20 @@ export class Underwriter {
       if (!v.signedHeaders.includes('to')) return { ok: false, reason: 'DKIM signature does not cover the To header, so the recipient cannot be trusted' };
       if (!to.ok || !to.addresses.includes(String(recipient).toLowerCase())) return { ok: false, reason: 'the statement was not addressed to this inbox' };
     }
+    // Identity-bearing sources (a mobile-money statement binds a phone number to the wallet) are accepted ONLY through the
+    // statement inbox, where the DKIM-signed To header was just checked against THIS wallet's own address. Without that, anyone
+    // holding a copy of a victim's statement (a forwarded mail, a loan app that collected it) could post it first and bind the
+    // victim's number to their own wallet for ever (audit #3). Non-identity sources keep the direct path.
+    const kind = this.kinds.get(v.domain) || 'email-body';
+    if (kind === 'statement-pdf' && !recipient) {
+      return { ok: false, reason: 'a mobile-money statement is accepted only through your own Notch inbox address: ask MTN to mail it to the address you were given (it cannot be uploaded directly)' };
+    }
     const key = v.dedupe.toString('hex');
     if (this.used.has(key)) return { ok: false, reason: 'email already used' };
 
     const now = this.now();
     let got;
     try {
-      const kind = this.kinds.get(v.domain) || 'email-body';
       got = kind === 'statement-pdf' ? await this.#statement(eml, now)
         : kind === 'earn-payout' ? await this.#earn(eml, wallet, now)
           : await this.#plain(eml, now);

@@ -8,6 +8,7 @@ import bs58 from 'bs58';
 import { extractIncomeAuto, llmConfigFromEnv, parseLlmEvents, corroborateEvents } from '../src/llm-extract.js';
 import { extractIncome } from '../src/extract.js';
 import { Underwriter } from '../src/underwriter.js';
+import { InboxedUnderwriter } from './fixtures/inboxed.js';
 import { RECORD_LEN, verifyRecord } from '../src/record.js';
 import { signedEmail, resolver, creditNotice } from './fixtures/emails.js';
 
@@ -73,7 +74,7 @@ test('API key is sent as a bearer token when configured', async () => {
 
 test('LLM path feeds the underwriter and still signs a 96-byte record', async () => {
   const llm = await fakeLlm(llmJson([{ amount: 1250, currency: 'GHS', date: isoDaysAgo(2), kind: 'payout' }]));
-  const u = new Underwriter({ trusted: ['notice.test'], resolver, llm: configFor(llm.url) });
+  const u = new InboxedUnderwriter({ trusted: ['notice.test'], resolver, llm: configFor(llm.url) });
   const r = await u.submit(await signedEmail(creditNotice), wallet);
   assert.equal(r.ok, true, r.reason);
   assert.equal(r.extraction, 'llm');
@@ -104,7 +105,7 @@ test('prompt injection in the body cannot invent an income event', async () => {
   assert.deepEqual(out.events.map((e) => [e.amount, e.currency]), [[250, 'GHS']]);
   assert.equal(out.events.some((e) => e.amount === 1_000_000), false);
 
-  const u = new Underwriter({ trusted: ['notice.test'], resolver, llm: configFor(llm.url) });
+  const u = new InboxedUnderwriter({ trusted: ['notice.test'], resolver, llm: configFor(llm.url) });
   const r = await u.submit(await signedEmail({ ...creditNotice, body }), wallet);
   assert.equal(r.ok, true, r.reason);
   // Only GHS 250 counts: 250 * 0.065 / 3 * 0.3 = 1.625 -> 1.62, far below any USD 1M limit.

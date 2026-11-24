@@ -1,11 +1,11 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import nacl from 'tweetnacl';
-import bs58 from 'bs58';
 import { Underwriter, DEFAULT_TRUSTED } from './underwriter.js';
 import { llmConfigFromEnv } from './llm-extract.js';
 import { getCreditHistory, getDeviceOwner, getIdentityOwner } from './chain-history.js';
-import { deviceProofFrom, handleDevice, statusOf } from './device-http.js';
+import { handleDevice } from './device-http.js';
+import { handleUnderwrite } from './underwrite-http.js';
 import { makeRpc } from './chain-payout.js';
 import { reportDataFor } from './attest.js';
 import { Inbox, handleInbox } from './inbox.js';
@@ -26,7 +26,6 @@ import { PepperError, cvmPepper } from './pepper.js';
 
 const DEMO = process.env.DEMO_FIXTURES === '1';
 const PORT = Number(process.env.PORT || 8787);
-const MAX = 5 * 1024 * 1024;
 
 // ---- dstack: quote + info over /var/run/dstack.sock ----
 const sdkMod = await import('@phala/dstack-sdk');
@@ -161,7 +160,7 @@ const server = http.createServer(async (req, res) => {
   };
   const url = new URL(req.url, 'http://x');
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token, x-notch-device, authorization' });
+    res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token, x-notch-device, x-notch-ts, x-notch-sig, authorization' });
     return res.end();
   }
   if (req.method === 'GET' && url.pathname === '/health') return send(200, { ok: true });
@@ -191,30 +190,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'message/rfc822', 'access-control-allow-origin': '*' });
     return res.end(eml);
   }
-  if (req.method === 'POST' && url.pathname === '/underwrite') {
-    const wallet = req.headers['x-wallet'];
-    try {
-      bs58.decode(String(wallet || ''));
-    } catch {
-      return send(400, { ok: false, reason: 'x-wallet header must be a base58 address' });
-    }
-    let device;
-    try { device = deviceProofFrom(req); } catch (e) { return send(400, { ok: false, reason: e.message }); }
-    const chunks = [];
-    let size = 0;
-    for await (const c of req) {
-      size += c.length;
-      if (size > MAX) return send(413, { ok: false, reason: 'email too large' });
-      chunks.push(c);
-    }
-    try {
-      const r = await u.submit(Buffer.concat(chunks), String(wallet), { device });
-      return send(statusOf(r), r);
-    } catch (e) {
-      console.error('underwrite error:', e.message);
-      return send(500, { ok: false, reason: e.message });
-    }
-  }
+  if (await handleUnderwrite(u, req, url, send)) return;
   send(404, { ok: false, reason: 'not found' });
 });
 

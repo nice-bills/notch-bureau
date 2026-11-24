@@ -1,0 +1,19 @@
+✔ #6 repro: a float cashed in and sent to a helper 8 days later counts for nothing (it counted 55,000 GHS) (5.368246ms)
+✔ #6: waiting longer between cash in and the transfer out (20 and 35 days) does not help either (0.404594ms)
+✔ #6: the only way to count cash is to spend real money: income counted <= 2x real spending (1.461229ms)
+✔ #6: spending that proves nothing does not back income: transfers, cash-outs, own accounts, betting, loan repayments (0.760856ms)
+✔ #7 repro: helper SIMs that get their money back 4 days later count for nothing (they counted 10,000 GHS) (1.427076ms)
+✔ #7: coming back after 12 days is still a loop (inside the 14 day window) (0.86059ms)
+✔ #7: a loop that waits 20 days to give the money back is stopped by the net-flow check (no real spending behind it) (1.0903ms)
+✔ #7: money sent TO the payer shortly BEFORE it comes back (lending and being repaid) is not income either (0.37051ms)
+✔ #7 controls: honest regular peers and a trader who spends are NOT touched (0.520181ms)
+✔ #7: a partial return counts only what did not come back (0.381126ms)
+✔ the repro limit with a pumped cap: even repaidOnTime=6 cannot lift a limit that has no counted income (0.395724ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 96.366944

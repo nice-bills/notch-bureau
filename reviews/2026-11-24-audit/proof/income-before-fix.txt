@@ -1,0 +1,247 @@
+✖ #6 repro: a float cashed in and sent to a helper 8 days later counts for nothing (it counted 55,000 GHS) (6.731767ms)
+✖ #6: waiting longer between cash in and the transfer out (20 and 35 days) does not help either (0.443076ms)
+✖ #6: the only way to count cash is to spend real money: income counted <= 2x real spending (0.836424ms)
+✖ #6: spending that proves nothing does not back income: transfers, cash-outs, own accounts, betting, loan repayments (0.728519ms)
+✖ #7 repro: helper SIMs that get their money back 4 days later count for nothing (they counted 10,000 GHS) (1.249608ms)
+✖ #7: coming back after 12 days is still a loop (inside the 14 day window) (0.778805ms)
+✖ #7: a loop that waits 20 days to give the money back is stopped by the net-flow check (no real spending behind it) (0.726145ms)
+✖ #7: money sent TO the payer shortly BEFORE it comes back (lending and being repaid) is not income either (0.421006ms)
+✖ #7 controls: honest regular peers and a trader who spends are NOT touched (0.439375ms)
+✖ #7: a partial return counts only what did not come back (0.477159ms)
+✖ the repro limit with a pumped cap: even repaidOnTime=6 cannot lift a limit that has no counted income (0.816031ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 0
+ℹ fail 11
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 101.058562
+
+✖ failing tests:
+
+test at test/audit-income.test.js:41:1
+✖ #6 repro: a float cashed in and sent to a helper 8 days later counts for nothing (it counted 55,000 GHS) (6.731767ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  55000 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:43:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 55000,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:48:1
+✖ #6: waiting longer between cash in and the transfer out (20 and 35 days) does not help either (0.443076ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  20000 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:49:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 20000,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:53:1
+✖ #6: the only way to count cash is to spend real money: income counted <= 2x real spending (0.836424ms)
+  AssertionError [ERR_ASSERTION]: 55000 vs spend undefined
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:59:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:64:1
+✖ #6: spending that proves nothing does not back income: transfers, cash-outs, own accounts, betting, loan repayments (0.728519ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  undefined !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:72:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:88:1
+✖ #7 repro: helper SIMs that get their money back 4 days later count for nothing (they counted 10,000 GHS) (1.249608ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  10000 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:90:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 10000,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:94:1
+✖ #7: coming back after 12 days is still a loop (inside the 14 day window) (0.778805ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  9000 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:95:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 9000,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:98:1
+✖ #7: a loop that waits 20 days to give the money back is stopped by the net-flow check (no real spending behind it) (0.726145ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  2000 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:99:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2000,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:102:1
+✖ #7: money sent TO the payer shortly BEFORE it comes back (lending and being repaid) is not income either (0.421006ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1500 !== 750
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:112:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1500,
+    expected: 750,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:115:1
+✖ #7 controls: honest regular peers and a trader who spends are NOT touched (0.439375ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  undefined !== 1
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:124:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:130:1
+✖ #7: a partial return counts only what did not come back (0.477159ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1200 !== 1100
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:139:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1200,
+    expected: 1100,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/audit-income.test.js:142:1
+✖ the repro limit with a pumped cap: even repaidOnTime=6 cannot lift a limit that has no counted income (0.816031ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  357.5 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/enclave/test/audit-income.test.js:146:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 357.5,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

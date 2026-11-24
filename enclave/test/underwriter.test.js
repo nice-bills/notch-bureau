@@ -5,6 +5,7 @@ import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { dkimSign } from 'mailauth';
 import { Underwriter } from '../src/underwriter.js';
+import { InboxedUnderwriter } from './fixtures/inboxed.js';
 import { verifyRecord, RECORD_LEN } from '../src/record.js';
 
 // A fake provider "momo.test" with its own DKIM key, served by a fake DNS resolver.
@@ -35,7 +36,7 @@ async function email(body, date = new Date(), signingDomain = 'momo.test') {
 }
 
 const wallet = bs58.encode(nacl.sign.keyPair().publicKey);
-const make = () => new Underwriter({ trusted: ['momo.test'], resolver, llm: null });
+const make = () => new InboxedUnderwriter({ trusted: ['momo.test'], resolver, llm: null });
 
 test('genuine email gives a signed limit', async () => {
   const u = make();
@@ -66,7 +67,7 @@ test('same email twice is rejected', async () => {
 });
 
 test('untrusted signer is rejected', async () => {
-  const u = new Underwriter({ trusted: ['deel.com'], resolver, llm: null });
+  const u = new InboxedUnderwriter({ trusted: ['deel.com'], resolver, llm: null });
   const r = await u.submit(await email('You have received GHS 3000 from ACME.'), wallet);
   assert.equal(r.ok, false);
   assert.match(r.reason, /untrusted signer/);
@@ -88,11 +89,11 @@ test('first-timer cap holds and more income raises the limit', async () => {
 });
 
 test('on-chain repayment history raises the cap and a default freezes it', async () => {
-  const rewarded = new Underwriter({ trusted: ['momo.test'], resolver, historyProvider: async () => ({ repaidOnTime: 1, frozen: false }), llm: null });
+  const rewarded = new InboxedUnderwriter({ trusted: ['momo.test'], resolver, historyProvider: async () => ({ repaidOnTime: 1, frozen: false }), llm: null });
   const earned = await rewarded.submit(await email('Salary credited USD 900.00'), wallet);
   assert.equal(earned.limitUsdc, 90);
 
-  const defaulted = new Underwriter({ trusted: ['momo.test'], resolver, historyProvider: async () => ({ repaidOnTime: 10, frozen: true }), llm: null });
+  const defaulted = new InboxedUnderwriter({ trusted: ['momo.test'], resolver, historyProvider: async () => ({ repaidOnTime: 10, frozen: true }), llm: null });
   const frozen = await defaulted.submit(await email('Salary credited USD 900.00'), wallet);
   assert.equal(frozen.limitUsdc, 0);
 });

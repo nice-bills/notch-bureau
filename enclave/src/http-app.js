@@ -1,19 +1,17 @@
 import http from 'node:http';
-import bs58 from 'bs58';
 import { Inbox, handleInbox } from './inbox.js';
-import { deviceProofFrom, handleDevice, statusOf } from './device-http.js';
-
-const MAX = 5 * 1024 * 1024;
+import { handleDevice } from './device-http.js';
+import { handleUnderwrite } from './underwrite-http.js';
 
 // The local underwriter's HTTP surface (also what the end-to-end test starts, with a fixture-trusting Underwriter).
-export function createApp(u, inbox = new Inbox()) {
+export function createApp(u, inbox = new Inbox(), opts = {}) {
   return http.createServer(async (req, res) => {
     const send = (code, obj) => {
       res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
       res.end(JSON.stringify(obj));
     };
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token, x-notch-device, authorization' });
+      res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token, x-notch-device, x-notch-ts, x-notch-sig, authorization' });
       return res.end();
     }
     const url = new URL(req.url, 'http://x');
@@ -32,29 +30,7 @@ export function createApp(u, inbox = new Inbox()) {
         note: 'not attested; TDX quote replaces this',
       });
     }
-    if (req.method === 'POST' && req.url === '/underwrite') {
-      const wallet = req.headers['x-wallet'];
-      try {
-        bs58.decode(String(wallet || ''));
-      } catch {
-        return send(400, { ok: false, reason: 'x-wallet header must be a base58 address' });
-      }
-      let device;
-      try { device = deviceProofFrom(req); } catch (e) { return send(400, { ok: false, reason: e.message }); }
-      const chunks = [];
-      let size = 0;
-      for await (const c of req) {
-        size += c.length;
-        if (size > MAX) return send(413, { ok: false, reason: 'email too large' });
-        chunks.push(c);
-      }
-      try {
-        const r = await u.submit(Buffer.concat(chunks), String(wallet), { device });
-        return send(statusOf(r), r);
-      } catch (e) {
-        return send(500, { ok: false, reason: e.message });
-      }
-    }
+    if (await handleUnderwrite(u, req, url, send, opts)) return;
     send(404, { ok: false, reason: 'not found' });
   });
 }

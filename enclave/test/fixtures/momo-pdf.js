@@ -189,8 +189,8 @@ export function syntheticCashRows() {
   return [
     // steady takings, spent on stock at shops and airtime (spending is not cycling)
     cashIn(82, 800), cashIn(53, 900), cashIn(24, 1000),
-    { date: at(80, 12, 0), type: 'PAYMENT', party: '', acct: 'MAKOLA WHOLESALE', ref: '-', amount: -250 },
-    { date: at(51, 12, 0), type: 'PAYMENT', party: '', acct: 'MAKOLA WHOLESALE', ref: '-', amount: -300 },
+    { date: at(80, 12, 0), type: 'PAYMENT', party: '', acct: 'MAKOLA WHOLESALE', ref: '-', amount: -600 },
+    { date: at(51, 12, 0), type: 'PAYMENT', party: '', acct: 'MAKOLA WHOLESALE', ref: '-', amount: -700 },
     { date: at(22, 12, 0), type: 'AIRTIME', party: P(4), acct: 'MTNONLINEAIRTIMEVENDOR', ref: '-', amount: -20 },
     // cycling 1: cash in, cash out the next day
     cashIn(66, 600), cashOut(65, 600),

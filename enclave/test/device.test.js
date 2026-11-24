@@ -8,18 +8,21 @@ import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { createSignInMessage } from '@solana/wallet-standard-util';
 import { Underwriter } from '../src/underwriter.js';
+import { InboxedUnderwriter } from './fixtures/inboxed.js';
 import { createApp } from '../src/http-app.js';
 import { DeviceNonces } from '../src/siws.js';
+import { signUnderwrite } from '../src/underwrite-http.js';
 import { SgtUnavailable, createSgtReader, sgtHash } from '../src/sgt.js';
 import { RECORD_LEN, RECORD_LEN_V3, encodeRecord, verifyRecord } from '../src/record.js';
 import { computeLimit, SEEKER_MULTIPLIER } from '../src/underwrite.js';
 import { resolver, momoStatementEmail, syntheticCashRows, randomMsisdn } from './fixtures/emails.js';
 
+const signed = (w, eml, h = {}) => ({ ...signUnderwrite({ wallet: w.address, eml, secretKey: w.kp.secretKey }), ...h });
 const wallet = () => { const kp = nacl.sign.keyPair(); return { kp, address: bs58.encode(kp.publicKey) }; };
 const mint = () => bs58.encode(crypto.randomBytes(32)); // looks like a mint address; the reader below is a stub
 // stub for @solana-mobile/skr-genesis-token: wallet -> mints. `calls` records which wallet it was asked about.
 const stubReader = (table, calls = []) => async (w) => { calls.push(w); const v = table.get(w); if (v instanceof Error) throw v; return v || []; };
-const make = (extra = {}) => new Underwriter({ resolver, llm: null, ...extra });
+const make = (extra = {}) => new InboxedUnderwriter({ resolver, llm: null, ...extra });
 const email = async () => momoStatementEmail({ msisdn: randomMsisdn(), rows: syntheticCashRows() });
 
 // What a wallet does: SIWS signIn over the payload the underwriter issued (with its own address added).
@@ -248,15 +251,16 @@ test('HTTP: /device/nonce, then /underwrite with x-notch-device; outage is 503, 
     const p = prove(u, w, { challenge: issued });
     const header = Buffer.from(JSON.stringify({ nonce: p.nonce, signature: Buffer.from(p.signature).toString('base64'), signedMessage: Buffer.from(p.signedMessage).toString('base64') })).toString('base64');
     const eml = await email();
-    const res = await call(`${s.base}/underwrite`, { method: 'POST', body: eml, headers: { 'x-wallet': w.address, 'x-notch-device': header } });
+    const res = await call(`${s.base}/underwrite`, { method: 'POST', body: eml, headers: signed(w, eml, { 'x-wallet': w.address, 'x-notch-device': header }) });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.seeker, true);
     assert.equal(Buffer.from(res.body.message, 'base64').length, RECORD_LEN_V3);
     // replaying the same header: refused
-    const again = await call(`${s.base}/underwrite`, { method: 'POST', body: await email(), headers: { 'x-wallet': w.address, 'x-notch-device': header } });
+    const eml2 = await email();
+    const again = await call(`${s.base}/underwrite`, { method: 'POST', body: eml2, headers: signed(w, eml2, { 'x-wallet': w.address, 'x-notch-device': header }) });
     assert.equal(again.status, 422);
     // junk header
-    const junk = await call(`${s.base}/underwrite`, { method: 'POST', body: eml, headers: { 'x-wallet': w.address, 'x-notch-device': 'not-base64-json' } });
+    const junk = await call(`${s.base}/underwrite`, { method: 'POST', body: eml, headers: signed(w, eml, { 'x-wallet': w.address, 'x-notch-device': 'not-base64-json' }) });
     assert.equal(junk.status, 400);
     // outage
     const w2 = wallet();
@@ -264,7 +268,8 @@ test('HTTP: /device/nonce, then /underwrite with x-notch-device; outage is 503, 
     const issued2 = (await call(`${s.base}/device/nonce`, { method: 'POST' })).body;
     const p2 = prove(u, w2, { challenge: issued2 });
     const h2 = Buffer.from(JSON.stringify({ nonce: p2.nonce, signature: p2.signature, signedMessage: p2.signedMessage })).toString('base64');
-    const down = await call(`${s.base}/underwrite`, { method: 'POST', body: await email(), headers: { 'x-wallet': w2.address, 'x-notch-device': h2 } });
+    const eml3 = await email();
+    const down = await call(`${s.base}/underwrite`, { method: 'POST', body: eml3, headers: signed(w2, eml3, { 'x-wallet': w2.address, 'x-notch-device': h2 }) });
     assert.equal(down.status, 503);
     assert.equal(down.body.retry, true);
   } finally {

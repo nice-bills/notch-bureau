@@ -1,0 +1,12 @@
+✖ #3 repro: a victim's statement submitted for an attacker wallet is refused at the Underwriter (no recipient = no statement) (319.79591ms)
+✖ #3 repro over HTTP: POST /underwrite with a signed request still cannot carry a MoMo statement (180.103032ms)
+✔ #3: the same statement is accepted through the inbox, but only for the wallet whose address it was sent to (133.711062ms)
+✖ #3: the direct path needs the wallet's signature: missing, wrong wallet, wrong email, stale all give 401 (41.634971ms)
+✔ #3: a non-identity source (Deel payout) still works on the direct path, with the wallet's signature (26.544029ms)
+✔ signature helpers: the message binds wallet, email hash and time (31.646187ms)
+ℹ pass 3
+ℹ fail 3
+✖ failing tests:
+✖ #3 repro: a victim's statement submitted for an attacker wallet is refused at the Underwriter (no recipient = no statement) (319.79591ms)
+✖ #3 repro over HTTP: POST /underwrite with a signed request still cannot carry a MoMo statement (180.103032ms)
+✖ #3: the direct path needs the wallet's signature: missing, wrong wallet, wrong email, stale all give 401 (41.634971ms)

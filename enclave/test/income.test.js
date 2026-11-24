@@ -92,6 +92,7 @@ test('what counts: earned in full, regular peers at half, one-off peers and the 
     row({ days: 71, party: P(2), acct: 'B', amount: 100 }), row({ days: 41, party: P(2), acct: 'B', amount: 100 }),
     row({ days: 20, party: P(3), acct: 'C', amount: 999 }), // one-off
     row({ days: 20, acct: 'QwikLoan OVA', amount: 999 }),
+    row({ days: 10, type: 'PAYMENT', acct: 'SHOP', amount: -700 }), // real spending backs the 300 of peer income counted (net-flow check)
   ].sort((a, b) => b.date - a.date), { holder: HOLDER });
   const f = finalizeIncome(rows, { now: NOW });
   assert.equal(f.countedTotal, 2000 + (400 + 200) * PEER_WEIGHT);
@@ -102,7 +103,8 @@ test('what counts: earned in full, regular peers at half, one-off peers and the 
 });
 
 test('a single regular payer counts at a quarter (one source is easy to fake)', () => {
-  const rows = classifyRows([row({ days: 70, party: P(1), acct: 'A', amount: 400 }), row({ days: 40, party: P(1), acct: 'A', amount: 400 })], { holder: HOLDER });
+  const rows = classifyRows([row({ days: 70, party: P(1), acct: 'A', amount: 400 }), row({ days: 40, party: P(1), acct: 'A', amount: 400 }),
+    row({ days: 10, type: 'PAYMENT', acct: 'SHOP', amount: -150 })], { holder: HOLDER });
   assert.equal(finalizeIncome(rows, { now: NOW }).countedTotal, 800 * PEER_WEIGHT * 0.5);
 });
 

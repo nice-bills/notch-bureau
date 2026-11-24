@@ -10,6 +10,7 @@ import { parseStatements } from '../src/statement.js';
 import { pdfAttachments } from '../src/mime.js';
 import { extractStatementAuto } from '../src/llm-extract.js';
 import { Underwriter } from '../src/underwriter.js';
+import { InboxedUnderwriter } from './fixtures/inboxed.js';
 import {
   resolver, momoStatementEmail, syntheticCashRows, syntheticCashLoopRows, TRADER_COUNTED_CASH, SYNTH_HOLDER,
 } from './fixtures/emails.js';
@@ -39,7 +40,8 @@ const monthly = (amount, extra = () => []) => [80, 50, 20].flatMap((d) => [cashI
 const counted = (r) => r.cash.counted;
 
 test('steady cash deposits in all three months count at 50%', () => {
-  const r = run(monthly(1000));
+  // an honest trader also spends: 300 a month at the wholesaler backs the 1500 counted (the net-flow check, audit #6)
+  const r = run(monthly(1000, (d) => pay(d - 1, 300)));
   assert.equal(r.totals.cash_deposit.amount, 3000);
   assert.equal(counted(r), 1500);
   assert.equal(r.countedTotal, 1500);
@@ -207,7 +209,7 @@ test('a lying AI reply (cash_deposit, or a promotion) changes nothing in a full 
 // ---- through a real PDF (pdfmake) and the underwriter -----------------------------------------------------------------
 
 const newWallet = () => bs58.encode(nacl.sign.keyPair().publicKey);
-const make = (extra = {}) => new Underwriter({ resolver, llm: null, ...extra });
+const make = (extra = {}) => new InboxedUnderwriter({ resolver, llm: null, ...extra });
 
 test('trader statement (PDF): steady deposits count at 50%, cycled, split, transferred and own-bank deposits do not', async () => {
   const eml = await momoStatementEmail({ msisdn: '0241234567', rows: syntheticCashRows() });
