@@ -112,3 +112,13 @@ Run for real, offline:
 - The Phala compose does not pass the Supabase variables yet.
 
 `enclave/scripts/e2e-supabase.mjs` covers the first four items in one run once `enclave/.env.supabase` exists.
+
+## Live status (Nov 24)
+
+Project `notch-bureau` (ref `rtdjnqbgpqygjkjvrcsp`, London, free tier) is live:
+- Migrations 1 to 3 are applied. Migration 3 pins `search_path` on the six write functions, which clears the security advisor warnings.
+- Solana Web3 sign-in is on, and the allowed redirect list holds the localhost URLs.
+- The keeper function is deployed with `supabase/deploy-keeper.sh`. The plain `functions deploy` hits a server bundler timeout on `npm:@solana/kit`. Its secrets are set, and the Vault entries exist.
+- The `pg_cron` → `pg_net` → function chain was called by hand: HTTP 200, 46 lines, 0 overdue. The keeper fee payer is a throwaway devnet key holding 0.1 SOL, stored outside the repo.
+- `node enclave/scripts/e2e-supabase.mjs --require` passes 19 of 19, and the keeper step passes with `KEEPER_SHARED_SECRET` set.
+- One run out of three missed the first two Realtime events on a cold channel. The phone must read its current row right after subscribing, so it never depends on catching every event.

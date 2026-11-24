@@ -22,6 +22,7 @@ Jobs it does:
 - **No seed phrase, no SOL:** a MoMo user signs in with Google. Pollar makes the wallet, and Pollar's gas wallet pays the fees. Our draw, repay and deposit instructions are signed through `signSolanaTransaction`. This removes the biggest onboarding wall for a first-time borrower.
 - **Spend the credit without crypto:** this answers "MTN doesn't take USDC". The borrower funds a Pollar card from the drawn USDC and pays any merchant. Repayment is a Pollar payment back into the Notch vault.
 - **Not bounded by geography:** Pollar's ramp corridors today are LATAM (BRL via Pix, MXN via SPEI, COP, BOB). A borrower in Brazil draws USDC and cashes out to Pix in one flow. Ghana cash-out is not in Pollar's list, so for Ghana we say so and use the card.
+- Pitch line (user's call, Nov 24): we built on Pollar, and it works today where Pollar has rails. Ghana has no Pollar rail yet, so we will work with the Pollar team on Ghana support. The user is registering the Pollar account.
 - Honest gaps: card availability per country and devnet support for ramps and cards are unverified. These must be confirmed in the Pollar dashboard before we promise them in the demo.
 
 ## 3. Supabase ($100 per member)
@@ -47,3 +48,7 @@ Already built: the real MoMo statement parser and income sorting. See the findin
 A real Ghanaian MoMo statement (aggregates only) holds **0 earned income** under our current rules. The money comes in as **cash deposits: 23,467 GHS of 42,985 GHS**, plus peer transfers. The limit came out at 11.62 USDC.
 
 For a trader, cash deposits ARE income. As built, Notch would turn down the typical person it is for. Next core fix: treat steady cash deposits as trading income when they are regular across months and not followed by a matching outflow. Keep the "text can only lower" rule.
+
+## Pollar setup (Nov 24)
+- Test app `notch-bureau` (id cmwurt405002g0hskgkyy67fl), created through Pollar's MCP gateway with the user's token. It has a publishable key, 1000 free test credits, allowed origin localhost:5173 and redirect URI /auth/callback. Keys are in `.env.pollar` (git-ignored).
+- Still needed: Solana must be enabled under Wallets > Settings > Enabled chains. The gateway has no tool for that, so it is done in the dashboard.
