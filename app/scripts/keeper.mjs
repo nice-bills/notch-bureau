@@ -35,12 +35,20 @@ import {
   setTransactionMessageLifetimeUsingBlockhash,
   signTransactionMessageWithSigners,
 } from '@solana/kit';
-import { CREDIT_LINE_MIN_LEN, base64ToBytes, decodeLine, deriveAddresses, isPastDue, markDefaultIx } from '../src/notch.ts';
+import { base64ToBytes, decodeLine, deriveAddresses, isPastDue, markDefaultIx } from '../src/notch.ts';
 
 const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** Anchor account discriminator for CreditLine: sha256("account:CreditLine")[0..8]. */
 const LINE_DISCRIMINATOR = crypto.createHash('sha256').update('account:CreditLine').digest().subarray(0, 8);
+
+/**
+ * The getProgramAccounts filter for credit lines: the Anchor discriminator ONLY, never `dataSize`. The account grew
+ * (98 -> 106 -> 154 bytes) and a size filter hid every current line from the keeper (audit finding #1).
+ */
+export const lineFilters = () => [
+  { memcmp: { offset: 0n, bytes: getBase58Decoder().decode(LINE_DISCRIMINATOR), encoding: 'base58' } },
+];
 
 /**
  * Pure selection step (unit tested): which of these `{ pubkey, data }` accounts can be marked defaulted at
@@ -136,10 +144,7 @@ async function main() {
     const accounts = (await rpc.getProgramAccounts(program, {
       encoding: 'base64',
       commitment: 'confirmed',
-      filters: [
-        { dataSize: BigInt(CREDIT_LINE_MIN_LEN) },
-        { memcmp: { offset: 0n, bytes: getBase58Decoder().decode(LINE_DISCRIMINATOR), encoding: 'base58' } },
-      ],
+      filters: lineFilters(),
     }).send()).map((a) => ({ pubkey: a.pubkey, data: base64ToBytes(a.account.data[0]) }));
     const slot = await rpc.getSlot({ commitment: 'confirmed' }).send();
     const chainTime = await rpc.getBlockTime(slot).send().catch(() => null);

@@ -1,0 +1,23 @@
+✔ F1 (audit #2): six 1-micro-USDC draw+repay cycles in ONE transaction do not count (88.164243ms)
+✔ F1: a real-size loan drawn and repaid in the same transaction (same slot) does not count (37.475967ms)
+✔ F1: a real loan held >= 30 s counts, but only ONCE per posted record; a new record re-arms it (64.007723ms)
+✔ F1: the size floor is min(limit, max(5 USDC, limit/4)); the hold clock restarts at every draw (43.792629ms)
+✔ F1: a small limit still works: the floor never exceeds the limit (40.391285ms)
+✔ F2 (audit #4): a request left armed past the claim window cannot be used to exit before a default; cancel + refile costs a new cooldown (54.330085ms)
+✔ F2: the claim window is exactly [unlock, unlock + 2 days]; inside it the claim pays (45.061507ms)
+✔ F2: shares in escrow earn nothing: a fee paid after the request goes to the lenders who stay (47.516291ms)
+✔ F2: shares in escrow carry losses: a default marked after the request lowers the payout (44.025412ms)
+✔ F2 KNOWN RESIDUAL (documented in lib.rs): a claim that lands between "overdue" and mark_default still pays the pre-loss price; the window is the keeper latency (42.292438ms)
+✔ F3 (audit #5): once a loan is past due the borrower cannot draw more; at the due second it is still allowed; repaying re-opens the line (40.120371ms)
+✔ F10 (audit #10): a wallet is pinned to ONE mobile-money identity; a record without identity leaves the pin alone (46.485993ms)
+✔ F11 (audit #11): the first deposit into an empty tranche is at least 1 USDC; a claim cannot leave a dust supply (37.288164ms)
+✔ layout: a CreditLine built by the current program is 154 bytes (8 discriminator + 90 + 56 trailing) (33.885004ms)
+✔ legacy 106-byte line (before the trailing fields): draw and repay still save, the repayment cannot count, post_limit grows it and pays the rent (50.916029ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 966.217533

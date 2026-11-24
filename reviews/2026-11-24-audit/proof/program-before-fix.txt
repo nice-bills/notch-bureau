@@ -1,0 +1,262 @@
+✖ F1 (audit #2): six 1-micro-USDC draw+repay cycles in ONE transaction do not count (104.468149ms)
+✖ F1: a real-size loan drawn and repaid in the same transaction (same slot) does not count (55.851368ms)
+✖ F1: a real loan held >= 30 s counts, but only ONCE per posted record; a new record re-arms it (61.201705ms)
+✖ F1: the size floor is min(limit, max(5 USDC, limit/4)); the hold clock restarts at every draw (47.882469ms)
+✖ F1: a small limit still works: the floor never exceeds the limit (58.23226ms)
+✖ F2 (audit #4): a request left armed past the claim window cannot be used to exit before a default; cancel + refile costs a new cooldown (61.329165ms)
+✖ F2: the claim window is exactly [unlock, unlock + 2 days]; inside it the claim pays (64.237429ms)
+✖ F2: shares in escrow earn nothing: a fee paid after the request goes to the lenders who stay (49.508655ms)
+✔ F2: shares in escrow carry losses: a default marked after the request lowers the payout (61.747027ms)
+✔ F2 KNOWN RESIDUAL (documented in lib.rs): a claim that lands between "overdue" and mark_default still pays the pre-loss price; the window is the keeper latency (54.707228ms)
+✖ F3 (audit #5): once a loan is past due the borrower cannot draw more; at the due second it is still allowed; repaying re-opens the line (55.134447ms)
+✖ F10 (audit #10): a wallet is pinned to ONE mobile-money identity; a record without identity leaves the pin alone (43.37414ms)
+✖ F11 (audit #11): the first deposit into an empty tranche is at least 1 USDC; a claim cannot leave a dust supply (40.885831ms)
+✖ layout: a CreditLine built by the current program is 154 bytes (8 discriminator + 90 + 56 trailing) (41.157933ms)
+✖ legacy 106-byte line (before the trailing fields): draw and repay still save, the repayment cannot count, post_limit grows it and pays the rent (41.885402ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 2
+ℹ fail 13
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1113.82765
+
+✖ failing tests:
+
+test at tests/audit.test.js:21:1
+✖ F1 (audit #2): six 1-micro-USDC draw+repay cycles in ONE transaction do not count (104.468149ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  6 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:28:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 6,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:31:1
+✖ F1: a real-size loan drawn and repaid in the same transaction (same slot) does not count (55.851368ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:38:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:42:1
+✖ F1: a real loan held >= 30 s counts, but only ONCE per posted record; a new record re-arms it (61.201705ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0n !== 1n
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:55:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0n,
+    expected: 1n,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:66:1
+✖ F1: the size floor is min(limit, max(5 USDC, limit/4)); the hold clock restarts at every draw (47.882469ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:75:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:91:1
+✖ F1: a small limit still works: the floor never exceeds the limit (58.23226ms)
+  AssertionError [ERR_ASSERTION]: 3 of 4 is under the floor
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:99:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:117:1
+✖ F2 (audit #4): a request left armed past the claim window cannot be used to exit before a default; cancel + refile costs a new cooldown (61.329165ms)
+  AssertionError [ERR_ASSERTION]: expected ClaimWindowClosed but tx succeeded
+  
+  true !== false
+  
+      at fails (file:///home/bills/code/dev3pack/notch/tests/lib.js:291:37)
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:126:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:141:1
+✖ F2: the claim window is exactly [unlock, unlock + 2 days]; inside it the claim pays (64.237429ms)
+  AssertionError [ERR_ASSERTION]: expected ClaimWindowClosed but tx succeeded
+  
+  true !== false
+  
+      at fails (file:///home/bills/code/dev3pack/notch/tests/lib.js:291:37)
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:152:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:155:1
+✖ F2: shares in escrow earn nothing: a fee paid after the request goes to the lenders who stay (49.508655ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   null,
+  +   null
+  -   200000000n,
+  -   200000000n
+    ]
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:159:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ null, null ],
+    expected: [ 200000000n, 200000000n ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:203:1
+✖ F3 (audit #5): once a loan is past due the borrower cannot draw more; at the due second it is still allowed; repaying re-opens the line (55.134447ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /LoanOverdue/. Input:
+  
+  'Program 4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz invoke [1]\n' +
+    'Program log: Instruction: Draw\n' +
+    'Program log: AnchorError thrown in programs/notch/src/lib.rs:545. Error Code: OverLimit. Error Number: 6009. Error Message: Amount exceeds credit limit.\n' +
+    'Program 4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz consumed 16368 of 200000 compute units\n' +
+    'Program 4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz failed: custom program error: 0x1779'
+  
+      at fails (file:///home/bills/code/dev3pack/notch/tests/lib.js:291:101)
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:212:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'Program 4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz invoke [1]\nProgram log: Instruction: Draw\nProgram log: AnchorError thrown in programs/notch/src/lib.rs:545. Error Code: OverLimit. Error Number: 6009. Error Message: Amount exceeds credit limit.\nProgram 4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz consumed 16368 of 200000 compute units\nProgram 4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz failed: custom program error: 0x1779',
+    expected: /LoanOverdue/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:225:1
+✖ F10 (audit #10): a wallet is pinned to ONE mobile-money identity; a record without identity leaves the pin alone (43.37414ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + null
+  - '586e1b65f8cf8f58ed2295e094156b91aaba87a28a998b460f6c6778b95b7ff6'
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:230:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: '586e1b65f8cf8f58ed2295e094156b91aaba87a28a998b460f6c6778b95b7ff6',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:240:1
+✖ F11 (audit #11): the first deposit into an empty tranche is at least 1 USDC; a claim cannot leave a dust supply (40.885831ms)
+  AssertionError [ERR_ASSERTION]: expected DepositTooSmall but tx succeeded
+  
+  true !== false
+  
+      at fails (file:///home/bills/code/dev3pack/notch/tests/lib.js:291:37)
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:242:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:258:1
+✖ layout: a CreditLine built by the current program is 154 bytes (8 discriminator + 90 + 56 trailing) (41.157933ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  106 !== 154
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:261:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 106,
+    expected: 154,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/audit.test.js:264:1
+✖ legacy 106-byte line (before the trailing fields): draw and repay still save, the repayment cannot count, post_limit grows it and pays the rent (41.885402ms)
+  AssertionError [ERR_ASSERTION]: no draw clock on a legacy line: not counted
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///home/bills/code/dev3pack/notch/tests/audit.test.js:278:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

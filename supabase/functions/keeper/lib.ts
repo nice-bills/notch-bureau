@@ -23,6 +23,7 @@ import {
 export const DEFAULT_PROGRAM_ID = '4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz'; // the devnet deployment (same default as the enclave)
 export const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 export const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
+/** The shortest line this keeper can read (the oldest layout). Current lines are longer; this is a minimum, never a filter. */
 export const CREDIT_LINE_MIN_LEN = 98;
 const hex = (h: string) => Uint8Array.from(h.match(/../g)!.map((b) => parseInt(b, 16)));
 /** Anchor account discriminator of CreditLine: sha256("account:CreditLine")[0..8]. */
@@ -31,6 +32,15 @@ export const LINE_DISCRIMINATOR = hex('dce2cd18dc978168');
 export const MARK_DEFAULT_DISCRIMINATOR = hex('b6e77b8442d0898b');
 /** Most lines handled per run; the next hourly run takes the rest. Keeps a run inside the function's time limit. */
 export const MAX_SENDS_PER_RUN = 10;
+
+/**
+ * The getProgramAccounts filter for credit lines: the Anchor discriminator ONLY. Never filter on `dataSize`: the account
+ * grew twice (98 -> 106 -> 154 bytes) and a size filter silently hid every line of the current layout from the keeper
+ * (audit finding #1). `decodeLine` reads any line that is at least CREDIT_LINE_MIN_LEN long.
+ */
+export const lineFilters = () => [
+  { memcmp: { offset: 0n, bytes: getBase58Decoder().decode(LINE_DISCRIMINATOR), encoding: 'base58' } },
+];
 
 export interface Line { wallet: string; drawn: bigint; due: bigint; defaulted: boolean }
 export interface RawAccount { pubkey: string; data: Uint8Array }
@@ -109,10 +119,7 @@ export async function keeperPass(opts: {
   const raw = await rpc.getProgramAccounts(address(program), {
     encoding: 'base64',
     commitment: 'confirmed',
-    filters: [
-      { dataSize: BigInt(CREDIT_LINE_MIN_LEN) },
-      { memcmp: { offset: 0n, bytes: getBase58Decoder().decode(LINE_DISCRIMINATOR), encoding: 'base58' } },
-    ],
+    filters: lineFilters(),
   }).send();
   const accounts: RawAccount[] = raw.map((a: any) => ({ pubkey: String(a.pubkey), data: Uint8Array.from(atob(a.account.data[0]), (c) => c.charCodeAt(0)) }));
   const slot = await rpc.getSlot({ commitment: 'confirmed' }).send();

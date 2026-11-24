@@ -1,0 +1,11 @@
+✔ the line the CURRENT program builds is read by the Edge Function keeper (and is not 98 bytes) (75.560947ms)
+✔ the real line is matched by the CLI keeper filter too, and old shorter lines still are (43.294209ms)
+✔ full pass: the keeper sends mark_default for a real overdue line and the real program accepts it (44.880866ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 505.399847
