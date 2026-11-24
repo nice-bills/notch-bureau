@@ -176,3 +176,42 @@ export function syntheticRows() {
     { date: at(2, 12, 0), type: 'MOMO USER', party: P(4), acct: 'ESI MANU', ref: 'rent', amount: -150 },
   ];
 }
+
+// ---- a market trader whose takings arrive as agent cash deposits (the cash rules in src/income.js) ---------------------
+// Every deposit below is a case the rules must get right. GHS, all made up. Deposits that count: 800 (month 3), 900
+// (month 2), 1000 (month 1). Deposits that must NOT count: they leave again within 7 days as a cash-out, as a transfer
+// to a person, or to the holder's own bank. A move into a savings product does not cycle. Expected: counted = 50% of 2700.
+export const TRADER_COUNTED_CASH = 2700;
+export function syntheticCashRows() {
+  const agent = P(11);
+  const cashIn = (n, amount, hh = 10) => ({ date: at(n, hh, 0), type: 'CASH IN', party: agent, acct: 'AGENT ABENA', ref: 'Cashin To-233241234567', amount });
+  const cashOut = (n, amount, hh = 10) => ({ date: at(n, hh, 0), type: 'CASH OUT', party: agent, acct: 'AGENT ABENA', ref: 'NationalId--', amount: -amount, fee: 3 });
+  return [
+    // steady takings, spent on stock at shops and airtime (spending is not cycling)
+    cashIn(82, 800), cashIn(53, 900), cashIn(24, 1000),
+    { date: at(80, 12, 0), type: 'PAYMENT', party: '', acct: 'MAKOLA WHOLESALE', ref: '-', amount: -250 },
+    { date: at(51, 12, 0), type: 'PAYMENT', party: '', acct: 'MAKOLA WHOLESALE', ref: '-', amount: -300 },
+    { date: at(22, 12, 0), type: 'AIRTIME', party: P(4), acct: 'MTNONLINEAIRTIMEVENDOR', ref: '-', amount: -20 },
+    // cycling 1: cash in, cash out the next day
+    cashIn(66, 600), cashOut(65, 600),
+    // cycling 2: the same 500 split into five deposits of 100, then taken out
+    cashIn(40, 100, 9), cashIn(40, 100, 10), cashIn(40, 100, 11), cashIn(40, 100, 12), cashIn(40, 100, 13), cashOut(39, 500),
+    // cycling 3: deposit, then sent on to a person within a day
+    cashIn(10, 300), { date: at(9, 10, 0), type: 'MOMO USER', party: P(12), acct: 'YAA ASANTEWAA', ref: 'goods', amount: -300 },
+    // cycling 4: deposit, then to the holder's OWN bank over GIPS
+    cashIn(32, 700), { date: at(31, 10, 0), type: 'OTHER TRANSACTIONS', party: '', acct: 'INTEROPERABILI TY PUSH OVA', ref: `${SYNTH_HOLDER} ,23xxxxxx45, GIPS Transfer to GCB Bank`, amount: -700 },
+    // NOT cycling: part of a deposit moved into a savings product
+    { date: at(23, 10, 0), type: 'DEBIT', party: '', acct: 'ysavedep OVA', ref: '1234567890_ABC1 xY2z', amount: -400 },
+  ];
+}
+
+// The same trader gaming it: the same cash goes in and out every month,.
+export function syntheticCashLoopRows() {
+  const agent = P(11);
+  const out = [];
+  for (const n of [84, 54, 24]) {
+    out.push({ date: at(n, 10, 0), type: 'CASH IN', party: agent, acct: 'AGENT ABENA', ref: 'Cashin', amount: 1500 });
+    out.push({ date: at(n - 2, 10, 0), type: 'CASH OUT', party: agent, acct: 'AGENT ABENA', ref: 'NationalId--', amount: -1500, fee: 8 });
+  }
+  return out;
+}

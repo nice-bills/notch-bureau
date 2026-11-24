@@ -50,11 +50,24 @@ Every credit gets one class. **Rules decide; free text (memo, counterparty name)
 | `betting` | bookmaker names (SportyBet, Betway, 1xBet ...), "Credit.Inv"/"Debit.Inv" gaming invoices | no |
 | `loan_disbursement` | a lender (QwikLoan, Fido ...) or the word "loan" | no |
 | `self_transfer` | the holder's own name (2+ name parts) in name/memo (own bank over GIPS, own other wallet), own savings/investment wallets (Yellosave `ysavedep`, trust/equities, susu) | no |
-| `cash_deposit` | Payment Type CASH IN (cannot tell from funding yourself) | no |
+| `cash_deposit` | Payment Type CASH IN (a trader's takings, but cannot be told from funding yourself) | only under the cash rules below, at **50%** |
 | `earned_income` | **structural**: from a system account (To/From holds no phone number) whose Account Name is on the payer list (Paystack, Flutterwave, Deel, Payoneer, Wise, Upwork, Stripe, PayPal, payroll/salary ...) or a payroll Payment Type | **100%** |
 | `peer_transfer` | person to person (To/From holds a phone number) | only from a *regular* payer, at **50%** |
 | `unknown` | anything else | no |
-| `pass_through` | applied last: a credit of 100+ GHS (earned/peer/unknown) followed within 48 h by debits of 90%+ of it (each debit used once, earliest credit first) | no |
+| `pass_through` | applied last: a credit of 100+ GHS (earned/peer/unknown, not cash: it has its own rule) followed within 48 h by debits of 90%+ of it (each debit used once, earliest credit first) | no |
+
+**Cash rules** (steady cash deposits ARE a trader's income, but cash is the easiest thing to fake; every rule only lowers):
+1. *Cycling*: a deposit is matched (oldest first, each debit used once, no minimum size, proportional) against money that
+   leaves the wallet within 7 days AFTER it: cash-outs, person-to-person and other-network transfers, moves to the holder's
+   own bank/name. A cash-out in the 7 days BEFORE it counts too (take cash out, put it back). Shops, bills and airtime are
+   spending, not cycling. A move into a savings *product* (a system account named savings/trust/equities, no phone number)
+   does not cycle: that money can only become cash again through this wallet, where a cash-out shows. Only the account name
+   decides, never the memo (the borrower writes their own memos).
+2. *Net cash*: cash-outs no deposit used up (waiting 8 days beats rule 1) come off what is left.
+3. *Regular*: what is left must fall in at least 2 of the 3 thirty-day months, else nothing counts.
+4. *Even*: one month counts for at most 2x the (lower) median month, so a token deposit cannot unlock a huge one.
+The AI reader can never file a credit as cash (only the rules do); it can still drop one. Tests: `test/cash.test.js`.
+Tuning lever: `cashOwnMoney` ('bank' default, 'all' strictest, 'none' what-if) in `finalizeIncome`.
 
 *Regular payer* = the same counterparty paid in during at least two different calendar months. A one-off peer credit
 counts 0. If only one regular payer exists, the share halves again (25%): one source is easy to fake with a second wallet.
@@ -75,6 +88,10 @@ rules result stands. It can never raise a limit.
 **Local-only check of a real statement:** `node enclave/scripts/local-real-check.mjs <statement.pdf> [--out]` prints
 aggregates only (rows, balance-check rate, totals per class, signals, limit). No network, no AI reader; `--out` writes
 the same numbers to `enclave/local-real-check.out.json` (git-ignored). Never commit a real statement.
+Real 90-day Ghana statement (aggregates only): 70 credits / 42,985 GHS; 6 cash deposits = 23,467 GHS. Before the cash rules:
+0 earned income, counted 1,847 GHS, limit **11.62 USDC**. After: 9,811 GHS of the cash left again within 7 days (cycling),
+the other 13,346 GHS fell in all 3 months, counted 5,628 GHS (50%, evenness cap), counted income 7,475 GHS, limit **47.47 USDC**.
+With every move into own savings also treated as cycling the limit would stay 11.62 (what-if printed by the script).
 
 ### Statement inbox ("MTN sends the statement straight to Notch")
 `src/inbox.js`, `deploy/cloudflare/`. A wallet asks `POST /inbox/new {"wallet", ["ts","signature"]}` and gets

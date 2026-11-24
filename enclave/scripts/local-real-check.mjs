@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseStatements } from '../src/statement.js';
 import { extractStatementAuto } from '../src/llm-extract.js';
+import { finalizeIncome } from '../src/income.js';
 import { computeLimit } from '../src/underwrite.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +24,12 @@ if (!file) {
 const now = new Date();
 const st = await parseStatements([{ content: fs.readFileSync(file) }], { now });
 const x = await extractStatementAuto(st, { llm: null, now }); // rules only: the statement is never sent anywhere
+// what-ifs for the own-money cycling rule (shown, never used by the underwriter): every own move leaves / none does
+const strict = finalizeIncome(x.rows, { now, cashOwnMoney: 'all' });
+const whatIf = finalizeIncome(x.rows, { now, cashOwnMoney: 'none' });
 const { limitUsdc, monthlyUsd } = computeLimit(x.events, { now, signals: x.signals });
+const alt = computeLimit(whatIf.events, { now, signals: whatIf.signals });
+const alt2 = computeLimit(strict.events, { now, signals: strict.signals });
 const naive = computeLimit(st.rows.filter((r) => r.amount > 0).map((r) => ({ amount: r.amount, currency: r.currency, date: r.date })), { now });
 const r2 = (v) => Math.round(v * 100) / 100;
 const spanDays = st.period.from && st.period.to ? Math.round((st.period.to - st.period.from) / 86400_000) : null;
@@ -45,7 +51,12 @@ const out = {
   perClass: Object.fromEntries(Object.entries(x.totals).map(([k, v]) => [k, { count: v.count, sum: v.amount }])),
   countedIncomeSum: x.countedTotal,
   regularPeerPayers: x.regularPeers,
+  cashRules: x.cash, // deposits, total, cycled (left again within 7 days), unmatchedCashOut, monthsWithCash, countable, counted (after the 50% weight)
   signals: x.signals,
+  whatIf: {
+    everyOwnMoneyMoveCycles: { cashRules: strict.cash, countedIncomeSum: strict.countedTotal, limitUsdc: alt2.limitUsdc },
+    noOwnMoneyMoveCycles: { cashRules: whatIf.cash, countedIncomeSum: whatIf.countedTotal, limitUsdc: alt.limitUsdc },
+  },
   limit: { monthlyCountedIncomeUsd: monthlyUsd, limitUsdc, ifEveryCreditCounted: naive.limitUsdc, firstTimerCapUsdc: 50 },
 };
 console.log(JSON.stringify(out, null, 2));

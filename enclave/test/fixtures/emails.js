@@ -117,7 +117,7 @@ export const bankStatement = {
 export const dayAgo = (n, hms = '10:15:30') => new Date(Date.now() - n * 86400_000).toISOString().slice(0, 10) + ` ${hms}`;
 
 // The statement PDF itself (real MTN layout, synthetic data, pdfmake) lives in momo-pdf.js.
-export { statementPdf, syntheticRows, SYNTH_HOLDER, at as momoAt } from './momo-pdf.js';
+export { statementPdf, syntheticRows, syntheticCashRows, syntheticCashLoopRows, TRADER_COUNTED_CASH, SYNTH_HOLDER, at as momoAt } from './momo-pdf.js';
 
 const b64lines = (buf) => buf.toString('base64').replace(/.{76}/g, '$&\r\n');
 

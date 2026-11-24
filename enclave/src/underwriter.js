@@ -149,7 +149,7 @@ export class Underwriter {
     const x = await extractStatementAuto(statement, { llm: this.llm, fetchImpl: this.llmFetch, now });
     const base = { via: x.via, idHash: identityHash(statement.msisdn, this.idPepper), rowKeys: true, signals: x.signals };
     if (!x.events.length) {
-      return { ...base, events: [], reason: 'no earned income found: money from yourself, loans, betting, savings, cash deposits, one-off transfers and money that passed straight through is not counted' };
+      return { ...base, events: [], reason: 'no earned income found: money from yourself, loans, betting, savings, one-off transfers, money that passed straight through, and cash deposits that were not regular or that left again within a week are not counted' };
     }
     return { ...base, events: x.events };
   }
