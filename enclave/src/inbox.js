@@ -15,14 +15,25 @@
 //     it is refused at any other code (the To check), and the enclave never trusts the envelope alone;
 //   * the code is unguessable (50 bits), bound to ONE wallet at issue time, and the record can only be fetched with the
 //     poll token that was returned with that code (so asking for a code "for" someone else's wallet reveals nothing);
-//   * optionally the wallet proves it asked: POST /inbox/new {wallet, ts, signature} with an Ed25519 signature over
-//     "notch-inbox-v1|<wallet>|<ts>" (NOTCH_INBOX_REQUIRE_WALLET_SIG=1 makes it mandatory);
+//   * the wallet MUST prove it asked (since the Supabase layer, this is the default): either
+//       - POST /inbox/new {wallet, ts, signature}: an Ed25519 signature over "notch-inbox-v1|<wallet>|<ts>", or
+//       - POST /inbox/new {wallet} with `Authorization: Bearer <Supabase access token>` from "Sign in with Solana"
+//         (supabase.auth.signInWithWeb3); the token's wallet, looked up at Supabase Auth, must be the requested wallet.
+//     The only way to skip this is the constructor option `insecureAllowUnsignedForTests` (tests only, never set by a server);
 //   * a code is single use: it is spent when a statement is ACCEPTED. Refusals do not spend it, but five of them lock it;
 //   * one phone number still backs one wallet (identity link), whatever the route.
-// State is in memory only: after a restart open codes are gone and the borrower asks for a new address.
+// The codes themselves stay in memory only: after a restart open codes are gone and the borrower asks for a new address.
+// A PUBLIC status row per statement (received -> checking -> limit_posted | refused) goes to the `store` (memory by
+// default, Supabase when configured) so a phone can watch it live. See supabase/README.md.
 import crypto from 'node:crypto';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
+import { MemoryStore } from './store.js';
+import { JobStatus } from './status.js';
+import { verifyPostedTx } from './chain-posted.js';
+import { makeRpc } from './chain-payout.js';
+
+const DEFAULT_PROGRAM_ID = '4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz'; // same default as chain-history.js
 
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 export const CODE_LEN = 10;
@@ -41,7 +52,10 @@ export class Inbox {
   constructor({
     domain = process.env.NOTCH_INBOX_DOMAIN || DEFAULT_DOMAIN,
     secret = process.env.NOTCH_INBOUND_SECRET || '',
-    requireWalletSig = process.env.NOTCH_INBOX_REQUIRE_WALLET_SIG === '1',
+    requireWalletSig = true, // a wallet proof is required by default; there is no env switch to turn it off
+    insecureAllowUnsignedForTests = false, // TEST ONLY: lets /inbox/new skip the wallet proof. No server sets it.
+    store = new MemoryStore(),
+    auth = null, // SupabaseAuth (or anything with walletFor(jwt)): accepts a "Sign in with Solana" token as the proof
     ttlMs = 14 * 86400_000,
     maxPerWallet = 3,
     maxOpen = 20_000,
@@ -50,7 +64,10 @@ export class Inbox {
   } = {}) {
     this.domain = String(domain).toLowerCase();
     this.secret = secret;
-    this.requireWalletSig = requireWalletSig;
+    this.requireWalletSig = requireWalletSig && !insecureAllowUnsignedForTests;
+    this.store = store;
+    this.status = new JobStatus(store);
+    this.auth = auth;
     this.ttlMs = ttlMs;
     this.maxPerWallet = maxPerWallet;
     this.maxOpen = maxOpen;
@@ -69,13 +86,16 @@ export class Inbox {
   }
 
   // -> { status, body }
-  issue({ wallet, ts, signature } = {}) {
+  // `authedWallet`: the wallet a verified Supabase sign-in belongs to (handleInbox looks it up), or null.
+  issue({ wallet, ts, signature, authedWallet = null } = {}) {
     try {
       if (bs58.decode(String(wallet || '')).length !== 32) throw new Error('length');
     } catch {
       return { status: 400, body: { ok: false, reason: 'wallet must be a base58 Solana address' } };
     }
-    if (signature !== undefined || this.requireWalletSig) {
+    if (authedWallet) {
+      if (authedWallet !== wallet) return { status: 401, body: { ok: false, reason: 'the signed-in wallet is not the wallet you asked for' } };
+    } else if (signature !== undefined || this.requireWalletSig) {
       const age = Math.abs(this.now() - Number(ts));
       let good = false;
       try {
@@ -87,12 +107,13 @@ export class Inbox {
     this.#purge();
     if (this.codes.size >= this.maxOpen) return { status: 503, body: { ok: false, reason: 'too many open inbox addresses, try again later' } };
     const mine = [...this.codes].filter(([, e]) => e.wallet === wallet && e.state === 'open').sort((a, b) => a[1].created - b[1].created);
-    while (mine.length >= this.maxPerWallet) this.codes.delete(mine.shift()[0]); // the oldest unused address makes room
+    while (mine.length >= this.maxPerWallet) { const [old] = mine.shift(); this.codes.delete(old); this.status.dropped(old); } // the oldest unused address makes room
     let code = newCode();
     while (this.codes.has(code)) code = newCode();
     const token = crypto.randomBytes(16).toString('hex');
     const created = this.now();
     this.codes.set(code, { wallet, tokenHash: sha(token).toString('hex'), created, expires: created + this.ttlMs, state: 'open', failures: 0, busy: false, result: null });
+    this.status.issued({ code, wallet, expiresAt: created + this.ttlMs }); // public row: address -> wallet; no token, no secret
     return {
       status: 200,
       body: {
@@ -113,24 +134,52 @@ export class Inbox {
     const m = new RegExp(`^([a-z2-7]{${CODE_LEN}})@${this.domain.replace(/[.]/g, '\\.')}$`).exec(String(rcpt || '').trim().toLowerCase());
     const entry = m && this.codes.get(m[1]);
     if (!entry) return { status: 404, body: { ok: false, reason: 'unknown inbox address' } };
-    if (entry.expires < this.now()) { this.codes.delete(m[1]); return { status: 410, body: { ok: false, reason: 'this inbox address has expired' } }; }
+    if (entry.expires < this.now()) { this.codes.delete(m[1]); this.status.dropped(m[1]); return { status: 410, body: { ok: false, reason: 'this inbox address has expired' } }; }
     if (entry.state === 'used') return { status: 410, body: { ok: false, reason: 'this inbox address already received a statement; ask for a new one' } };
     if (entry.state === 'locked') return { status: 429, body: { ok: false, reason: 'this inbox address is locked after too many refused messages; ask for a new one' } };
     if (entry.busy) return { status: 409, body: { ok: false, reason: 'a message for this address is being processed' } };
     entry.busy = true;
+    const code = m[1];
     try {
-      const r = await underwriter.submit(eml, entry.wallet, { recipient: `${m[1]}@${this.domain}` });
+      await this.status.received(code);
+      await this.status.checking(code);
+      let r;
+      try {
+        r = await underwriter.submit(eml, entry.wallet, { recipient: `${code}@${this.domain}` });
+      } catch (e) {
+        await this.status.refused(code, 'internal error');
+        throw e;
+      }
       if (r.ok) {
         entry.state = 'used';
         entry.result = r;
+        await this.status.limitPosted(code, r.message); // only the SHA-256 of the signed record goes out
         return { status: 200, body: { ok: true } }; // the limit is for the wallet, not for the mail path
       }
       entry.result = { ok: false, reason: r.reason };
       if (++entry.failures >= this.maxFailures) entry.state = 'locked';
+      await this.status.refused(code, r.reason, { locked: entry.state === 'locked' }); // a coarse code, never the sentence
       return { status: 422, body: { ok: false, reason: r.reason } };
     } finally {
       entry.busy = false;
     }
+  }
+
+  // Someone reports the devnet transaction that posted a record. The chain decides, not the caller: the transaction
+  // must be a successful Notch call carrying a record whose hash we issued. -> { status, body }
+  async reportPosted({ signature, rpc, programId, localhostEndpoint }) {
+    let v;
+    try {
+      v = await verifyPostedTx(rpc, { signature, programId, localhostEndpoint });
+    } catch (e) {
+      return { status: 422, body: { ok: false, reason: e.message } };
+    }
+    try {
+      await this.store.attachTx({ recordSha256: v.recordSha256, txSignature: signature, cluster: v.cluster });
+    } catch (e) {
+      return { status: 404, body: { ok: false, reason: 'that transaction carries a record this underwriter did not issue (or it is already linked)' } };
+    }
+    return { status: 200, body: { ok: true, cluster: v.cluster } };
   }
 
   // The borrower's poll. -> { status, body }
@@ -167,7 +216,29 @@ export async function handleInbox(inbox, underwriter, req, url, send) {
     let json;
     try { json = JSON.parse((body || Buffer.alloc(0)).toString('utf8')); } catch { json = null; }
     if (!json || typeof json !== 'object') { send(400, { ok: false, reason: 'send JSON {"wallet": "<address>"}' }); return true; }
-    const r = inbox.issue({ wallet: json.wallet, ts: json.ts, signature: json.signature });
+    let authedWallet = null;
+    const bearer = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization || ''))?.[1];
+    if (bearer) {
+      if (!inbox.auth) { send(401, { ok: false, reason: 'Sign in with Solana is not configured on this underwriter; sign the request with the wallet instead' }); return true; }
+      authedWallet = await inbox.auth.walletFor(bearer);
+      if (!authedWallet) { send(401, { ok: false, reason: 'the Supabase sign-in is invalid, expired, or not a Solana wallet' }); return true; }
+    }
+    const r = inbox.issue({ wallet: json.wallet, ts: json.ts, signature: json.signature, authedWallet });
+    send(r.status, r.body);
+    return true;
+  }
+  if (req.method === 'POST' && url.pathname === '/posted') {
+    const body = await readBody(req, 2048);
+    let json;
+    try { json = JSON.parse((body || Buffer.alloc(0)).toString('utf8')); } catch { json = null; }
+    if (!json || typeof json.signature !== 'string') { send(400, { ok: false, reason: 'send JSON {"signature": "<devnet transaction signature>"}' }); return true; }
+    const endpoint = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
+    const r = await inbox.reportPosted({
+      signature: json.signature,
+      rpc: inbox.chainRpc || (inbox.chainRpc = makeRpc({ endpoint })),
+      programId: process.env.NOTCH_PROGRAM_ID || DEFAULT_PROGRAM_ID,
+      localhostEndpoint: /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(endpoint),
+    });
     send(r.status, r.body);
     return true;
   }

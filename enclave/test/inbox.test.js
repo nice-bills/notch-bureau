@@ -16,7 +16,8 @@ after(() => servers.forEach((s) => s.close()));
 
 async function boot(inboxOpts = {}) {
   const u = new Underwriter({ resolver, llm: null });
-  const inbox = new Inbox({ domain: DOMAIN, secret: SECRET, ...inboxOpts });
+  // The wallet proof is required by default now; most tests here are about the mail path, so they use the test-only escape hatch.
+  const inbox = new Inbox({ domain: DOMAIN, secret: SECRET, insecureAllowUnsignedForTests: true, ...inboxOpts });
   const server = createApp(u, inbox);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   servers.push(server);
@@ -170,9 +171,8 @@ test('expired addresses are refused', async () => {
   assert.equal((await inbound(await statement(address), address)).status, 410);
 });
 
-test('optional wallet proof: a signed request is accepted, a wrong or stale one is not, and it can be made mandatory', async () => {
-  const { base, inbox } = await boot();
-  void inbox;
+test('wallet proof: a signed request is accepted, a wrong or stale one is not, and the proof is REQUIRED by default', async () => {
+  const { base } = await boot();
   const kp = nacl.sign.keyPair();
   const w = bs58.encode(kp.publicKey);
   const ask = async (b) => (await fetch(`${base}/inbox/new`, { method: 'POST', body: JSON.stringify(b) })).status;
@@ -181,8 +181,12 @@ test('optional wallet proof: a signed request is accepted, a wrong or stale one 
   assert.equal(await ask({ wallet: w, ts, signature: sign(w, ts) }), 200);
   assert.equal(await ask({ wallet: w, ts, signature: sign(w, ts, nacl.sign.keyPair().secretKey) }), 401);
   assert.equal(await ask({ wallet: w, ts: ts - 3600_000, signature: sign(w, ts - 3600_000) }), 401);
-  const strict = await boot({ requireWalletSig: true });
+  // no test-only escape hatch: exactly what a real server runs
+  const strict = await boot({ insecureAllowUnsignedForTests: false });
   const post = async (b) => (await fetch(`${strict.base}/inbox/new`, { method: 'POST', body: JSON.stringify(b) })).status;
   assert.equal(await post({ wallet: w }), 401);
   assert.equal(await post({ wallet: w, ts, signature: sign(w, ts) }), 200);
+  // and `new Inbox()` with no options is strict too
+  assert.equal(new Inbox().issue({ wallet: w }).status, 401);
+  assert.equal(new Inbox().requireWalletSig, true);
 });

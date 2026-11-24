@@ -1,0 +1,10 @@
+# Supabase CLI project layout (`supabase link --project-ref <ref>` connects it to a real project).
+# Only what this repo needs is set; everything else keeps the CLI defaults.
+project_id = "notch"
+
+[db]
+major_version = 17
+
+# The keeper is called by pg_cron/pg_net with its own shared secret (x-keeper-secret), not with a user JWT.
+[functions.keeper]
+verify_jwt = false

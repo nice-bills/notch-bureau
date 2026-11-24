@@ -12,7 +12,7 @@ export function createApp(u, inbox = new Inbox()) {
       res.end(JSON.stringify(obj));
     };
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token' });
+      res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token, authorization' });
       return res.end();
     }
     const url = new URL(req.url, 'http://x');

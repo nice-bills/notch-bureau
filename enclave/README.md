@@ -103,8 +103,10 @@ with `GET /record/<wallet>` + header `x-notch-token` (`waiting | ready | refused
 - Unknown/expired/used/locked addresses are refused (404/410/429). A refused message does not spend a code; five lock it.
 - **No redirect**: the DKIM-signed `To` header must name the very address the mail arrived at, so a statement meant for
   one inbox cannot be delivered into another wallet's. Asking for a code "for" someone else's wallet gives you only a
-  token that opens your own results. Optional wallet proof: Ed25519 signature over `notch-inbox-v1|<wallet>|<ts>`
-  (`NOTCH_INBOX_REQUIRE_WALLET_SIG=1` makes it mandatory).
+  token that opens your own results. The wallet proof is REQUIRED (since the Supabase layer): an Ed25519 signature over
+  `notch-inbox-v1|<wallet>|<ts>`, or a Supabase "Sign in with Solana" token as `Authorization: Bearer`. Only tests can skip it
+  (`insecureAllowUnsignedForTests`). Public status rows (received, checking, limit posted, refused) and the hash of each
+  record go to the `store` (memory by default, Supabase when configured): see [`../supabase/README.md`](../supabase/README.md).
 - Honest limits: Cloudflare sees the mail in transit (DKIM stops forgery, not reading); state is in memory (a restart
   forgets open addresses); no domain is owned yet (`inbox.notch.invalid` placeholder). Rehearsal incl. devnet:
   `node enclave/scripts/e2e-inbox.mjs`.
@@ -127,7 +129,8 @@ trying every number. Set `NOTCH_ID_PEPPER` (a long random secret, never change i
 | `NOTCH_SUPERTEAM_DOMAIN` | DKIM domain of Earn payout emails (default `superteam.fun`) |
 | `NOTCH_INBOX_DOMAIN` | domain of the statement inbox addresses (default `inbox.notch.invalid`, a placeholder) |
 | `NOTCH_INBOUND_SECRET` | shared secret of the Cloudflare worker; `/inbound` is disabled without it |
-| `NOTCH_INBOX_REQUIRE_WALLET_SIG` | `1`: `/inbox/new` needs a wallet signature |
+| `NOTCH_STORE` | `memory` (default) or `supabase`: where public statement status goes |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` | the live project (service key writes status; anon key checks "Sign in with Solana" tokens). Secrets: env only |
 | `NOTCH_ID_PEPPER` | secret mixed into the identity hash (see above) |
 | `SOLANA_RPC_URL`, `NOTCH_PROGRAM_ID` | chain reads (credit history, identity links, Earn payout proof) |
 | `NOTCH_USDC_MINT` | mint the Earn proof looks for (default mainnet USDC) |

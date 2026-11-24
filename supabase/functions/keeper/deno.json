@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "@solana/kit": "npm:@solana/kit@8.6.0"
+  }
+}
