@@ -10,6 +10,8 @@ import { DEFAULT_SUPERTEAM_DOMAIN, DEFAULT_TRUSTED as DEFAULT_TRUSTED_LIST, sour
 import { pdfAttachments } from './mime.js';
 import { StatementError, identityHash, parseStatements } from './statement.js';
 import { decodeEmailText } from './extract.js';
+import { PEER_WEIGHT } from './income.js';
+import crypto from 'node:crypto';
 import { USDC_MINT_MAINNET, findUsdcReceipt, makeRpc, signatureIn } from './chain-payout.js';
 
 export const DEFAULT_TRUSTED = DEFAULT_TRUSTED_LIST;
@@ -53,6 +55,7 @@ export class Underwriter {
     this.usdcMint = usdcMint;
     this.wallets = new Map(); // wallet -> { events }
     this.used = new Set(); // dedupe hashes (hex)
+    this.walletIds = new Map(); // wallet -> id_hash hex (this process); the chain pin (WalletIdentityPinned) is the durable copy
     this.identities = new Map(); // identity hash (hex) -> wallet: one mobile-money account, one wallet
     this.rows = new Set(); // statement rows already counted (identity|row), so overlapping statements never double count
     this.payoutTxs = new Set(); // chain transfers already spent on an Earn email
@@ -112,12 +115,29 @@ export class Underwriter {
     let got;
     try {
       got = kind === 'statement-pdf' ? await this.#statement(eml, now)
-        : kind === 'earn-payout' ? await this.#earn(eml, wallet, now)
-          : await this.#plain(eml, now);
+        : kind === 'earn-payout' ? await this.#earn(eml, wallet, now, v.domain)
+          : await this.#plain(eml, now, v.domain);
     } catch (e) {
       if (e instanceof Refusal || e instanceof StatementError) return { ok: false, reason: e.message };
       throw e;
     }
+
+    // The wallet's own credit line (chain). Fails closed on RPC trouble.
+    const history = this.historyProvider
+      ? await this.historyProvider(wallet)
+      : { repaidOnTime: 0, frozen: false };
+    // Audit #5 (enclave side): no new limit while a loan is overdue; the program refuses draws then, and a fresh record would
+    // only invite a pointless post. Pay (or let the keeper default) first.
+    if ((history.drawn ?? 0n) > 0n && history.due > 0 && Math.floor(now.getTime() / 1000) > history.due && !history.frozen) {
+      return { ok: false, reason: 'you have an overdue loan: repay it before asking for a new limit' };
+    }
+    // An Earn payout is spent by its ON-CHAIN transfer, not by the email that points at it: the record's dedupe (the program's
+    // one-shot PDA) is a hash of the payout transaction signatures, so a second, different email about the same transfer maps to
+    // the same dedupe and the program refuses it, even after this process restarted and forgot `payoutTxs` (audit #9).
+    const dedupe = got.payoutTxs?.length
+      ? crypto.createHash('sha256').update('notch-earn-v1').update([...got.payoutTxs].sort().join('|')).digest()
+      : v.dedupe;
+    if (got.payoutTxs?.length && this.used.has(dedupe.toString('hex'))) return { ok: false, reason: 'that payout was already used' };
 
     // One mobile-money account backs one wallet, ever. Checked here AND by the program (IdentityLink).
     const idHex = got.idHash ? got.idHash.toString('hex') : null;
@@ -125,6 +145,11 @@ export class Underwriter {
       const owner = this.identities.get(idHex) ?? (this.identityProvider ? await this.identityProvider(got.idHash) : null);
       if (owner && owner !== wallet) return { ok: false, reason: 'this mobile-money account is already linked to a different wallet' };
     }
+    // Audit #10: one wallet, one mobile-money account. The program pins the first identity to the wallet (WalletIdentityPinned);
+    // refuse here a statement for a different number so the user gets a clear answer instead of a failed transaction.
+    const pinned = history.idHash ? history.idHash.toString('hex') : this.walletIds.get(wallet);
+    if (idHex && pinned && pinned !== idHex) return { ok: false, reason: 'this wallet is already tied to a different mobile-money account' };
+
     if (!got.events.length) return { ok: false, reason: got.reason || 'no income found in email' };
     // Statements overlap (the 3-month statement you ask for tomorrow repeats today's rows): count each row once.
     let events = got.events;
@@ -147,13 +172,11 @@ export class Underwriter {
 
     const prior = this.wallets.get(wallet) || { events: [] };
     const nextEvents = [...prior.events, ...events.map((e) => ({ ...e, source: v.domain }))];
-    const history = this.historyProvider
-      ? await this.historyProvider(wallet)
-      : { repaidOnTime: 0, frozen: false };
     const { limitUsdc } = computeLimit(nextEvents, { now, ...history, signals: got.signals, seeker: !!seeker });
 
     this.used.add(key);
-    if (idHex) this.identities.set(idHex, wallet);
+    this.used.add(dedupe.toString('hex'));
+    if (idHex) { this.identities.set(idHex, wallet); this.walletIds.set(wallet, idHex); }
     if (seeker) this.devices.set(seeker.hex, wallet);
     for (const e of events) if (got.rowKeys) this.rows.add(`${idHex}|${e.txKey}`);
     for (const sig of got.payoutTxs || []) this.payoutTxs.add(sig);
@@ -163,7 +186,7 @@ export class Underwriter {
     const t = BigInt(now.getTime());
     this.nonce = t > this.nonce ? t : this.nonce + 1n;
     const signed = signRecord(
-      { wallet, limitUsdc, expiry, dedupe: v.dedupe, nonce: this.nonce, idHash: got.idHash || NO_IDENTITY, deviceHash: seeker?.hash },
+      { wallet, limitUsdc, expiry, dedupe, nonce: this.nonce, idHash: got.idHash || NO_IDENTITY, deviceHash: seeker?.hash },
       this.keys.secretKey,
     );
     // Only the limit and its signed record leave the enclave: no income, no source domain, no phone number
@@ -197,9 +220,12 @@ export class Underwriter {
   }
 
   // Amounts in the email text.
-  async #plain(eml, now) {
-    const x = await extractIncomeAuto(eml, { llm: this.llm, fetchImpl: this.llmFetch, now });
-    return { events: x.events, via: x.via };
+  async #plain(eml, now, domain) {
+    const x = await extractIncomeAuto(eml, { llm: this.llm, fetchImpl: this.llmFetch, now, domain });
+    // A person-to-person credit ("KOFI sent you ...") carries no proof of who the sender is, so it counts like a peer transfer
+    // on a statement: PEER_WEIGHT of its value (audit #8). Payer-side templates (Deel, Wise payout ...) count in full.
+    const events = x.events.map(({ peer, ...e }) => (peer ? { ...e, amount: e.amount * PEER_WEIGHT } : e));
+    return { events, via: x.via };
   }
 
   // Amounts in a PDF statement; the account's phone number is the identity.
@@ -220,8 +246,8 @@ export class Underwriter {
   }
 
   // Earn payout email + the matching USDC credit on chain.
-  async #earn(eml, wallet, now) {
-    const x = await extractIncomeAuto(eml, { llm: this.llm, fetchImpl: this.llmFetch, now });
+  async #earn(eml, wallet, now, domain) {
+    const x = await extractIncomeAuto(eml, { llm: this.llm, fetchImpl: this.llmFetch, now, domain });
     const usdc = x.events.filter((e) => e.currency === 'USDC' || e.currency === 'USD');
     if (!usdc.length) throw new Refusal('no USDC payout found in the Earn email');
     const rpc = this.chainRpc || (this.chainRpc = makeRpc());

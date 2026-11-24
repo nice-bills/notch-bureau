@@ -21,7 +21,7 @@
 // appear in the email text and (b) sit next to a credit keyword in that text. Anything
 // else is dropped, and if nothing survives we fall back to the rule-based extractor.
 import { USD_PER } from './underwrite.js';
-import { decodeEmailText, extractIncome, headerDate, scanCreditAmounts } from './extract.js';
+import { decodeEmailText, extractIncome, headerDate, isPeerLine, scanCreditAmounts } from './extract.js';
 import { CLASSES, applyDowngrades, classifyRows, finalizeIncome, rankOf } from './income.js';
 
 export const CURRENCIES = Object.freeze(Object.keys(USD_PER));
@@ -92,14 +92,18 @@ export function parseLlmEvents(content, { now = new Date() } = {}) {
 }
 
 // Keep only events whose amount is literally in the email *and* is a credit there.
-export function corroborateEvents(text, events) {
+export function corroborateEvents(text, events, { domain } = {}) {
   const literal = literalAmounts(text);
-  const credits = scanCreditAmounts(text);
+  const credits = scanCreditAmounts(text, { domain });
   return events.filter((e) => {
     const amountInText = literal.some((v) => Math.abs(v - e.amount) < 0.005);
     const creditInText = credits.some((c) => c.currency === e.currency && Math.abs(c.amount - e.amount) < 0.005);
     return amountInText && creditInText;
-  });
+  }).map((e) => ({
+    ...e,
+    // the model can never turn a person-to-person line into a payroll one: peer is read from the email's own sentence
+    peer: credits.some((c) => c.currency === e.currency && Math.abs(c.amount - e.amount) < 0.005 && isPeerLine(c.line)),
+  }));
 }
 
 // Statement PDFs: the rules in src/income.js have already sorted every credit into a class. The model is a second
@@ -195,14 +199,15 @@ export async function extractIncomeAuto(eml, {
   fetchImpl = fetch,
   now = new Date(),
   timeoutMs,
+  domain,
 } = {}) {
-  const rules = () => ({ events: extractIncome(eml), via: 'rules' });
+  const rules = () => ({ events: extractIncome(eml, { domain }), via: 'rules' });
   if (!llm) return rules();
   try {
     const text = decodeEmailText(eml);
     const content = await chatComplete({ config: llm, text, fetchImpl, timeoutMs });
     const parsed = parseLlmEvents(content, { now });
-    const events = corroborateEvents(text, parsed).map((event) => ({ ...event, date: headerDate(eml.toString(), now) }));
+    const events = corroborateEvents(text, parsed, { domain }).map((event) => ({ ...event, date: headerDate(eml.toString(), now) }));
     if (!events.length) return { ...rules(), note: 'llm returned no corroborated credit events' };
     return { events, via: 'llm' };
   } catch (err) {

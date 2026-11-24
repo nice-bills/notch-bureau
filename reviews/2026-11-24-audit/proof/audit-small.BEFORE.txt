@@ -1,0 +1,5 @@
+✔ #8: a person-to-person line cannot be promoted by the memo (free text only lowers) (32.562409ms)
+✔ #9: the same process also refuses the second email about the same transfer (16.648922ms)
+ℹ pass 2
+ℹ fail 6
+✖ failing tests:

@@ -1,0 +1,10 @@
+✔ #8: "KOFI sent you USD 150" counts at half the weight of a payer-side "Your payment of USD 150 has been sent" (68.563067ms)
+✔ #8: a person-to-person line cannot be promoted by the memo (free text only lowers) (32.529443ms)
+✔ #9: two different Earn emails about the SAME on-chain payout give the same dedupe, even after a restart (32.475805ms)
+✔ #9: the same process also refuses the second email about the same transfer (16.328627ms)
+✔ #10: a wallet that submitted a statement for one phone is refused a statement for another phone (in this process) (288.790217ms)
+✔ #10: ... and across a restart, the id_hash the program pinned in the line is what decides (168.653416ms)
+✔ #5 (enclave side): no new limit while a loan is overdue; fine before it is due, and fine once repaid (149.749785ms)
+✔ chain-history reads drawn, due and the pinned id_hash from a current 154 byte line (and none from a short one) (9.908127ms)
+ℹ pass 8
+ℹ fail 0

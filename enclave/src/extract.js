@@ -86,6 +86,10 @@ const GENERIC_PATTERNS = [
   re(`^${DATE_PREFIX}\\s+(?:salary credit|salary|payroll|credit(?!\\s*card)|deposit|cash in|transfer in|incoming transfer|mobile money received|momo received|received|payout)\\b[^\\n]{0,60}?\\s{M}\\s*(?:cr)?$`),
 ];
 
+// "KOFI sent you GHS 50": a person paying a person (a friend, or the holder's own second account), as opposed to a payer
+// that is a company or platform ("... paid you", "Your payout of ..."). Audit #8: such credits count like peer transfers.
+export const isPeerLine = (line) => /^[A-Za-z][A-Za-z .&'-]{0,40}\s+sent you\s/i.test(String(line));
+
 export function extractIncome(eml, { domain, now = new Date() } = {}) {
   const text = decodeEmailText(eml);
   const date = headerDate(eml.toString(), now);
@@ -93,6 +97,7 @@ export function extractIncome(eml, { domain, now = new Date() } = {}) {
     amount,
     currency,
     date,
+    peer: isPeerLine(line),
     kind: /^\W*(?:\d[^A-Za-z]*)?salary\b|\bsalary (?:credit|paid|received|deposited)/i.test(line) ? 'salary' : 'other_credit',
   }));
 }

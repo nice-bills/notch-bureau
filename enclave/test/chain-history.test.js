@@ -38,7 +38,7 @@ test('reads repayment count and default flag from the credit line', async () => 
       data: [data.toString('base64'), 'base64'],
     }),
   });
-  assert.deepEqual(history, { repaidOnTime: 3, frozen: true });
+  assert.deepEqual(history, { repaidOnTime: 3, frozen: true, drawn: 0n, due: 0, idHash: null });
 });
 
 test('rejects a credit line owned by a different program', async () => {

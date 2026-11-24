@@ -23,7 +23,10 @@ const mint = () => bs58.encode(crypto.randomBytes(32)); // looks like a mint add
 // stub for @solana-mobile/skr-genesis-token: wallet -> mints. `calls` records which wallet it was asked about.
 const stubReader = (table, calls = []) => async (w) => { calls.push(w); const v = table.get(w); if (v instanceof Error) throw v; return v || []; };
 const make = (extra = {}) => new InboxedUnderwriter({ resolver, llm: null, ...extra });
-const email = async () => momoStatementEmail({ msisdn: randomMsisdn(), rows: syntheticCashRows() });
+const email = async (msisdn = randomMsisdn()) => momoStatementEmail({ msisdn, rows: syntheticCashRows() });
+// One wallet = one phone number (audit #10): a test that submits for the same wallet twice must use that wallet's own number.
+const phones = new Map();
+const emailFor = (w) => { if (!phones.has(w.address)) phones.set(w.address, randomMsisdn()); return email(phones.get(w.address)); };
 
 // What a wallet does: SIWS signIn over the payload the underwriter issued (with its own address added).
 function prove(u, w, { address = w.address, mutate = {}, signer = w.kp, challenge } = {}) {
@@ -108,13 +111,13 @@ test('ATTACK replay: a proof works once; an old or invented challenge is refused
   const w = wallet();
   const u = make({ sgtReader: stubReader(new Map([[w.address, [mint()]]])) });
   const proof = prove(u, w);
-  assert.equal((await u.submit(await email(), w.address, { device: proof })).ok, true);
-  const again = await u.submit(await email(), w.address, { device: proof });
+  assert.equal((await u.submit(await emailFor(w), w.address, { device: proof })).ok, true);
+  const again = await u.submit(await emailFor(w), w.address, { device: proof });
   assert.equal(again.ok, false);
   assert.match(again.reason, /unknown, already used or expired/);
   // a nonce the client made up
   const fake = u.deviceChallenge();
-  const bad = await u.submit(await email(), w.address, { device: prove(u, w, { challenge: { ...fake, nonce: crypto.randomBytes(16).toString('hex') } }) });
+  const bad = await u.submit(await emailFor(w), w.address, { device: prove(u, w, { challenge: { ...fake, nonce: crypto.randomBytes(16).toString('hex') } }) });
   assert.equal(bad.ok, false);
 });
 
@@ -169,15 +172,15 @@ test('ATTACK one phone, two wallets: the second wallet holding the same SGT is r
   const a = wallet();
   const b = wallet();
   const u = make({ sgtReader: stubReader(new Map([[a.address, [m]], [b.address, [m]]])) });
-  assert.equal((await u.submit(await email(), a.address, { device: prove(u, a) })).ok, true);
-  const r = await u.submit(await email(), b.address, { device: prove(u, b) });
+  assert.equal((await u.submit(await emailFor(a), a.address, { device: prove(u, a) })).ok, true);
+  const r = await u.submit(await emailFor(b), b.address, { device: prove(u, b) });
   assert.equal(r.ok, false);
   assert.match(r.reason, /already linked to a different wallet/);
   assert.ok(!r.reason.includes(m));
   // the first wallet may come back (new statement, new proof): same phone, same wallet
-  assert.equal((await u.submit(await email(), a.address, { device: prove(u, a) })).ok, true);
+  assert.equal((await u.submit(await emailFor(a), a.address, { device: prove(u, a) })).ok, true);
   // b without the device proof still works as an ordinary borrower
-  assert.equal((await u.submit(await email(), b.address)).ok, true);
+  assert.equal((await u.submit(await emailFor(b), b.address)).ok, true);
 });
 
 test('the chain decides too: a phone the program already bound to another wallet is refused after an enclave restart', async () => {

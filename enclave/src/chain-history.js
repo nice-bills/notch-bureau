@@ -42,9 +42,18 @@ export async function getCreditHistory(wallet, {
   if (!data.subarray(8, 40).equals(Buffer.from(encodeAddress.encode(borrower)))) {
     throw new Error('Credit line belongs to a different wallet');
   }
+  // Layout (after the 8 byte discriminator): wallet 8..40, limit 40..48, expiry 48..56, drawn 56..64, due 64..72, repaid_on_time
+  // 72..76, repaid_late 76..80, last_nonce 80..88, defaulted 88, bump 89, borrower_deposit 90..98; then the 56 byte LineExt
+  // (posted_at 98..106, last_draw_at 106..114, counted_nonce 114..122, id_hash 122..154). A short (older) line has no ext.
+  const hasExt = data.length >= 154;
+  const idHash = hasExt ? data.subarray(122, 154) : null;
   return {
     repaidOnTime: data.readUInt32LE(72),
     frozen: data[88] === 1,
+    drawn: data.length >= 98 ? data.readBigUInt64LE(56) : 0n,
+    due: data.length >= 98 ? Number(data.readBigInt64LE(64)) : 0,
+    // the mobile-money account the program pinned to this wallet (audit #10); null = none pinned yet
+    idHash: idHash && idHash.some((b) => b !== 0) ? Buffer.from(idHash) : null,
   };
 }
 
