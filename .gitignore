@@ -8,3 +8,5 @@ test-ledger/
 
 # local-only checks of real statements (never commit)
 enclave/local-real-check.out*
+supabase/.temp/
+app/e2e-browser.log
