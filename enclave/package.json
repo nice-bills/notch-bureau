@@ -14,6 +14,7 @@
     "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
-    "pdfkit": "^0.21.0"
+    "pdfkit": "^0.21.0",
+    "pdfmake": "0.2.20"
   }
 }

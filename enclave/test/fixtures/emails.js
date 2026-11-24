@@ -7,7 +7,7 @@
 //   * creditNotice / deelPayout / bankStatement: generic body-text emails (MTN sends none of these).
 import crypto from 'node:crypto';
 import { dkimSign } from 'mailauth';
-import PDFDocument from 'pdfkit';
+import { statementPdf, syntheticRows } from './momo-pdf.js';
 
 export const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const pubB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
@@ -116,70 +116,8 @@ export const bankStatement = {
 
 export const dayAgo = (n, hms = '10:15:30') => new Date(Date.now() - n * 86400_000).toISOString().slice(0, 10) + ` ${hms}`;
 
-// Credits and debits, as a real month looks. Types follow the modelled column "Type".
-export const defaultStatementRows = () => [
-  { date: dayAgo(70), txid: '31245670011', type: 'CASH_IN', party: 'MTN AGENT 0244000111', amount: '800.00', fee: '0.00', balance: '850.00' },
-  { date: dayAgo(55), txid: '31245670012', type: 'TRANSFER_IN', party: 'KWAME ASANTE 0243000222 Payment for design work', amount: '1,250.00', fee: '0.00', balance: '2,100.00' },
-  { date: dayAgo(50), txid: '31245670013', type: 'PAYMENT', party: 'SHOPRITE ACCRA MALL', amount: '45.00', fee: '0.00', balance: '2,055.00' },
-  { date: dayAgo(40), txid: '31245670014', type: 'CASH_OUT', party: 'MTN AGENT 0244000333', amount: '200.00', fee: '2.00', balance: '1,853.00' },
-  { date: dayAgo(30), txid: '31245670015', type: 'TRANSFER_IN', party: 'ACME LTD 0302000444 October pay', amount: '2,000.00', fee: '0.00', balance: '3,853.00' },
-  { date: dayAgo(12), txid: '31245670016', type: 'AIRTIME', party: 'MTN AIRTIME', amount: '10.00', fee: '0.00', balance: '3,843.00' },
-  { date: dayAgo(5), txid: '31245670017', type: 'TRANSFER_OUT', party: 'EFUA BOATENG 0551000555', amount: '300.00', fee: '1.50', balance: '3,541.50' },
-];
-// Total credits in the default rows: 800 + 1,250 + 2,000 = 4,050 GHS.
-export const DEFAULT_STATEMENT_CREDITS = [800, 1250, 2000];
-
-// x of each column on the page (A4 landscape, points).
-const COLS = { date: 30, txid: 130, type: 215, party: 310, amount: 530, fee: 600, balance: 670 };
-
-export function statementPdf({
-  msisdn = '0241234567',
-  name = 'KOFI MENSAH',
-  rows = defaultStatementRows(),
-  currency = 'GHS',
-  userPassword,
-  extraHeaderLines = [],
-} = {}) {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 30, ...(userPassword ? { userPassword, ownerPassword: `${userPassword}-owner` } : {}) });
-    const chunks = [];
-    doc.on('data', (c) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-    const at = (text, x, y, opts = {}) => doc.text(String(text), x, y, { lineBreak: false, ...opts });
-    const tableHead = (y) => {
-      doc.font('Helvetica-Bold').fontSize(9);
-      at('Date', COLS.date, y); at('Transaction ID', COLS.txid, y); at('Type', COLS.type, y); at('From/To', COLS.party, y);
-      at(`Amount (${currency})`, COLS.amount, y); at('Fee', COLS.fee, y); at('Balance', COLS.balance, y);
-      doc.moveTo(30, y + 13).lineTo(812, y + 13).stroke();
-      doc.font('Helvetica').fontSize(9);
-      return y + 20;
-    };
-
-    doc.font('Helvetica-Bold').fontSize(16);
-    at('MTN Mobile Money', 30, 30);
-    doc.fontSize(11);
-    at('Statement of Account', 30, 52);
-    doc.font('Helvetica').fontSize(10);
-    let y = 74;
-    for (const line of [`Account Name: ${name}`, `Mobile Number: ${msisdn}`, `Currency: ${currency}`, `Statement Period: ${dayAgo(90).slice(0, 10)} to ${dayAgo(0).slice(0, 10)}`, ...extraHeaderLines]) {
-      at(line, 30, y);
-      y += 14;
-    }
-    y = tableHead(y + 10);
-    for (const r of rows) {
-      if (y > 540) { doc.addPage(); y = tableHead(30); }
-      const partyHeight = doc.heightOfString(r.party, { width: 200 });
-      at(r.date, COLS.date, y); at(r.txid, COLS.txid, y); at(r.type, COLS.type, y);
-      doc.text(r.party, COLS.party, y, { width: 200 }); // free text wraps inside its own column
-      at(r.amount, COLS.amount, y, { width: 55, align: 'right' }); // numbers are right-aligned
-      at(r.fee, COLS.fee, y, { width: 55, align: 'right' }); at(r.balance, COLS.balance, y, { width: 55, align: 'right' });
-      y += Math.max(partyHeight, 12) + 6;
-    }
-    at('This statement is system generated and does not require a signature.', 30, Math.min(y + 20, 560));
-    doc.end();
-  });
-}
+// The statement PDF itself (real MTN layout, synthetic data, pdfmake) lives in momo-pdf.js.
+export { statementPdf, syntheticRows, SYNTH_HOLDER, at as momoAt } from './momo-pdf.js';
 
 const b64lines = (buf) => buf.toString('base64').replace(/.{76}/g, '$&\r\n');
 
@@ -189,6 +127,7 @@ export async function momoStatementEmail({
   rows,
   msisdn,
   name,
+  to = 'student@example.com',
   domain = 'mtn.com',
   from = 'MTN MoMo <ServiceMMStatement.GH@mtn.com>',
   subject = 'MTN MoMo Statement',
@@ -197,11 +136,11 @@ export async function momoStatementEmail({
   userPassword,
   unique = true,
 } = {}) {
-  const attachment = pdf ?? (await statementPdf({ rows, msisdn, name, userPassword }));
+  const attachment = pdf ?? (await statementPdf({ rows: rows ?? syntheticRows(), msisdn, ...(name ? { holder: name } : {}), userPassword }));
   const boundary = `----=_Part_${crypto.randomUUID().replace(/-/g, '')}`;
   const msg = [
     `From: ${from}`,
-    'To: student@example.com',
+    `To: ${to}`,
     `Subject: ${subject}`,
     `Date: ${date.toUTCString()}`,
     `Message-ID: <${crypto.randomUUID()}@${domain}>`,

@@ -37,7 +37,7 @@ export async function verifyEmail(eml, { trusted, resolver } = {}) {
   // (new selector or timestamp) yields a new b= but the same body, so it stays a duplicate.
   const domain = d;
   const dedupe = crypto.createHash('sha256').update(`${domain}|${hit.bodyHash}`).digest();
-  return { ok: true, domain, selector: hit.selector, dedupe };
+  return { ok: true, domain, selector: hit.selector, dedupe, signedHeaders: signed };
 }
 
 function isTrusted(domain, trusted) {
@@ -84,4 +84,12 @@ function fromDomain(eml) {
   const m = value.match(/<\s*[^<>@\s]+@([^<>@\s]+)\s*>\s*$/) || value.match(/^[^<>@\s"]+@([^<>@\s]+)$/);
   if (!m) return { ok: false, reason: 'could not read the From address' };
   return { ok: true, domain: m[1].toLowerCase() };
+}
+
+// The addresses on the (single) To header, lower-cased. Several To headers are refused: like From, a second one
+// added in front of the signed one could show a different recipient.
+export function toAddresses(eml) {
+  const tos = headBlock(eml).split(/\r?\n/).filter((l) => /^to:/i.test(l));
+  if (tos.length !== 1) return { ok: false, reason: tos.length ? 'message has several To headers' : 'message has no To header' };
+  return { ok: true, addresses: [...tos[0].replace(/^to:/i, '').matchAll(/[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)].map((m) => m[0].toLowerCase()) };
 }

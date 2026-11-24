@@ -5,3 +5,6 @@ node_modules/
 test-ledger/
 .env
 .env.*
+
+# local-only checks of real statements (never commit)
+enclave/local-real-check.out*

@@ -1,53 +1,62 @@
-// Mobile-money statement PDF -> credit rows + the account's phone number.
+// Mobile-money statement PDF -> transaction rows + the account's identity (wallet number, holder).
 //
-// Layout modelled here (MTN MoMo Ghana "MomoStatementReport.pdf" - modelled, NOT yet checked against a real
-// file; see README SOURCES): a header block (title, account name, "Mobile Number: ...", period, currency),
-// then a table whose header row names the columns, then one row per transaction:
+// Layout (MTN MoMo Ghana, read from a REAL statement on 2026-11-23, made with pdfmake): a header block
+// ("Account holder:", "Wallet number:", "From date:", "To date:" ...), an "Available balance GHS x" line, then a table
+// repeated on every page whose header row names the columns
 //
-//   Date | Transaction ID | Type | From/To | Amount | Fee | Balance
+//   Date & Time | Payment Type | To/From | Account Name | Amount (+/-) | Transaction ID | Fees | Tax | Balance | Reference
 //
-// SECURITY MODEL. The PDF is signed by the provider, but several cells are written by other people (the
-// counterparty name, the memo). So:
-//   * the columns come from the table's own header row, and a transaction row is a line whose FIRST
-//     column holds a date: wrapped memo text sits in the From/To column and is never a row;
-//   * the amount is read only from the Amount column. Fee and Balance columns are ignored, and so is
-//     everything in the free-text columns;
-//   * a row is income only when its Type is on the credit list (cash-in, incoming transfer, salary ...).
-//     Debits, fees, airtime and anything unknown are ignored (fail closed);
-//   * the phone number is read only from the header block above the table, and only from a line that
-//     STARTS with its label.
+// Rows run newest first. Dates look like "5 Nov 2026 14:32" (the day is NOT zero padded). The Amount carries its sign;
+// Fees, Tax and Balance carry "GHS ". Long cells wrap onto extra lines in their own column. The row rule is
+//
+//   balance(row) - balance(next older row) = amount - fees - tax
+//
+// and the parser checks it on every row (see `balance` in the result); a row that breaks it is reported, and a
+// credit on such a row never counts as income.
+//
+// SECURITY MODEL. The PDF is not signed, the DKIM signature on the email is (and covers the PDF bytes). Even so, several
+// cells are written by other people (the counterparty's registered name, the memo), so:
+//   * columns come from the table's own header row; a transaction row is a line whose FIRST column holds a date, so a
+//     memo that wraps onto a new line stays in its column and can never pass for a row;
+//   * the amount is read only from the Amount column (signed); the identity only from the header block, only from the
+//     value next to its label;
+//   * free text is handed on as data. src/income.js lets it LOWER what a credit counts for, never raise it.
 import crypto from 'node:crypto';
 import { readPdf } from './pdf-text.js';
 
 export class StatementError extends Error {}
 
-const CREDIT_TYPES = new Set([
-  'CASH_IN', 'TRANSFER_IN', 'PAYMENT_RECEIVED', 'RECEIVE_MONEY', 'MONEY_RECEIVED', 'SALARY', 'DEPOSIT',
-  'MERCHANT_CREDIT', 'BULK_CREDIT', 'DISBURSEMENT_IN',
-]);
-
 // Header-cell keyword -> column key. First match per key wins, left to right.
 const COLUMN_WORDS = [
   ['date', /^(?:transaction\s+)?date\b/i],
-  ['txid', /^(?:financial\s+)?(?:transaction|txn|trans)\.?\s*(?:id|no|number|ref)\b|^(?:id|reference)$/i],
-  ['type', /^(?:transaction\s+)?(?:type|description)\b/i],
-  ['party', /^(?:from\s*\/\s*to|from|to|counterparty|details|narration|message)\b/i],
+  ['type', /^(?:payment\s+)?type\b|^payment$/i],
+  ['party', /^(?:to\s*\/\s*from|from\s*\/\s*to)\b/i],
+  ['acct', /^account\b/i],
   ['amount', /^amount\b/i],
-  ['fee', /^(?:fees?|charges?)\b/i],
+  ['txid', /^(?:financial\s+)?(?:transaction|txn)\s*(?:id|no|number)\b|^transaction$/i],
+  ['fees', /^(?:fees?|charges?)\b/i],
+  ['tax', /^(?:tax|e-?levy|levy)\b/i],
   ['balance', /^(?:balance|bal)\b/i],
+  ['ref', /^(?:reference|narration|memo|message)\b/i],
 ];
-const DATE_CELL = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$|^(\d{2})[/-](\d{2})[/-](\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/;
-const MONEY_CELL = /^([+-])?\s*(?:(GHS|GH₵|USD|NGN|KES|EUR|GBP)\s*)?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)(?!\d)\s*$/i;
-const LABELLED_NUMBER = /^(?:mobile|phone|msisdn|wallet|account)\s*(?:number|no\.?|#)?\s*:\s*(\+?\d[\d\s-]{7,16}\d)$/i;
-const CURRENCY_LINE = /^currency\s*:\s*([A-Za-z]{3})$/i;
+const REQUIRED = ['date', 'type', 'amount', 'txid', 'balance'];
+const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+// "5 Nov 2026 14:32" | "05 Nov 2026 14:32:10" | "2026-11-05 14:32:10" | "05/11/2026 14:32"
+const DATE_CELL = /^(\d{1,2})\s+([A-Za-z]{3})[a-z]*\.?\s+(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$|^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$|^(\d{2})[/-](\d{2})[/-](\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/;
+const AMOUNT_CELL = /^([+-])\s*(?:(GHS|GH₵|USD|NGN|KES|EUR|GBP)\s*)?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)$/i;
+const PLAIN_MONEY = /^(?:(GHS|GH₵|USD|NGN|KES|EUR|GBP)\s*)?(-)?\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)$/i;
 const TX_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{5,39}$/;
+const PAGE_FOOTER = /^Page\s+\d+\s+of\s+\d+$/i;
 const MAX_ROWS = 5000;
+const CHAIN_TOLERANCE = 0.005;
+// More than this share of rows breaking the running-balance rule means we are not reading the table correctly.
+// (One misread cell breaks two links: its own and its newer neighbour's.)
+export const MAX_CHAIN_FAILURE_SHARE = 0.1;
 
 // Parse every PDF in `pdfs` ([{ content }]) and merge. Throws StatementError with a user-safe reason.
 export async function parseStatements(pdfs, { now = new Date(), defaultCurrency = 'GHS', countryCode = '233' } = {}) {
   if (!pdfs.length) throw new StatementError('the email has no PDF statement attached');
-  const out = { credits: [], text: '', msisdn: null, rows: 0 };
-  const numbers = new Set();
+  const parts = [];
   for (const pdf of pdfs) {
     let doc;
     try {
@@ -55,72 +64,86 @@ export async function parseStatements(pdfs, { now = new Date(), defaultCurrency 
     } catch (e) {
       throw new StatementError(e.message);
     }
-    const one = parseStatement(doc, { now, defaultCurrency, countryCode });
-    if (one.msisdn) numbers.add(one.msisdn);
-    out.credits.push(...one.credits);
-    out.rows += one.rows;
-    out.text += `${one.text}\n`;
+    parts.push(parseStatement(doc, { now, defaultCurrency, countryCode }));
   }
+  const numbers = new Set(parts.map((p) => p.msisdn).filter(Boolean));
   if (numbers.size === 0) throw new StatementError('could not find the account phone number in the statement');
   if (numbers.size > 1) throw new StatementError('the attached statements belong to different phone numbers');
-  out.msisdn = [...numbers][0];
-  // The same transaction can appear in two attached statements; count it once.
+  const currencies = new Set(parts.map((p) => p.currency));
+  if (currencies.size > 1) throw new StatementError('the attached statements use different currencies');
+
+  // The same transaction can appear in two attached statements; keep it once, newest first.
   const seen = new Set();
-  out.credits = out.credits.filter((c) => !seen.has(c.txKey) && seen.add(c.txKey));
-  return out;
+  const rows = parts.flatMap((p) => p.rows).filter((r) => !seen.has(r.txKey) && seen.add(r.txKey));
+  rows.sort((a, b) => b.date - a.date); // stable: rows of one minute keep the order the statement printed them in
+  const balance = checkBalances(rows);
+  if (rows.length && balance.failed.length / rows.length > MAX_CHAIN_FAILURE_SHARE) {
+    throw new StatementError(`the statement table does not add up (${balance.failed.length} of ${rows.length} rows break the running balance), so it cannot be read reliably`);
+  }
+  return {
+    rows,
+    msisdn: [...numbers][0],
+    holder: parts.map((p) => p.holder).find(Boolean) || '',
+    currency: [...currencies][0],
+    period: { from: minDate(parts.map((p) => p.from)), to: maxDate(parts.map((p) => p.to)) },
+    text: parts.map((p) => p.text).join('\n'),
+    pages: parts.reduce((s, p) => s + p.pages, 0),
+    balance,
+  };
 }
 
 export function parseStatement(doc, { now = new Date(), defaultCurrency = 'GHS', countryCode = '233' } = {}) {
   const { lines } = doc;
-  const head = lines.findIndex((l) => columnsOf(l));
-  if (head < 0) throw new StatementError('no transaction table found in the statement');
-  const cols = columnsOf(lines[head]);
+  const first = lines.findIndex((l) => columnsOf(l));
+  if (first < 0) throw new StatementError('no transaction table found in the statement');
 
-  // ---- header block: phone number + currency (above the table only)
-  const numbers = new Set();
-  let currency = null;
-  for (const l of lines.slice(0, head)) {
-    const t = l.items.map((i) => i.str).join(' ').trim();
-    const num = t.match(LABELLED_NUMBER);
-    if (num) {
-      const n = normalizeMsisdn(num[1], countryCode);
-      if (n) numbers.add(n);
-    }
-    const cur = t.match(CURRENCY_LINE);
-    if (cur && !currency) currency = cur[1].toUpperCase();
-  }
-  const amountHeader = lines[head].items.find((i) => COLUMN_WORDS[4][1].test(i.str))?.str || '';
-  currency = currency || amountHeader.match(/\(([A-Za-z]{3})\)/)?.[1]?.toUpperCase() || defaultCurrency;
-  if (numbers.size > 1) throw new StatementError('the statement names more than one phone number');
+  // ---- header block (above the first table header only)
+  const head = readHeader(lines.slice(0, first), countryCode);
 
-  // ---- table rows
-  const credits = [];
+  // ---- table: the header row repeats on every page, rows follow, "Page N of M" closes the table on a page
+  const rows = [];
   const textLines = [];
-  let rows = 0;
-  for (const l of lines.slice(head)) {
+  let cols = null;
+  let cur = null; // the row being filled (continuation lines belong to it)
+  let inTable = false;
+  for (const l of lines.slice(first)) {
+    const header = columnsOf(l);
+    if (header) { cols = header; cur = null; inTable = true; continue; }
+    if (l.items.some((i) => PAGE_FOOTER.test(i.str))) { cur = null; inTable = false; continue; }
+    if (!inTable) continue;
     textLines.push(l.items.map((i) => i.str).join('  '));
-    if (l === lines[head] || !isRowStart(l, cols)) continue;
-    const cell = cellsOf(l, cols);
-    const at = parseDate(cell.date);
-    const money = parseMoney(cell.amount);
-    if (!at || !money) continue;
-    if (++rows > MAX_ROWS) throw new StatementError('statement has too many rows');
-    const type = String(cell.type || '').toUpperCase().replace(/[^A-Z]+/g, '_').replace(/^_|_$/g, '');
-    if (!CREDIT_TYPES.has(type) || money.sign === '-') continue;
-    if (at.getTime() > now.getTime() + 86400_000) continue; // a statement cannot describe the future
-    const txid = TX_ID.test(cell.txid || '') ? cell.txid : null;
-    // Row identity for double-count protection: overlapping statements repeat the same rows.
-    const txKey = crypto.createHash('sha256').update(`${txid || `${cell.date}|${type}|${money.value}|${cell.balance || ''}`}`).digest('hex');
-    credits.push({
-      amount: money.value,
-      currency: money.currency || currency,
-      date: at > now ? now : at,
-      kind: type === 'SALARY' ? 'salary' : type === 'CASH_IN' || type === 'DEPOSIT' ? 'other_credit' : 'transfer_in',
-      txKey,
-      amountText: cell.amount.replace(/^[+-]\s*/, ''),
-    });
+    if (isRowStart(l, cols)) {
+      if (rows.length >= MAX_ROWS) throw new StatementError('statement has too many rows');
+      cur = { page: l.page, cells: {} };
+      rows.push(cur);
+    } else if (!cur || cur.page !== l.page) {
+      continue; // second header line ("Time", "Type", ...) or stray text: not part of any row
+    }
+    addToCells(cur.cells, l, cols);
   }
-  return { credits, text: textLines.join('\n'), msisdn: numbers.size ? [...numbers][0] : null, rows };
+
+  const out = [];
+  for (const r of rows) {
+    const row = buildRow(r.cells, r.page, { defaultCurrency, now, countryCode });
+    if (row) out.push(row);
+  }
+  if (out.length < rows.length) throw new StatementError(`could not read ${rows.length - out.length} of ${rows.length} transaction rows (unexpected cell format)`);
+  const currencies = new Set(out.map((r) => r.currency));
+  if (currencies.size > 1) throw new StatementError('the statement mixes currencies');
+  const currency = out[0]?.currency || head.currency || defaultCurrency;
+  // The statement is newest-first; accept the other order too.
+  if (out.length > 1 && out[0].date < out[out.length - 1].date) out.reverse();
+  return {
+    rows: out,
+    msisdn: head.msisdn,
+    holder: head.holder,
+    currency,
+    from: head.from,
+    to: head.to,
+    available: head.available,
+    text: textLines.join('\n'),
+    pages: doc.pages,
+  };
 }
 
 // ---- identity -------------------------------------------------------------------------------------
@@ -142,6 +165,52 @@ export function identityHash(msisdn, pepper = '') {
   return crypto.createHash('sha256').update(`notch-msisdn|${pepper ? `${pepper}|` : ''}${msisdn}`).digest();
 }
 
+// ---- header block ---------------------------------------------------------------------------------
+
+const LABEL = /^(account holder|wallet number|mobile number|phone number|from date|to date|duration|profile|available balance)\s*:?$/i;
+
+function readHeader(lines, countryCode) {
+  const out = { msisdn: null, holder: '', currency: null, from: null, to: null, available: null };
+  const numbers = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    const items = lines[i].items;
+    for (let k = 0; k < items.length; k++) {
+      const m = LABEL.exec(items[k].str);
+      if (!m) continue;
+      const label = m[1].toLowerCase();
+      const next = items.slice(k + 1).find((it) => it.x > items[k].x + 5);
+      const value = next && !LABEL.test(next.str) ? next : null;
+      if (!value) continue;
+      if (label === 'wallet number' || label === 'mobile number' || label === 'phone number') {
+        const n = normalizeMsisdn(value.str, countryCode);
+        if (n) numbers.add(n);
+      } else if (label === 'account holder') {
+        // the name wraps: keep taking the value column on the next lines until another label starts
+        const parts = [value.str];
+        for (let j = i + 1; j < lines.length; j++) {
+          if (lines[j].items.some((it) => Math.abs(it.x - items[k].x) <= 4)) break;
+          const cont = lines[j].items.find((it) => Math.abs(it.x - value.x) <= 4);
+          if (!cont) break;
+          parts.push(cont.str);
+        }
+        out.holder = parts.join(' ').replace(/\s+/g, ' ').trim().toUpperCase();
+      } else if (label === 'from date') out.from = parseDate(value.str);
+      else if (label === 'to date') out.to = parseDate(value.str);
+    }
+    // "Available balance GHS 1,321.04" is one item
+    for (const it of items) {
+      const m = /^available balance\s+(?:(GHS|USD|NGN|KES|EUR|GBP)\s*)?([\d,]+(?:\.\d{1,2})?)$/i.exec(it.str);
+      if (m) {
+        out.available = Number(m[2].replace(/,/g, ''));
+        out.currency = (m[1] || '').toUpperCase() || out.currency;
+      }
+    }
+  }
+  if (numbers.size > 1) throw new StatementError('the statement names more than one phone number');
+  out.msisdn = numbers.size ? [...numbers][0] : null;
+  return out;
+}
+
 // ---- table geometry -------------------------------------------------------------------------------
 
 function columnsOf(line) {
@@ -151,41 +220,110 @@ function columnsOf(line) {
       if (re.test(it.str) && !(key in cols)) { cols[key] = it.x; break; }
     }
   }
-  return 'date' in cols && 'amount' in cols && 'type' in cols ? cols : null;
+  return REQUIRED.every((k) => k in cols) ? cols : null;
 }
 
-function cellsOf(line, cols) {
+function addToCells(cells, line, cols) {
   const order = Object.entries(cols).sort((a, b) => a[1] - b[1]);
-  const cells = {};
   for (const it of line.items) {
     let key = null;
     for (const [k, x] of order) if (it.x >= x - 3) key = k;
     if (key) cells[key] = cells[key] ? `${cells[key]} ${it.str}` : it.str;
   }
-  return cells;
 }
 
 // A row starts with a date in the first (Date) column; nothing else qualifies.
 function isRowStart(line, cols) {
   const first = line.items[0];
-  return !!first && Math.abs(first.x - cols.date) <= 6 && DATE_CELL.test(cellsOf(line, cols).date || '');
+  return !!first && Math.abs(first.x - cols.date) <= 6 && !!DATE_CELL.test(first.str);
+}
+
+function buildRow(cell, page, { defaultCurrency, now, countryCode }) {
+  const date = parseDate(cell.date);
+  const amt = AMOUNT_CELL.exec(String(cell.amount || '').trim());
+  const bal = parsePlain(cell.balance);
+  if (!date || !amt || !bal) return null;
+  const fee = cell.fees ? parsePlain(cell.fees) : { value: 0 };
+  const tax = cell.tax ? parsePlain(cell.tax) : { value: 0 };
+  if (!fee || !tax) return null;
+  const amount = (amt[1] === '-' ? -1 : 1) * Number(amt[3].replace(/,/g, ''));
+  if (!Number.isFinite(amount) || amount === 0) return null;
+  const currency = normCur(amt[2]) || bal.currency || defaultCurrency;
+  const txid = TX_ID.test(cell.txid || '') ? cell.txid : null;
+  const dateText = String(cell.date).trim();
+  const partyDigits = String(cell.party || '').replace(/\D/g, '');
+  return {
+    page,
+    date,
+    future: date.getTime() > now.getTime() + 86400_000, // a statement cannot describe the future: such a row never counts
+    dateText,
+    type: String(cell.type || '').trim().toUpperCase().replace(/\s+/g, ' '),
+    // The counterparty's phone number when it is one; short codes ("9") and empty cells mean a system account.
+    party: partyDigits.length >= 9 ? (normalizeMsisdn(partyDigits, countryCode) || partyDigits) : '',
+    acct: String(cell.acct || '').replace(/\s+/g, ' ').trim(),
+    ref: String(cell.ref || '').replace(/\s+/g, ' ').trim(),
+    amount,
+    fee: fee.value,
+    tax: tax.value,
+    balance: bal.signed,
+    currency,
+    txid,
+    // Row identity (overlapping statements repeat rows). The same id can appear on a transfer and on its fee row.
+    txKey: crypto.createHash('sha256').update(`${txid || ''}|${dateText}|${amount}|${bal.signed}`).digest('hex'),
+  };
+}
+
+// ---- running-balance check ------------------------------------------------------------------------
+
+// rows are newest first. For each row with an older neighbour: balance - olderBalance == amount - fee - tax.
+// A row that breaks it (a misread cell, or rows missing from the statement) is listed in `failed` by row number
+// (1 = newest) and its credit never counts as income. The oldest row has no neighbour and is not checked.
+export function checkBalances(rows) {
+  const failed = [];
+  let checked = 0;
+  for (let i = 0; i < rows.length - 1; i++) {
+    checked++;
+    const r = rows[i];
+    const diff = Math.round((r.balance - rows[i + 1].balance) * 100) / 100;
+    const want = Math.round((r.amount - r.fee - r.tax) * 100) / 100;
+    r.balanceOk = Math.abs(diff - want) <= CHAIN_TOLERANCE;
+    if (!r.balanceOk) failed.push(i + 1);
+  }
+  if (rows.length) rows[rows.length - 1].balanceOk = true; // nothing older to compare with: judged by its own cells only
+  return { checked, passed: checked - failed.length, failed };
+}
+
+// ---- cells ----------------------------------------------------------------------------------------
+
+function normCur(c) {
+  if (!c) return null;
+  const u = c.toUpperCase();
+  return u === 'GH₵' ? 'GHS' : u;
+}
+
+function parsePlain(text) {
+  const m = PLAIN_MONEY.exec(String(text || '').trim());
+  if (!m) return null;
+  const value = Number(m[3].replace(/,/g, ''));
+  return Number.isFinite(value) ? { value, signed: m[2] ? -value : value, currency: normCur(m[1]) } : null;
 }
 
 function parseDate(text) {
-  const m = DATE_CELL.exec(text || '');
+  const m = DATE_CELL.exec(String(text || '').trim());
   if (!m) return null;
-  const [y, mo, d, h, mi, s] = m[1]
-    ? [m[1], m[2], m[3], m[4], m[5], m[6]]
-    : [m[9], m[8], m[7], m[10], m[11], m[12]]; // DD/MM/YYYY
+  let y; let mo; let d; let h; let mi; let s;
+  if (m[1]) {
+    const mon = MONTHS[m[2].toLowerCase()];
+    if (mon === undefined) return null;
+    [d, mo, y, h, mi, s] = [m[1], mon + 1, m[3], m[4], m[5], m[6]];
+  } else if (m[7]) {
+    [y, mo, d, h, mi, s] = [m[7], m[8], m[9], m[10], m[11], m[12]];
+  } else {
+    [d, mo, y, h, mi, s] = [m[13], m[14], m[15], m[16], m[17], m[18]]; // DD/MM/YYYY
+  }
   const date = new Date(Date.UTC(+y, +mo - 1, +d, +(h || 0), +(mi || 0), +(s || 0)));
-  return Number.isNaN(date.getTime()) || date.getUTCMonth() !== +mo - 1 ? null : date;
+  return Number.isNaN(date.getTime()) || date.getUTCMonth() !== +mo - 1 || date.getUTCDate() !== +d ? null : date;
 }
 
-function parseMoney(text) {
-  const m = MONEY_CELL.exec(String(text || '').trim());
-  if (!m) return null;
-  const value = Number(m[3].replace(/,/g, ''));
-  if (!Number.isFinite(value) || value <= 0) return null;
-  const cur = m[2] && (m[2].toUpperCase() === 'GH₵' ? 'GHS' : m[2].toUpperCase());
-  return { sign: m[1] || '', value, currency: cur || null };
-}
+const minDate = (ds) => ds.filter(Boolean).sort((a, b) => a - b)[0] || null;
+const maxDate = (ds) => ds.filter(Boolean).sort((a, b) => b - a)[0] || null;

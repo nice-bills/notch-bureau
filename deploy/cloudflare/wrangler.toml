@@ -1,0 +1,7 @@
+name = "notch-inbox"
+main = "email-worker.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# Where the enclave listens (HTTPS). The shared secret is NOT here: `wrangler secret put NOTCH_INBOUND_SECRET`.
+NOTCH_INBOUND_URL = "https://REPLACE-WITH-ENCLAVE-HOST/inbound"

@@ -1,0 +1,45 @@
+program 4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz
+admin   BEEwhev4xcmigv7qKxczMQUTsDkz5mcY3f4gKRCijEP6
+on-chain underwriter AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2 (local demo key AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2)
+
+=== 1. enclave HTTP app (real Underwriter + Inbox + routes) with the local demo key
+  PASS  enclave key == the key the program trusts
+
+=== 2. a fresh borrower asks for its statement address
+  PASS  without a wallet signature /inbox/new is refused (strict mode)
+  PASS  inbox address issued on the configured domain  (ee2itqkuh3@inbox.notch.test)
+
+=== 3. DKIM-signed synthetic MTN statement email addressed to that address -> Cloudflare worker -> /inbound
+  PASS  the worker forwarded it and the enclave accepted it  (accepted)
+
+=== 4. fetch the signed record with the poll token
+  PASS  record ready  (limit 27.76 USDC, reader rules)
+  PASS  signature verifies against the enclave key
+  PASS  record is for the borrower wallet
+  PASS  identity hash present (one MoMo number = one wallet)
+  PASS  limit comes from classified income, below the first-timer cap
+
+=== 5. post_limit on devnet, read the CreditLine back
+  tx  ok      post_limit (record from the statement inbox)
+      https://explorer.solana.com/tx/4qFyjpHd16xf4iyf1YnniVXZ6K5seRfXos7BEx3SBS2duChTrgxPVKuti885czS7YdpTj56smwWtA3NAeakLnANe?cluster=devnet
+  PASS  post_limit accepted
+  PASS  CreditLine account exists
+  PASS  CreditLine wallet == borrower
+  PASS  CreditLine limit == the signed limit  (27.76 USDC)
+  PASS  CreditLine expiry == record expiry
+
+=== 6. negative cases
+  PASS  unknown code is bounced  (address cannot take this message (404))
+  PASS  Alice's statement delivered to Mallory's code is refused (wrong-wallet redirect)  (address cannot take this message (422))
+  PASS  Mallory's wallet gets no record out of it
+  PASS  replay of the accepted statement to its own (spent) code is refused  (address cannot take this message (410))
+  PASS  the same mail at a fresh code of the same wallet is refused (To header names the old code)  (address cannot take this message (422))
+  PASS  same MoMo number, new mail, nothing new: refused  (address cannot take this message (422))
+  PASS  tampered PDF (DKIM breaks) is refused  (address cannot take this message (422))
+  tx  REFUSED  ATTACK replay of the same signed record on chain
+      https://explorer.solana.com/tx/5hbFQWyqMeNutkR3aougG7Xfi1BMRtH1GNHYz3VJDAoJXBfk2PXWstDSSMDGHjXSmUoAgaZ21ouGG39Go3jqrKPN?cluster=devnet
+  PASS  the same signed record cannot be posted twice (dedupe account exists)  (already in use)
+
+22/22 checks passed
+
+E2E INBOX: GREEN

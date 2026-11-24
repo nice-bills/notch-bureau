@@ -30,7 +30,7 @@ export const NOTCH_ENV = {
   NOTCH_USDC_MINT: '8w1jur5oikV5aax7Q8eTSZwfZwVvFQDTknMTREJ75NNS', // devnet test USDC
 };
 // Names only (values come from Phala's encrypted env): never put a value here.
-export const SEALED_ENV = ['NOTCH_LLM_URL', 'NOTCH_LLM_MODEL', 'NOTCH_LLM_KEY', 'NOTCH_LLM_TIMEOUT_MS'];
+export const SEALED_ENV = ['NOTCH_LLM_URL', 'NOTCH_LLM_MODEL', 'NOTCH_LLM_KEY', 'NOTCH_LLM_TIMEOUT_MS', 'NOTCH_INBOX_DOMAIN', 'NOTCH_INBOUND_SECRET', 'NOTCH_INBOX_REQUIRE_WALLET_SIG'];
 
 /** Files that make up the bundle: bundle path -> repo path. Sorted, so the bundle is deterministic. */
 export function bundleFiles() {
@@ -42,6 +42,7 @@ export function bundleFiles() {
     if (f.endsWith('.js')) map.set(`enclave/src/${f}`, path.join(root, 'enclave', 'src', f));
   }
   map.set('enclave/test/fixtures/emails.js', path.join(root, 'enclave', 'test', 'fixtures', 'emails.js'));
+  map.set('enclave/test/fixtures/momo-pdf.js', path.join(root, 'enclave', 'test', 'fixtures', 'momo-pdf.js'));
   return new Map([...map.entries()].sort(([a], [b]) => (a < b ? -1 : 1)));
 }
 

@@ -7,6 +7,7 @@ import { llmConfigFromEnv } from './llm-extract.js';
 import { getCreditHistory, getIdentityOwner } from './chain-history.js';
 import { makeRpc } from './chain-payout.js';
 import { reportDataFor } from './attest.js';
+import { Inbox, handleInbox } from './inbox.js';
 
 // The underwriter as it runs inside a Phala Cloud confidential VM (Intel TDX, dstack).
 //
@@ -89,6 +90,7 @@ const u = new Underwriter({
   usdcMint: process.env.NOTCH_USDC_MINT || undefined,
   ...(DEMO ? { resolver: fixtures.resolver, trusted: [...DEFAULT_TRUSTED, 'bank.test'] } : {}),
 });
+const inbox = new Inbox();
 keys.secretKey.fill(0); // Underwriter copied what it needs; do not keep a second reference to the secret around.
 
 let llmHost = null;
@@ -141,10 +143,15 @@ const server = http.createServer(async (req, res) => {
   };
   const url = new URL(req.url, 'http://x');
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet' });
+    res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-token' });
     return res.end();
   }
   if (req.method === 'GET' && url.pathname === '/health') return send(200, { ok: true });
+  try {
+    if (await handleInbox(inbox, u, req, url, send)) return;
+  } catch (e) {
+    return send(500, { ok: false, reason: e.message });
+  }
   if (req.method === 'GET' && url.pathname === '/attestation') {
     try {
       return send(200, await attestation(url.searchParams.get('nonce')));

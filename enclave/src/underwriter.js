@@ -1,6 +1,6 @@
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
-import { verifyEmail } from './dkim.js';
+import { toAddresses, verifyEmail } from './dkim.js';
 import { extractIncomeAuto, extractStatementAuto, llmConfigFromEnv } from './llm-extract.js';
 import { computeLimit } from './underwrite.js';
 import { NO_IDENTITY, signRecord } from './record.js';
@@ -58,10 +58,17 @@ export class Underwriter {
     return bs58.encode(this.keys.publicKey);
   }
 
-  async submit(eml, wallet) {
+  // `recipient` (statement inbox): the address the mail was delivered to. The DKIM-signed To header must name it, so a
+  // statement mailed to somebody else's inbox address cannot be redirected to this wallet.
+  async submit(eml, wallet, { recipient } = {}) {
     bs58.decode(wallet); // throws on a bad address
     const v = await verifyEmail(eml, { trusted: this.trusted, resolver: this.resolver });
     if (!v.ok) return { ok: false, reason: v.reason };
+    if (recipient) {
+      const to = toAddresses(eml);
+      if (!v.signedHeaders.includes('to')) return { ok: false, reason: 'DKIM signature does not cover the To header, so the recipient cannot be trusted' };
+      if (!to.ok || !to.addresses.includes(String(recipient).toLowerCase())) return { ok: false, reason: 'the statement was not addressed to this inbox' };
+    }
     const key = v.dedupe.toString('hex');
     if (this.used.has(key)) return { ok: false, reason: 'email already used' };
 
@@ -96,7 +103,7 @@ export class Underwriter {
     const history = this.historyProvider
       ? await this.historyProvider(wallet)
       : { repaidOnTime: 0, frozen: false };
-    const { limitUsdc } = computeLimit(nextEvents, { now, ...history });
+    const { limitUsdc } = computeLimit(nextEvents, { now, ...history, signals: got.signals });
 
     this.used.add(key);
     if (idHex) this.identities.set(idHex, wallet);
@@ -140,7 +147,11 @@ export class Underwriter {
     }
     const statement = await parseStatements(pdfs, { now });
     const x = await extractStatementAuto(statement, { llm: this.llm, fetchImpl: this.llmFetch, now });
-    return { events: x.events, via: x.via, idHash: identityHash(statement.msisdn, this.idPepper), rowKeys: true };
+    const base = { via: x.via, idHash: identityHash(statement.msisdn, this.idPepper), rowKeys: true, signals: x.signals };
+    if (!x.events.length) {
+      return { ...base, events: [], reason: 'no earned income found: money from yourself, loans, betting, savings, cash deposits, one-off transfers and money that passed straight through is not counted' };
+    }
+    return { ...base, events: x.events };
   }
 
   // Earn payout email + the matching USDC credit on chain.
