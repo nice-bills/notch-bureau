@@ -39,69 +39,109 @@ test('F1: a real-size loan drawn and repaid in the same transaction (same slot) 
   assert.equal(l.drawn, 0n);
 });
 
-test('F1: a real loan held >= 30 s counts, but only ONCE per posted record; a new record re-arms it', async () => {
+const DAY = 86400;
+test('F1: a real loan held >= 7 days counts, but only ONCE per posted record, and no sooner than 14 days after the last count', async () => {
   const ctx = await setup();
   await open(ctx, 50); // nonce 1
   await rich(ctx);
-  const cycle = async () => {
+  const cycle = async (hold = 8 * DAY) => {
     assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(4)))).ok);
     assert.ok((await sendB(ctx, drawIx(ctx, 20n * USDC))).ok);
-    advance(ctx, 31);
+    advance(ctx, hold);
     assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
     return readLine(ctx.svm, ctx.line);
   };
   let l = await cycle();
   assert.equal(l.repaidOnTime, 1, 'first real repayment counts');
   assert.equal(l.countedNonce, 1n);
+  assert.ok(l.countedAt > 0n);
   for (let i = 0; i < 3; i++) l = await cycle();
   assert.equal(l.repaidOnTime, 1, 'more cycles under the SAME posted record do not count again');
-  // A fresh signed record (a fresh statement) re-arms one count.
-  assert.ok((await postLimit(ctx, record(ctx, { limitUsdc: 50, nonce: 2, expiry: Number(ctx.now) + 90 * 86400 }))).ok);
+  // A fresh signed record (a fresh statement) re-arms one count (the last count is 32 days old).
+  assert.ok((await postLimit(ctx, record(ctx, { limitUsdc: 50, nonce: 2, expiry: Number(ctx.now) + 90 * DAY }))).ok);
   l = await cycle();
   assert.equal(l.repaidOnTime, 2);
+  // ... but a third record right away does not: the last count is only 8 days old (14 day gap per line).
+  assert.ok((await postLimit(ctx, record(ctx, { limitUsdc: 50, nonce: 3, expiry: Number(ctx.now) + 90 * DAY }))).ok);
   l = await cycle();
-  assert.equal(l.repaidOnTime, 2);
+  assert.equal(l.repaidOnTime, 2, 'a new record 8 days after a count does not count again');
+  l = await cycle();
+  assert.equal(l.repaidOnTime, 3, '16 days after the last count the armed record counts');
 });
 
-test('F1: the size floor is min(limit, max(5 USDC, limit/4)); the hold clock restarts at every draw', async () => {
+test('F1: the size floor is a FIXED 5 USDC (no limit/4, no .min(limit)); the hold clock restarts at every draw', async () => {
   const ctx = await setup();
-  await open(ctx, 50); // floor = max(12.5, 5) = 12.5 USDC
+  await open(ctx, 100);
   await rich(ctx);
   // 1 micro-unit under the floor, held for days: not counted.
   assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(3)))).ok);
-  assert.ok((await sendB(ctx, drawIx(ctx, 12_499_999n))).ok);
-  advance(ctx, 5 * 86400);
+  assert.ok((await sendB(ctx, drawIx(ctx, 4_999_999n))).ok);
+  advance(ctx, 8 * DAY);
   assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
   assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 0);
-  // Exactly the floor, but a second draw right before repaying restarts the clock: not counted.
+  // Exactly the floor, but a second draw 5 days in restarts the clock: 5 more days is not 7: not counted.
   assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(3)))).ok);
-  assert.ok((await sendB(ctx, drawIx(ctx, 12_000_000n))).ok);
-  advance(ctx, 5 * 86400);
+  assert.ok((await sendB(ctx, drawIx(ctx, 5n * USDC))).ok);
+  advance(ctx, 5 * DAY);
   assert.ok((await sendB(ctx, drawIx(ctx, 500_000n))).ok);
+  advance(ctx, 5 * DAY);
   assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
   assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 0);
-  // Exactly the floor and held: counted.
+  // Exactly 5 USDC (a quarter of the limit would have been 25), held 7 days from the last draw: counted.
   assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(3)))).ok);
-  assert.ok((await sendB(ctx, drawIx(ctx, 12_500_000n))).ok);
-  advance(ctx, 30);
+  assert.ok((await sendB(ctx, drawIx(ctx, 5n * USDC))).ok);
+  advance(ctx, 7 * DAY - 1);
+  assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
+  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 0, '1 second short of 7 days');
+  assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(3)))).ok);
+  assert.ok((await sendB(ctx, drawIx(ctx, 5n * USDC))).ok);
+  advance(ctx, 7 * DAY);
   assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
   assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 1);
 });
 
-test('F1: a small limit still works: the floor never exceeds the limit', async () => {
+// FINAL GATE #1 (reviews/2026-11-25-final, R2): the repayment count could be pumped with dust limits and cheap emails
+// (`floor = ...min(limit)`, a 30 second hold, one count per record). These replace the audit test that locked it in.
+test('final gate #1: a limit under 5 USDC never earns a count, however long the whole limit is held (it earned a full one before)', async () => {
+  for (const limit of [4, 0.05]) {
+    const ctx = await setup();
+    await open(ctx, limit);
+    await rich(ctx);
+    assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(1)))).ok);
+    assert.ok((await sendB(ctx, drawIx(ctx, BigInt(Math.round(limit * 1e6))))).ok); // the whole limit
+    advance(ctx, 8 * DAY);
+    assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
+    assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 0, `limit ${limit} USDC held 8 days`);
+  }
+});
+
+test('final gate #1 (R2): six records at a 0.05 USDC limit, each loan held 31 s, count NOTHING (they counted 6)', async () => {
+  const ctx = await setup({ borrowerFunds: 10n * USDC });
+  let nonce = 1;
+  for (let i = 0; i < 6; i++) {
+    const r = await postLimit(ctx, record(ctx, { limitUsdc: 0.05, nonce: nonce++, expiry: Number(ctx.now) + 90 * DAY }));
+    assert.ok(r.ok, r.logs);
+    assert.ok((await sendB(ctx, depositBorrowerIx(ctx, 10_000n))).ok);
+    assert.ok((await sendB(ctx, drawIx(ctx, 50_000n))).ok);
+    advance(ctx, 31);
+    assert.ok((await sendB(ctx, repayIx(ctx, 60_000n))).ok);
+  }
+  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 0);
+});
+
+test('final gate #1: the cheapest pump that is left (6 fresh records, a real 5 USDC loan each, 8 days apart) gets 3 counts in 48 days, not 6; one count per 14 days', async () => {
   const ctx = await setup();
-  await open(ctx, 4); // max(5, 1) = 5 > limit, so the floor is the whole limit (4)
   await rich(ctx);
-  assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(1)))).ok);
-  assert.ok((await sendB(ctx, drawIx(ctx, 3n * USDC))).ok);
-  advance(ctx, 60);
-  assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
-  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 0, '3 of 4 is under the floor');
-  assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(1)))).ok);
-  assert.ok((await sendB(ctx, drawIx(ctx, 4n * USDC))).ok);
-  advance(ctx, 60);
-  assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
-  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 1, 'the whole limit counts');
+  let nonce = 1;
+  for (let i = 0; i < 6; i++) {
+    const r = await postLimit(ctx, record(ctx, { limitUsdc: 50, nonce: nonce++, expiry: Number(ctx.now) + 90 * DAY }));
+    assert.ok(r.ok, r.logs);
+    assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(1)))).ok);
+    assert.ok((await sendB(ctx, drawIx(ctx, 5n * USDC))).ok);
+    advance(ctx, 8 * DAY);
+    assert.ok((await sendB(ctx, repayIx(ctx, 30n * USDC))).ok);
+  }
+  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 3);
 });
 
 // ------------------------------------------------------------------------------------------------------------------
@@ -255,10 +295,10 @@ test('F11 (audit #11): the first deposit into an empty tranche is at least 1 USD
 // ------------------------------------------------------------------------------------------------------------------
 // Line layout: the account the keeper reads, and lines made before the trailing fields existed
 // ------------------------------------------------------------------------------------------------------------------
-test('layout: a CreditLine built by the current program is 154 bytes (8 discriminator + 90 + 56 trailing)', async () => {
+test('layout: a CreditLine built by the current program is 162 bytes (8 discriminator + 90 + 64 trailing)', async () => {
   const ctx = await setup();
   await open(ctx);
-  assert.equal(ctx.svm.getAccount(ctx.line).data.length, 154);
+  assert.equal(ctx.svm.getAccount(ctx.line).data.length, 162);
 });
 
 test('legacy 106-byte line (before the trailing fields): draw and repay still save, the repayment cannot count, post_limit grows it and pays the rent', async () => {
@@ -280,12 +320,33 @@ test('legacy 106-byte line (before the trailing fields): draw and repay still sa
   const grow = await postLimit(ctx, record(ctx, { limitUsdc: 50, nonce: 2, expiry: Number(ctx.now) + 90 * 86400 }));
   assert.ok(grow.ok, grow.logs);
   const grown = ctx.svm.getAccount(ctx.line);
-  assert.equal(grown.data.length, 154);
-  assert.ok(grown.lamports >= ctx.svm.minimumBalanceForRentExemption(154n));
+  assert.equal(grown.data.length, 162);
+  assert.ok(grown.lamports >= ctx.svm.minimumBalanceForRentExemption(162n));
   assert.equal(readLine(ctx.svm, ctx.line).limit, 50n * USDC);
   assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(6)))).ok);
   assert.ok((await sendB(ctx, drawIx(ctx, 30n * USDC))).ok);
-  advance(ctx, 31);
+  advance(ctx, 8 * DAY);
+  assert.ok((await sendB(ctx, repayIx(ctx, 31n * USDC))).ok);
+  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 1);
+});
+
+test('legacy 154-byte line (the previous build, before counted_at): draw and repay still work and cannot count; post_limit grows it to 162', async () => {
+  const ctx = await setup();
+  await open(ctx, 50);
+  const a = ctx.svm.getAccount(ctx.line);
+  ctx.svm.setAccount({ ...a, data: a.data.slice(0, 154), space: 154n, lamports: ctx.svm.minimumBalanceForRentExemption(154n) });
+  await rich(ctx);
+  assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(6)))).ok);
+  assert.ok((await sendB(ctx, drawIx(ctx, 30n * USDC))).ok);
+  advance(ctx, 8 * DAY);
+  assert.ok((await sendB(ctx, repayIx(ctx, 31n * USDC))).ok);
+  assert.equal(ctx.svm.getAccount(ctx.line).data.length, 154, 'saved without growing');
+  assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 0, 'no room for counted_at: not counted until the line grows');
+  assert.ok((await postLimit(ctx, record(ctx, { limitUsdc: 50, nonce: 2, expiry: Number(ctx.now) + 90 * DAY }))).ok);
+  assert.equal(ctx.svm.getAccount(ctx.line).data.length, 162);
+  assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(6)))).ok);
+  assert.ok((await sendB(ctx, drawIx(ctx, 30n * USDC))).ok);
+  advance(ctx, 8 * DAY);
   assert.ok((await sendB(ctx, repayIx(ctx, 31n * USDC))).ok);
   assert.equal(readLine(ctx.svm, ctx.line).repaidOnTime, 1);
 });

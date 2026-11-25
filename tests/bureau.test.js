@@ -81,9 +81,9 @@ test('check_credit buckets what is LEFT after a draw, and reports on-time repaym
   let r = await sendB(ctx, await checkIx(ctx.borrower.address, 60n * USDC, 60));
   assert.ok(r.ok, r.logs);
   assert.deepEqual([decode(r.returnData).bucket, decode(r.returnData).onTime], [1, 0]); // 90 left
-  advance(ctx, 31); // held long enough for the repayment to count
+  advance(ctx, 8 * 86400); // held long enough for the repayment to count (7 days)
   assert.ok((await sendB(ctx, repayIx(ctx, U(30.6)))).ok);
-  r = await sendB(ctx, await checkIx(ctx.borrower.address, 60n * USDC, 60));
+  r = await sendB(ctx, await checkIx(ctx.borrower.address, 60n * USDC, 9 * 86400)); // the record is 8 days old now
   assert.ok(r.ok, r.logs);
   assert.deepEqual([decode(r.returnData).bucket, decode(r.returnData).onTime], [2, 1]); // 120 left
 });
@@ -239,13 +239,13 @@ test('hostel: one booking per student', async () => {
   assert.equal(r.ok, false);
 });
 
-// ---------- legacy lines (created before posted_at existed: 98 bytes instead of the current 154) ----------
+// ---------- legacy lines (created before posted_at existed: 98 bytes instead of the current 162) ----------
 
 test('legacy 98-byte lines keep working: draw, repay and default still save; check_credit reads them as posted long ago', async () => {
   const ctx = await bureauSetup();
   await open(ctx, 50);
   const a = ctx.svm.getAccount(ctx.line);
-  assert.equal(a.data.length, 154);
+  assert.equal(a.data.length, 162);
   ctx.svm.setAccount({ ...a, data: a.data.slice(0, 98), space: 98n });
   assert.equal(ctx.svm.getAccount(ctx.line).data.length, 98);
   assert.equal(readLine(ctx.svm, ctx.line).limit, 50n * USDC);
@@ -272,4 +272,21 @@ test('legacy 98-byte lines keep working: draw, repay and default still save; che
   const m = await sendB(ctx, markDefaultIx(ctx));
   assert.ok(m.ok, m.logs);
   assert.equal(readLine(ctx.svm, ctx.line).defaulted, true);
+});
+
+// ---------- final gate #6: an overdue line is not in good standing ----------
+test('final gate #6: check_credit (and the hostel booking behind it) fails LoanOverdue once a loan is past due and unpaid, before anyone marks it', async () => {
+  const ctx = await bureauSetup();
+  await open(ctx, 120);
+  assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(6)))).ok);
+  assert.ok((await sendB(ctx, drawIx(ctx, 30n * USDC))).ok);
+  assert.ok((await sendB(ctx, await checkIx(ctx.borrower.address, 1n, 60))).ok, 'on time: fine');
+  advance(ctx, 30 * DAY); // exactly the due date: still on time
+  assert.ok((await sendB(ctx, await checkIx(ctx.borrower.address, 1n, 31 * DAY))).ok);
+  advance(ctx, 1); // due + 1 second, the keeper has not marked it yet
+  fails(await sendB(ctx, await checkIx(ctx.borrower.address, 1n, 31 * DAY)), 'LoanOverdue');
+  const book = await sendB(ctx, await bookIx(ctx.borrower.address, 10n * USDC));
+  assert.equal(book.ok, false, 'the hostel CPI refuses too');
+  assert.ok((await sendB(ctx, repayIx(ctx, U(30.6)))).ok); // a late full repayment clears it
+  assert.ok((await sendB(ctx, await checkIx(ctx.borrower.address, 1n, 31 * DAY))).ok);
 });

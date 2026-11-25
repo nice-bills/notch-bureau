@@ -13,7 +13,7 @@ export type Credit =
   | { exists: false }
   | {
       exists: true; wallet: Address; availableBucket: number; availableBucketLabel: string; onTimeRepayments: number;
-      defaulted: boolean; expiresAt: number; postedAt: number; expired: boolean; active: boolean;
+      defaulted: boolean; expiresAt: number; postedAt: number; expired: boolean; overdue: boolean; active: boolean;
     };
 
 export declare function getCredit(

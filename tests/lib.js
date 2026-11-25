@@ -83,7 +83,7 @@ function readLine(svm, line) {
     repaidOnTime: d.readUInt32LE(72), repaidLate: d.readUInt32LE(76), lastNonce: d.readBigUInt64LE(80), defaulted: d[88] === 1,
     deposit: d.readBigUInt64LE(90), postedAt: d.length >= 106 ? d.readBigInt64LE(98) : 0n,
     lastDrawAt: d.length >= 114 ? d.readBigInt64LE(106) : 0n, countedNonce: d.length >= 122 ? d.readBigUInt64LE(114) : 0n,
-    idHash: d.length >= 154 ? d.subarray(122, 154).toString('hex') : null, dataLen: d.length,
+    idHash: d.length >= 154 ? d.subarray(122, 154).toString('hex') : null, countedAt: d.length >= 162 ? d.readBigInt64LE(154) : 0n, dataLen: d.length,
   };
 }
 
@@ -253,8 +253,18 @@ const cancelWithdrawIx = async (ctx, lender, tranche = 'junior') => {
   const t = trancheOf(lender, tranche);
   return {
     programAddress: PROGRAM,
-    accounts: [meta(lender.signer.address, WS), meta(ctx.pool, R), meta(t.mint, R), meta(t.shares, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM_ADDRESS, R)],
+    accounts: [meta(lender.signer.address, WS), meta(ctx.pool, R), meta(t.mint, W), meta(t.shares, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM_ADDRESS, R)],
     data: disc('cancel_withdraw'),
+  };
+};
+// Devnet cleanup of a request made before the price lock (shorter account): the shares come back in full.
+const cancelLegacyWithdrawIx = async (ctx, lender, tranche = 'junior') => {
+  const { escrow, request } = await lenderPdas(lender, tranche);
+  const t = trancheOf(lender, tranche);
+  return {
+    programAddress: PROGRAM,
+    accounts: [meta(lender.signer.address, WS), meta(ctx.pool, R), meta(t.mint, R), meta(t.shares, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM_ADDRESS, R)],
+    data: disc('cancel_legacy_withdraw'),
   };
 };
 const depositBorrowerIx = (ctx, amount) => ({
@@ -308,4 +318,4 @@ const readRequest = async (ctx, lender, tranche = 'junior') => {
 const exists = async (ctx, addr) => ctx.svm.getAccount(addr).exists;
 const open = async (ctx, limitUsdc = 50) => { const r = await postLimit(ctx, record(ctx, { limitUsdc, expiry: Number(ctx.now) + 90 * 86400 })); assert.ok(r.ok, r.logs); };
 
-export { CLAIM_WINDOW, drawWithTermIx, trancheOf, COOLDOWN, ED25519, IX_SYSVAR, PROGRAM, R, RS, SO, SYSTEM, U, USDC, W, WS, advance, cancelWithdrawIx, claimWithdrawIx, depositBorrowerIx, depositIx, disc, drawIx, ed25519Ix, enc, exists, fails, i64, lenderPdas, markDefaultIx, meta, mintSupply, newLender, open, pda, postLimit, readLine, readPool, readRequest, record, redeem, repayIx, requestWithdrawIx, send, sendB, sendL, setup, tokenBalance, u64, vecU8, warp, withdrawBorrowerIx };
+export { cancelLegacyWithdrawIx, CLAIM_WINDOW, drawWithTermIx, trancheOf, COOLDOWN, ED25519, IX_SYSVAR, PROGRAM, R, RS, SO, SYSTEM, U, USDC, W, WS, advance, cancelWithdrawIx, claimWithdrawIx, depositBorrowerIx, depositIx, disc, drawIx, ed25519Ix, enc, exists, fails, i64, lenderPdas, markDefaultIx, meta, mintSupply, newLender, open, pda, postLimit, readLine, readPool, readRequest, record, redeem, repayIx, requestWithdrawIx, send, sendB, sendL, setup, tokenBalance, u64, vecU8, warp, withdrawBorrowerIx };

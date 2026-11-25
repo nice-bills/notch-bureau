@@ -411,11 +411,11 @@ export function claimWithdrawIx(a: NotchAddresses, lender: Address, escrow: Addr
   );
 }
 
-/** Give the escrowed shares back to the lender (any time, before or after the cooldown). */
+/** Give the escrowed shares back to the lender (any time, before or after the cooldown), minus any gain made while in escrow (burned: the share mint is writable). */
 export function cancelWithdrawIx(a: NotchAddresses, lender: Address, shareAccount: Address, escrow: Address, request: Address, tranche: Tranche = 'junior'): Instruction {
   return ix(
     a.program,
-    [meta(lender, WS), meta(a.pool, R), meta(trancheMint(a, tranche), R), meta(shareAccount, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM, R)],
+    [meta(lender, WS), meta(a.pool, R), meta(trancheMint(a, tranche), W), meta(shareAccount, W), meta(escrow, W), meta(request, W), meta(TOKEN_PROGRAM, R)],
     discriminator('cancel_withdraw'),
   );
 }

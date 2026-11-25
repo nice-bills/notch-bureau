@@ -9,10 +9,10 @@ import {
 const W = address('4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T');
 const USDC = 1_000_000n;
 
-function lineBytes({ limit, drawn = 0n, expiry, onTime = 0, defaulted = false, postedAt = 100n, wallet = W }) {
+function lineBytes({ limit, drawn = 0n, expiry, onTime = 0, defaulted = false, postedAt = 100n, wallet = W, due = 0n }) {
   const b = Buffer.alloc(106);
   Buffer.from(getAddressEncoder().encode(wallet)).copy(b, 8);
-  b.writeBigUInt64LE(limit, 40); b.writeBigInt64LE(expiry, 48); b.writeBigUInt64LE(drawn, 56);
+  b.writeBigUInt64LE(limit, 40); b.writeBigInt64LE(expiry, 48); b.writeBigUInt64LE(drawn, 56); b.writeBigInt64LE(due, 64);
   b.writeUInt32LE(onTime, 72); b[88] = defaulted ? 1 : 0; b.writeBigInt64LE(postedAt, 98);
   return b;
 }
@@ -42,12 +42,23 @@ test('getCredit: no account, wrong owner and short data all read as exists:false
 });
 
 test('getCredit reads bucket, history, defaulted and expiry from account data', async () => {
-  const c = await getCredit(rpcWith(NOTCH_PROGRAM_ADDRESS, lineBytes({ limit: 120n * USDC, drawn: 30n * USDC, expiry: 5000n, onTime: 2 })), W, { nowSeconds: 1000 });
-  assert.deepEqual(c, { exists: true, wallet: W, availableBucket: 1, availableBucketLabel: '25 to 100 USDC', onTimeRepayments: 2, defaulted: false, expiresAt: 5000, postedAt: 100, expired: false, active: true });
+  const c = await getCredit(rpcWith(NOTCH_PROGRAM_ADDRESS, lineBytes({ limit: 120n * USDC, drawn: 30n * USDC, expiry: 5000n, onTime: 2, due: 4000n })), W, { nowSeconds: 1000 });
+  assert.deepEqual(c, { exists: true, wallet: W, availableBucket: 1, availableBucketLabel: '25 to 100 USDC', onTimeRepayments: 2, defaulted: false, expiresAt: 5000, postedAt: 100, expired: false, overdue: false, active: true });
   const d = await getCredit(rpcWith(NOTCH_PROGRAM_ADDRESS, lineBytes({ limit: 0n, expiry: 5000n, defaulted: true })), W, { nowSeconds: 1000 });
   assert.equal(d.defaulted, true); assert.equal(d.active, false); assert.equal(d.availableBucket, 0);
   const e = await getCredit(rpcWith(NOTCH_PROGRAM_ADDRESS, lineBytes({ limit: 50n * USDC, expiry: 5000n })), W, { nowSeconds: 5000 });
   assert.deepEqual([e.expired, e.active], [true, false]);
+});
+
+test('final gate #6: a loan past its due date and unpaid is not active (check_credit fails LoanOverdue), before and without a mark_default', async () => {
+  const bytes = lineBytes({ limit: 120n * USDC, drawn: 30n * USDC, expiry: 9000n, due: 2000n });
+  const onDue = await getCredit(rpcWith(NOTCH_PROGRAM_ADDRESS, bytes), W, { nowSeconds: 2000 });
+  assert.deepEqual([onDue.overdue, onDue.active], [false, true]);
+  const late = await getCredit(rpcWith(NOTCH_PROGRAM_ADDRESS, bytes), W, { nowSeconds: 2001 });
+  assert.deepEqual([late.overdue, late.active], [true, false]);
+  // nothing drawn: a stale due date means nothing
+  const clear = await getCredit(rpcWith(NOTCH_PROGRAM_ADDRESS, lineBytes({ limit: 120n * USDC, expiry: 9000n, due: 2000n })), W, { nowSeconds: 3000 });
+  assert.deepEqual([clear.overdue, clear.active], [false, true]);
 });
 
 test('decodeCreditLine tolerates a pre-posted_at (98 byte) line', () => {

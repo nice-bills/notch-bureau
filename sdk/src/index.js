@@ -76,7 +76,7 @@ export function decodeCreditLine(bytes) {
  * @param rpc  a @solana/kit rpc (createSolanaRpc(...))
  * @param wallet the wallet address
  * @returns {{exists:false} | {exists:true, wallet, availableBucket, availableBucketLabel, onTimeRepayments,
- *   defaulted, expiresAt, postedAt, expired, active}} `expiresAt`/`postedAt` are unix seconds. `active` is true when a
+ *   defaulted, expiresAt, postedAt, expired, overdue, active}} `expiresAt`/`postedAt` are unix seconds. `active` is true when a
  *   `check_credit` with min_available 0 and a long max_age would pass right now.
  */
 export async function getCredit(rpc, wallet, { programAddress = NOTCH_PROGRAM_ADDRESS, nowSeconds } = {}) {
@@ -90,6 +90,8 @@ export async function getCredit(rpc, wallet, { programAddress = NOTCH_PROGRAM_AD
   const available = c.limit > c.drawn ? c.limit - c.drawn : 0n;
   const bucket = availableBucket(available);
   const expired = now >= c.expiry;
+  // a loan past its due date and unpaid: check_credit fails LoanOverdue even before the keeper marks the default
+  const overdue = c.drawn > 0n && now > c.due;
   return {
     exists: true,
     wallet: c.wallet,
@@ -100,7 +102,8 @@ export async function getCredit(rpc, wallet, { programAddress = NOTCH_PROGRAM_AD
     expiresAt: Number(c.expiry),
     postedAt: Number(c.postedAt),
     expired,
-    active: !c.defaulted && !expired,
+    overdue,
+    active: !c.defaulted && !expired && !overdue,
   };
 }
 

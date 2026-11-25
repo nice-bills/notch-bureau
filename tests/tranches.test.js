@@ -275,10 +275,15 @@ test('timed withdraw per tranche: claim cannot exceed idle cash, and a request i
   await open(ctx, 300);
   assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(30)))).ok);
   assert.ok((await sendB(ctx, drawIx(ctx, U(150)))).ok); // idle 350, out 150
-  fails(await redeem(ctx, s, 400n * USDC, 'senior'), 'InsufficientLiquidity');
-  assert.equal(bal(ctx, s.seniorShares), 400n * USDC); // cancelled again
-  assert.ok((await redeem(ctx, s, 350n * USDC, 'senior')).ok); // exactly the idle cash
+  // Asking for 400 with 350 idle pays 350 now (partial claim) and keeps 50 senior shares queued at the locked price.
+  const usdcBefore = bal(ctx, s.usdc);
+  assert.ok((await redeem(ctx, s, 400n * USDC, 'senior')).ok);
+  assert.equal(bal(ctx, s.usdc) - usdcBefore, 350n * USDC);
+  assert.equal((await readRequest(ctx, s, 'senior')).shares, 50n * USDC);
   assert.equal(pool(ctx).idle, 0n);
+  fails(await sendL(ctx, s, await claimWithdrawIx(ctx, s, 'senior')), 'InsufficientLiquidity');
+  assert.ok((await sendL(ctx, s, await cancelWithdrawIx(ctx, s, 'senior'))).ok); // nothing gained in escrow, all 50 shares come back
+  assert.equal(bal(ctx, s.seniorShares), 50n * USDC);
   // Cross-tranche: request junior shares, then try to claim passing the SENIOR mint/escrow -> no such request.
   assert.ok((await sendL(ctx, ctx.lender, await requestWithdrawIx(ctx, ctx.lender, 10n * USDC, 'junior'))).ok);
   advance(ctx, COOLDOWN);

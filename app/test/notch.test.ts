@@ -100,7 +100,7 @@ const refClaimWithdraw = (ctx: RefCtx, mint: Address = ctx.shareMint) => ({
 });
 const refCancelWithdraw = (ctx: RefCtx, mint: Address = ctx.shareMint) => ({
   programAddress: PROGRAM,
-  accounts: [meta(ctx.lender.address, WS), meta(ctx.pool, R), meta(mint, R), meta(ctx.lender.shares, W), meta(ctx.lender.escrow, W), meta(ctx.lender.request, W), meta(TOKEN_PROGRAM_ADDRESS, R)],
+  accounts: [meta(ctx.lender.address, WS), meta(ctx.pool, R), meta(mint, W), meta(ctx.lender.shares, W), meta(ctx.lender.escrow, W), meta(ctx.lender.request, W), meta(TOKEN_PROGRAM_ADDRESS, R)],
   data: disc('cancel_withdraw'),
 });
 const refDepositBorrower = (ctx: RefCtx, amount: bigint) => ({

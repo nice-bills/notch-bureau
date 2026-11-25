@@ -206,7 +206,7 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   await expect(toast(page, `Repaid ${usdFull(payoff)} USDC. Your ${usdFull(needed)} USDC deposit came back to you.`)).toBeVisible();
   line = await waitFor('repay lands', () => readLine(w.address), (l) => l?.drawn === 0n);
   expect(line!.deposit).toBe(0n);
-  expect(line!.repaidOnTime).toBe(0); // drawn and repaid within seconds: a repayment counts only after a 30 s hold, at >= 25% of the limit (audit #2)
+  expect(line!.repaidOnTime).toBe(0); // drawn and repaid within seconds: a repayment counts only for >= 5 USDC held >= 7 days, once per 14 days (audit #2, final gate #1)
   expect(line!.repaidLate).toBe(0);
   expect(await tokenBalance(w.address)).toBe(balBeforeRepay - payoff + needed);
   expect(await tokenBalance(w.address)).toBe(walletUsdc0 - fee);

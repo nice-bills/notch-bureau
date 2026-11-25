@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 //   1  funds a fresh borrower with SOL (from the admin wallet) and test USDC (admin is the mint authority)
 //   2  sends a DKIM-signed demo .eml to the underwriter over HTTP and gets a signed record back
 //   3  posts the record (Ed25519 verify ix + post_limit) and reads the CreditLine back
-//   4  deposit 20% -> draw -> repay principal + 2% fee -> deposit comes back, on-time counter +1 (13 USDC held 32 s) -> withdraw_borrower
+//   4  deposit 20% -> draw -> repay principal + 2% fee -> deposit comes back, on-time counter stays 0 (a repayment counts only after a 7 day hold) -> withdraw_borrower
 //   5  a second fresh wallet lends; share maths is checked against PoolStats. It then requests a withdrawal
 //      (shares go to escrow, still counted in supply), an early claim is refused (CooldownActive), and cancel
 //      returns the shares. The claim payout itself needs a 3 day wait, so it is covered by the LiteSVM tests.
@@ -524,15 +524,14 @@ try {
     expectProgramError('repay 1 micro-USDC short of principal + fee', r3, 'FeeRequired');
   }
 
-  console.log('  note  waiting 32 s: a repayment counts as on-time only if the loan was held >= 30 s (audit #2)');
-  await sleep(32_000);
+  console.log('  note  a repayment counts as on-time only for >= 5 USDC held >= 7 days, once per 14 days: devnet cannot wait 7 days, so this live repayment must NOT count (the counted path is covered in LiteSVM, tests/audit.test.js)');
   const balBeforeRepay = await tokenBal(borrower.address, mint);
   await send(`repay ${usd(payoff)} USDC (principal + ceil 2% fee)`, borrower, [repayIx(A, borrower.address, line, bAta, payoff)]);
   l = decodeLine(await accountBytes(line));
   const pool3 = decodePool(await accountBytes(A.pool));
   const balAfterRepay = await tokenBal(borrower.address, mint);
   check('line.drawn == 0 after repay', l.drawn === 0n);
-  check('on-time counter +1', l.repaidOnTime === 1 && l.repaidLate === 0, `onTime ${l.repaidOnTime}, late ${l.repaidLate}`);
+  check('repaid in full on time, but a same-minute repayment does not count (hold < 7 days): on-time counter stays 0', l.repaidOnTime === 0 && l.repaidLate === 0, `onTime ${l.repaidOnTime}, late ${l.repaidLate}`);
   check('deposit returned in the same instruction (line.deposit == 0)', l.deposit === 0n);
   check('borrower USDC change = -(payoff) + deposit returned', balAfterRepay === balBeforeRepay - payoff + needed, `${usd(balBeforeRepay)} -> ${usd(balAfterRepay)}`);
   check('borrower ended at 20 - fee', balAfterRepay === mintAmount - fee, usd(balAfterRepay));
@@ -927,7 +926,7 @@ try {
     check('a booking for exactly the remaining credit is accepted', !cBook2.err && (await readBooking(carol.address))?.rent === availC);
     await send('carol: repay 5 USDC + 2% fee (clean up the pool)', carol, [repayIx(A, carol.address, c.line, cAta, payoffFor(5n * USDC))]);
     const sdkC2 = await sdkGetCredit(rpc, carol.address, { programAddress: program });
-    check('SDK: carol\'s small 5 USDC repayment (below the 12.5 USDC floor of a 50 limit) does NOT count as on-time (audit #2, live on devnet)', sdkC2.onTimeRepayments === 0, jsonSafe(sdkC2));
+    check('SDK: carol\'s 5 USDC repayment held only minutes (the hold must be 7 days) does NOT count as on-time (audit #2, live on devnet)', sdkC2.onTimeRepayments === 0, jsonSafe(sdkC2));
   }
   // -------------------------------------------------------------------------------------------
   step('11', 'Tranches: senior + junior deposits, subordination floor, fee waterfall, forced default hits junior first, per-tranche timed withdraw');

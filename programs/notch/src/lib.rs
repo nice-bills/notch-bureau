@@ -30,14 +30,19 @@ pub const WITHDRAW_COOLDOWN_S: i64 = 3 * 86_400;
 /// `claim_withdraw` refuses it, the lender cancels (shares come back and earn normally) and must file again, which
 /// costs a new cooldown. See WITHDRAWALS in the math block below.
 pub const CLAIM_WINDOW_S: i64 = 2 * 86_400;
-/// A repayment only counts as a track-record entry (`repaid_on_time`) when ALL of these hold:
-///   * principal repaid >= `min(limit, max(MIN_COUNTED_PRINCIPAL, limit / 4))`: a real loan, not dust;
-///   * the loan (counted from the LAST draw) was held at least `MIN_COUNTED_HOLD_S`: no draw+repay in one
-///     transaction or one slot;
-///   * it is the first counted repayment under the current posted record (`line.last_nonce > counted_nonce`):
-///     at most one per posted limit, and a posted limit needs a fresh DKIM-signed statement.
+/// A repayment only counts as a track-record entry (`repaid_on_time`) when ALL of these hold (final gate #1):
+///   * principal repaid >= `MIN_COUNTED_PRINCIPAL` (5 USDC), a FIXED size: a line whose limit is under 5 USDC can never earn a
+///     count (dust limits earned full counts before, see reviews/2026-11-25-final);
+///   * the loan (counted from the LAST draw) was held at least `MIN_COUNTED_HOLD_S` (7 days) before it was repaid: a real
+///     loan, not draw + repay in a minute. (`draw_with_term` stays usable for demos, but a demo-length loan never counts.)
+///   * it is the first counted repayment under the current posted record (`line.last_nonce > counted_nonce`), AND at least
+///     `MIN_COUNT_GAP_S` (14 days) after the previous counted repayment of this line (`ext.counted_at`), however many
+///     records were posted in between. Records are cheap (any fresh income email); time is not.
+/// Cheapest pump left: 6 counts need 6 x (5 USDC held 7+ days) over 12+ weeks, paying the 2% fee each time (0.10 USDC), and
+/// every count still needs a new signed record. That is what the cap `50 * 2^n` should cost.
 pub const MIN_COUNTED_PRINCIPAL: u64 = 5_000_000;
-pub const MIN_COUNTED_HOLD_S: i64 = 30;
+pub const MIN_COUNTED_HOLD_S: i64 = 7 * 86_400;
+pub const MIN_COUNT_GAP_S: i64 = 14 * 86_400;
 /// The first deposit into an empty tranche, and what a claim may leave behind, is at least this many base units
 /// (1 USDC). Stops the "1 micro-unit first depositor, then compound the share price" trick.
 pub const MIN_FIRST_DEPOSIT: u64 = 1_000_000;
@@ -93,18 +98,33 @@ pub const MIN_FIRST_DEPOSIT: u64 = 1_000_000;
 //     escrow, so a lender could keep one armed for ever, earn full yield, and leave at full price the moment any loan
 //     went overdue (before anyone had called `mark_default`). Now an armed request is dead after 2 days, it earns
 //     nothing while armed, and the cooldown (3 days) is again the time a keeper has to mark an overdue loan.
-//   * HONEST LIMIT: a loss only reaches the price when `mark_default` runs. A lender whose claim lands in the
-//     minutes between "a loan went overdue" and "the keeper marked it" still leaves at the pre-loss price. That window
-//     is the keeper's latency (about an hour, hourly keeper), no longer unbounded; the lender also has to time a
-//     2-day window for it.
+//   * CANCEL FORFEITS THE ESCROW GAIN (final gate #3). `cancel_withdraw` returns shares worth AT MOST the request-time price
+//     (just enough shares to be worth the request-time value once the rest are burned; all of them when the price fell, so a
+//     loss is still carried, and when nobody else holds the tranche) and burns the rest, which leaves its value in the NAV for the lenders who stay. Arming a request is therefore no longer
+//     free: money in escrow earns nothing, whether the lender claims or cancels.
+//   * PARTIAL CLAIM. If idle cash covers only part of the request, `claim_withdraw` pays that part (same locked price) and
+//     leaves the rest in escrow inside the same claim window; it no longer fails all-or-nothing. After the window, cancel
+//     and re-file the remainder (cancel forfeits any escrow gain, as above).
+//   * HONEST LIMIT (the part that is still open). A loss reaches the price only when `mark_default` runs, and `mark_default`
+//     works the second a loan is past due (`now > due`, i.e. from due + 1 s). A lender whose request is matured and armed
+//     when a loan goes overdue can send `claim_withdraw` BEFORE anyone sends `mark_default` and leave at the pre-loss price.
+//     What it costs them now: a rolling request earns nothing while armed (3 days minimum cooldown, then the 2 day window),
+//     so a bot that keeps one armed forever, or two staggered wallets, gives up that yield all the time. What it gets them:
+//     it avoids its share of any loss that lands while armed. Due dates are public on chain, so this is not "rare": a lender
+//     who is willing to hold no yield can time it. The mitigation is the keeper: it marks lines overdue from due + 1 s, hits
+//     the most overdue lines first and runs every minute, so the window is a minute or less, not an hour. It is NOT closed
+//     on chain: the program does not know about other borrowers' lines when `claim_withdraw` runs. Closing it for good needs
+//     a pool-level "oldest unpaid due date" that every draw and repay maintains (not built).
+//   * LEGACY REQUESTS. A request made before the price lock is 16 bytes shorter than today's struct and cannot be read by
+//     `claim_withdraw` / `cancel_withdraw`; `cancel_legacy_withdraw` gives the shares back in full and closes it (devnet only).
 //   A payout is capped by idle lender cash and by the tranche's own NAV, and a junior exit may not break the floor.
 //   A claim may not leave a tranche with a dust supply (0 < remaining supply < MIN_FIRST_DEPOSIT), and the first
 //   deposit into an empty tranche is at least MIN_FIRST_DEPOSIT (1 USDC): that closes the first-depositor
 //   "tiny stake + compounding fees" price-inflation path.
 //
 // TRACK RECORD (`repaid_on_time`, read by the underwriter and `check_credit`). A repayment counts only when it is a
-// real loan: principal >= min(limit, max(5 USDC, limit/4)), held >= 30 s since the last draw, and at most once per
-// posted record (`counted_nonce`). Drawing while a loan is overdue is refused (`LoanOverdue`). A wallet is pinned to ONE
+// real loan: principal >= 5 USDC (fixed, no `.min(limit)`), held >= 7 days since the last draw, at most once per
+// posted record (`counted_nonce`) and at most one per 14 days per line (`counted_at`). Drawing while a loan is overdue is refused (`LoanOverdue`). A wallet is pinned to ONE
 // mobile-money identity (`id_hash` in the line), so one wallet cannot stack several phone numbers.
 //
 // DEAD TRANCHE: a tranche whose NAV hit zero while shares exist refuses deposits (nobody can buy
@@ -293,6 +313,8 @@ pub mod notch {
         require_keys_eq!(line.wallet, ctx.accounts.borrower.key(), NotchError::NoCreditLine);
         require!(!line.defaulted, NotchError::Defaulted);
         require!(now < line.expiry, NotchError::RecordExpired);
+        // Not in good standing while a loan is past due and unpaid (the keeper may not have marked it yet).
+        require!(line.drawn == 0 || now <= line.due, NotchError::LoanOverdue);
         let available = line.limit.saturating_sub(line.drawn);
         require!(available >= min_available, NotchError::InsufficientCredit);
         require!(
@@ -434,6 +456,7 @@ pub mod notch {
             if counts {
                 line.repaid_on_time = line.repaid_on_time.checked_add(1).ok_or(NotchError::MathOverflow)?;
                 line.ext.counted_nonce = line.last_nonce;
+                line.ext.counted_at = now;
             }
             emit!(Repaid { wallet: line.wallet, principal, counted: counts });
         } else {
@@ -448,7 +471,8 @@ pub mod notch {
         Ok(())
     }
 
-    /// Anyone can mark a line defaulted once it is past due with a balance; it can never borrow again.
+    /// Anyone can mark a line defaulted once it is past due with a balance (from `due + 1` second: no grace period, see
+    /// WITHDRAWALS); it can never borrow again.
     pub fn mark_default(ctx: Context<MarkDefault>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let line = &mut ctx.accounts.line;
@@ -511,8 +535,9 @@ pub mod notch {
 
     /// Step 2: once the cooldown has passed, burn the escrowed shares and pay out at the share price
     /// of THIS moment (so a default marked during the cooldown is already reflected). The payout can
-    /// never exceed lender cash that is actually idle; if the pool is short the claim fails and the
-    /// request stays open (retry later, or cancel).
+    /// never exceed lender cash that is actually idle. If the pool is short, the claim is PARTIAL: it pays what idle cash
+    /// allows (the matching part of the shares is burned, the rest stays in escrow under the same locked price and the same
+    /// claim window), so an honest lender is never stuck behind an all-or-nothing claim.
     pub fn claim_withdraw(ctx: Context<ClaimWithdraw>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         require!(now >= ctx.accounts.request.unlock_ts, NotchError::CooldownActive);
@@ -536,14 +561,27 @@ pub mod notch {
             (shares as u128).checked_mul(req.nav_at_request as u128).ok_or(NotchError::MathOverflow)?
                 .checked_div(req.supply_at_request as u128).ok_or(NotchError::MathOverflow)?
         };
-        let amount = u64::try_from(at_claim.min(at_request)).map_err(|_| NotchError::MathOverflow)?;
-        require!(amount > 0, NotchError::InvalidAmount);
+        let amount_full = u64::try_from(at_claim.min(at_request)).map_err(|_| NotchError::MathOverflow)?;
+        require!(amount_full > 0, NotchError::InvalidAmount);
+        // Only idle lender cash can leave; USDC out on loan and borrower deposits cannot. Short of cash: pay the part of the
+        // request that idle covers (same price), keep the rest.
+        let (shares_paid, amount) = if amount_full <= pool.idle { (shares, amount_full) } else {
+            require!(pool.idle > 0, NotchError::InsufficientLiquidity);
+            let sp = (shares as u128).checked_mul(pool.idle as u128).ok_or(NotchError::MathOverflow)?
+                .checked_div(amount_full as u128).ok_or(NotchError::MathOverflow)?;
+            let sp = u64::try_from(sp).map_err(|_| NotchError::MathOverflow)?;
+            let amt = (amount_full as u128).checked_mul(sp as u128).ok_or(NotchError::MathOverflow)?
+                .checked_div(shares as u128).ok_or(NotchError::MathOverflow)?;
+            let amt = u64::try_from(amt).map_err(|_| NotchError::MathOverflow)?;
+            require!(sp > 0 && amt > 0 && amt <= pool.idle, NotchError::InsufficientLiquidity);
+            (sp, amt)
+        };
+        let partial = shares_paid < shares;
         // Never leave a dust supply behind (first-depositor inflation path): all of it goes, or a real stake stays.
         let escrowed_now = ctx.accounts.escrow.amount;
-        let left = ctx.accounts.share_mint.supply.checked_sub(escrowed_now).ok_or(NotchError::MathOverflow)?;
+        let burn_now = if partial { shares_paid } else { escrowed_now };
+        let left = ctx.accounts.share_mint.supply.checked_sub(burn_now).ok_or(NotchError::MathOverflow)?;
         require!(left == 0 || left >= MIN_FIRST_DEPOSIT, NotchError::DustSupply);
-        // Only idle lender cash can leave; USDC out on loan and borrower deposits cannot.
-        require!(amount <= pool.idle, NotchError::InsufficientLiquidity);
         // A junior exit may not drop junior below the floor (senior must keep its cushion).
         if t == JUNIOR {
             let new_junior = nav.checked_sub(amount).ok_or(NotchError::MathOverflow)?;
@@ -558,38 +596,123 @@ pub mod notch {
         let escrow_bump = [ctx.accounts.request.escrow_bump];
         let mint_key = ctx.accounts.share_mint.key();
         let escrow_seeds: &[&[&[u8]]] = &[&[b"escrow", mint_key.as_ref(), lender_key.as_ref(), &escrow_bump]];
-        // Burn everything in escrow (the request amount, plus any shares a stranger sent in): the
-        // account must be empty to be closed, and nobody else can pull from it.
-        let escrowed = ctx.accounts.escrow.amount;
+        // Full claim: burn everything in escrow (the request amount, plus any shares a stranger sent in): the account must
+        // be empty to be closed, and nobody else can pull from it. Partial claim: burn only the shares that were paid.
         token_interface::burn_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), token_interface::BurnChecked {
             mint: ctx.accounts.share_mint.to_account_info(), from: ctx.accounts.escrow.to_account_info(),
             authority: ctx.accounts.escrow.to_account_info(),
-        }, escrow_seeds), escrowed, ctx.accounts.share_mint.decimals)?;
-        token_interface::close_account(CpiContext::new_with_signer(ctx.accounts.token_program.key(), token_interface::CloseAccount {
-            account: ctx.accounts.escrow.to_account_info(), destination: ctx.accounts.lender.to_account_info(),
-            authority: ctx.accounts.escrow.to_account_info(),
-        }, escrow_seeds))?;
+        }, escrow_seeds), burn_now, ctx.accounts.share_mint.decimals)?;
+        if !partial {
+            token_interface::close_account(CpiContext::new_with_signer(ctx.accounts.token_program.key(), token_interface::CloseAccount {
+                account: ctx.accounts.escrow.to_account_info(), destination: ctx.accounts.lender.to_account_info(),
+                authority: ctx.accounts.escrow.to_account_info(),
+            }, escrow_seeds))?;
+        } else {
+            ctx.accounts.request.shares = shares.checked_sub(shares_paid).ok_or(NotchError::MathOverflow)?;
+        }
         let vbump = [vault_bump];
         token_interface::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), TransferChecked {
             from: ctx.accounts.vault.to_account_info(), mint: ctx.accounts.mint.to_account_info(),
             to: ctx.accounts.to.to_account_info(), authority: ctx.accounts.vault.to_account_info(),
-        }, &[&[b"vault-v2", &vbump]]), amount, ctx.accounts.mint.decimals)
+        }, &[&[b"vault-v2", &vbump]]), amount, ctx.accounts.mint.decimals)?;
+        if !partial {
+            ctx.accounts.request.close(ctx.accounts.lender.to_account_info())?;
+        }
+        Ok(())
     }
 
-    /// Change of mind (allowed any time, before or after the cooldown): shares go back to the lender.
+    /// Change of mind (allowed any time, before or after the cooldown): the shares go back to the lender, but NOT the gain
+    /// they made while in escrow. A request locks the price at request time (see WITHDRAWALS), so a lender who cancels gets
+    /// back shares worth at most what they were worth at request time (the gain made in escrow is burned: its value stays in
+    /// the tranche NAV for the lenders who stay). If the price fell meanwhile (a loss was
+    /// marked) the lender gets all shares back and carries the loss. Without this, arming a request was free: cancel and
+    /// re-file kept every fee earned in between (final gate #3).
     pub fn cancel_withdraw(ctx: Context<CancelWithdraw>) -> Result<()> {
         let lender_key = ctx.accounts.lender.key();
         let escrow_bump = [ctx.accounts.request.escrow_bump];
         let mint_key = ctx.accounts.share_mint.key();
         let escrow_seeds: &[&[&[u8]]] = &[&[b"escrow", mint_key.as_ref(), lender_key.as_ref(), &escrow_bump]];
-        token_interface::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), TransferChecked {
-            from: ctx.accounts.escrow.to_account_info(), mint: ctx.accounts.share_mint.to_account_info(),
-            to: ctx.accounts.share_account.to_account_info(), authority: ctx.accounts.escrow.to_account_info(),
-        }, escrow_seeds), ctx.accounts.escrow.amount, ctx.accounts.share_mint.decimals)?;
+        let escrowed = ctx.accounts.escrow.amount;
+        let t = ctx.accounts.pool.tranche_of(&mint_key)?;
+        let nav = ctx.accounts.pool.nav(t) as u128;
+        let supply = ctx.accounts.share_mint.supply as u128;
+        let req = &ctx.accounts.request;
+        // V = what the escrowed shares were worth at request time. If they are worth more now, keep only as many shares as
+        // are worth V AFTER the forfeited ones are burned (burning raises the price of the rest, so the plain ratio
+        // shares * p_request / p_now would still hand back a little too much): k * nav / (supply - (escrowed - k)) <= V
+        //   =>  k <= V * (supply - escrowed) / (nav - V).
+        // With no other holders there is nobody to give the forfeited value to: everything goes back (the lender owns the
+        // whole tranche anyway).
+        let others = supply.checked_sub(escrowed as u128).ok_or(NotchError::MathOverflow)?;
+        let v_req = if req.supply_at_request == 0 { 0 } else {
+            (escrowed as u128).checked_mul(req.nav_at_request as u128).ok_or(NotchError::MathOverflow)?
+                .checked_div(req.supply_at_request as u128).ok_or(NotchError::MathOverflow)?
+        };
+        // The price really rose (compared by cross-multiplication, so rounding of V alone never counts as a gain).
+        let gained = v_req > 0 && others > 0 && supply > 0 && req.supply_at_request > 0
+            && nav.checked_mul(req.supply_at_request as u128).ok_or(NotchError::MathOverflow)?
+                > (req.nav_at_request as u128).checked_mul(supply).ok_or(NotchError::MathOverflow)?;
+        let keep = if !gained { escrowed } else {
+            let k = v_req.checked_mul(others).ok_or(NotchError::MathOverflow)?
+                .checked_div(nav.checked_sub(v_req).ok_or(NotchError::MathOverflow)?).ok_or(NotchError::MathOverflow)?;
+            u64::try_from(k.min(escrowed as u128)).map_err(|_| NotchError::MathOverflow)?
+        };
+        let forfeit = escrowed.checked_sub(keep).ok_or(NotchError::MathOverflow)?;
+        if forfeit > 0 {
+            token_interface::burn_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), token_interface::BurnChecked {
+                mint: ctx.accounts.share_mint.to_account_info(), from: ctx.accounts.escrow.to_account_info(),
+                authority: ctx.accounts.escrow.to_account_info(),
+            }, escrow_seeds), forfeit, ctx.accounts.share_mint.decimals)?;
+        }
+        if keep > 0 {
+            token_interface::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), TransferChecked {
+                from: ctx.accounts.escrow.to_account_info(), mint: ctx.accounts.share_mint.to_account_info(),
+                to: ctx.accounts.share_account.to_account_info(), authority: ctx.accounts.escrow.to_account_info(),
+            }, escrow_seeds), keep, ctx.accounts.share_mint.decimals)?;
+        }
         token_interface::close_account(CpiContext::new_with_signer(ctx.accounts.token_program.key(), token_interface::CloseAccount {
             account: ctx.accounts.escrow.to_account_info(), destination: ctx.accounts.lender.to_account_info(),
             authority: ctx.accounts.escrow.to_account_info(),
         }, escrow_seeds))
+    }
+
+    /// Devnet cleanup: a `WithdrawRequest` made by the program before the price lock existed is 16 bytes shorter than the
+    /// current struct, so `claim_withdraw` and `cancel_withdraw` cannot read it (Anchor refuses to deserialize it) and its
+    /// PDA also blocks a new request. This gives the escrowed shares back to the lender in full (a legacy request had no
+    /// locked price, so there is no gain to forfeit) and closes the escrow and the request. It refuses a request of the
+    /// current size.
+    pub fn cancel_legacy_withdraw(ctx: Context<CancelLegacyWithdraw>) -> Result<()> {
+        let info = ctx.accounts.request.to_account_info();
+        require_keys_eq!(*info.owner, crate::ID, anchor_lang::error::ErrorCode::AccountOwnedByWrongProgram);
+        {
+            let d = info.try_borrow_data()?;
+            require!(d.len() >= 8 + 50 && d.len() < 8 + WithdrawRequest::INIT_SPACE, NotchError::NotLegacyRequest);
+            require!(d[..8] == WithdrawRequest::DISCRIMINATOR[..], NotchError::NotLegacyRequest);
+            require!(d[8..40] == ctx.accounts.lender.key().to_bytes(), NotchError::NotLegacyRequest);
+        }
+        let lender_key = ctx.accounts.lender.key();
+        let escrow_bump = [ctx.bumps.escrow];
+        let mint_key = ctx.accounts.share_mint.key();
+        let escrow_seeds: &[&[&[u8]]] = &[&[b"escrow", mint_key.as_ref(), lender_key.as_ref(), &escrow_bump]];
+        let escrowed = ctx.accounts.escrow.amount;
+        if escrowed > 0 {
+            token_interface::transfer_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), TransferChecked {
+                from: ctx.accounts.escrow.to_account_info(), mint: ctx.accounts.share_mint.to_account_info(),
+                to: ctx.accounts.share_account.to_account_info(), authority: ctx.accounts.escrow.to_account_info(),
+            }, escrow_seeds), escrowed, ctx.accounts.share_mint.decimals)?;
+        }
+        token_interface::close_account(CpiContext::new_with_signer(ctx.accounts.token_program.key(), token_interface::CloseAccount {
+            account: ctx.accounts.escrow.to_account_info(), destination: ctx.accounts.lender.to_account_info(),
+            authority: ctx.accounts.escrow.to_account_info(),
+        }, escrow_seeds))?;
+        // close the legacy request by hand: lamports to the lender, no data, owned by the system program again
+        let dest = ctx.accounts.lender.to_account_info();
+        let lam = info.lamports();
+        **dest.try_borrow_mut_lamports()? = dest.lamports().checked_add(lam).ok_or(NotchError::MathOverflow)?;
+        **info.try_borrow_mut_lamports()? = 0;
+        info.assign(&anchor_lang::system_program::ID);
+        info.resize(0)?;
+        Ok(())
     }
 
     pub fn deposit_borrower(ctx: Context<BorrowerDeposit>, amount: u64) -> Result<()> {
@@ -722,17 +845,20 @@ pub struct CreditLine {
     pub ext: LineExt,
 }
 
-/// The tail of a `CreditLine` (offset 98 in the account data after the discriminator), 56 bytes:
+/// The tail of a `CreditLine` (offset 98 in the account data after the discriminator), 64 bytes (grown from 56 by `counted_at`):
 ///   posted_at       unix time the current signed record was posted (`check_credit` treats 0 as "posted long ago");
 ///   last_draw_at    unix time of the latest draw (the hold clock for the track-record rule);
 ///   counted_nonce   the `last_nonce` under which a repayment was last counted (once per posted record);
-///   id_hash         the mobile-money identity this wallet is pinned to (all zero = none yet).
+///   id_hash         the mobile-money identity this wallet is pinned to (all zero = none yet);
+///   counted_at      unix time of the last counted repayment (at most one per `MIN_COUNT_GAP_S`; a line that has not grown to
+///                   this size yet cannot count until its next `post_limit`).
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
 pub struct LineExt {
     pub posted_at: i64,
     pub last_draw_at: i64,
     pub counted_nonce: u64,
     pub id_hash: [u8; 32],
+    pub counted_at: i64,
 }
 
 /// Load the borrower's line for `post_limit`: create the PDA if it does not exist yet, grow it (topping up the rent
@@ -793,7 +919,7 @@ fn save_line(info: &AccountInfo, line: &CreditLine) -> Result<()> {
 
 /// Read the tail; a legacy account that ends early reads the missing bytes as zero.
 fn read_ext<R: std::io::Read>(reader: &mut R) -> std::io::Result<LineExt> {
-    let mut b = [0u8; 56];
+    let mut b = [0u8; 64];
     let mut n = 0;
     while n < b.len() {
         match reader.read(&mut b[n..])? {
@@ -806,6 +932,7 @@ fn read_ext<R: std::io::Read>(reader: &mut R) -> std::io::Result<LineExt> {
         last_draw_at: i64::from_le_bytes(b[8..16].try_into().unwrap()),
         counted_nonce: u64::from_le_bytes(b[16..24].try_into().unwrap()),
         id_hash: b[24..56].try_into().unwrap(),
+        counted_at: i64::from_le_bytes(b[56..64].try_into().unwrap()),
     })
 }
 
@@ -813,11 +940,12 @@ fn read_ext<R: std::io::Read>(reader: &mut R) -> std::io::Result<LineExt> {
 /// that do not fit are zero (they would read back as zero anyway); non-zero bytes that do not fit are an error, never
 /// silently dropped. (`post_limit` grows the account before it sets any of them, so this only guards the other paths.)
 fn write_ext<W: std::io::Write>(v: &LineExt, writer: &mut W) -> std::io::Result<()> {
-    let mut b = [0u8; 56];
+    let mut b = [0u8; 64];
     b[0..8].copy_from_slice(&v.posted_at.to_le_bytes());
     b[8..16].copy_from_slice(&v.last_draw_at.to_le_bytes());
     b[16..24].copy_from_slice(&v.counted_nonce.to_le_bytes());
     b[24..56].copy_from_slice(&v.id_hash);
+    b[56..64].copy_from_slice(&v.counted_at.to_le_bytes());
     let mut done = 0;
     while done < b.len() {
         match writer.write(&b[done..])? {
@@ -836,10 +964,10 @@ fn counts_as_track_record(line: &CreditLine, principal: u64, now: i64, full_len:
     if !full_len || line.ext.last_draw_at == 0 {
         return false; // a legacy line with no draw clock cannot prove how long the loan was held
     }
-    let floor = (line.limit / 4).max(MIN_COUNTED_PRINCIPAL).min(line.limit);
-    principal >= floor
+    principal >= MIN_COUNTED_PRINCIPAL
         && now.saturating_sub(line.ext.last_draw_at) >= MIN_COUNTED_HOLD_S
         && line.last_nonce > line.ext.counted_nonce
+        && (line.ext.counted_at == 0 || now.saturating_sub(line.ext.counted_at) >= MIN_COUNT_GAP_S)
 }
 
 /// The v2 lender pool. PDA ["pool-v2"]. The first seven fields keep the v1 `TranchePool` byte layout
@@ -1211,7 +1339,8 @@ pub struct ClaimWithdraw<'info> {
     pub share_mint: InterfaceAccount<'info, Mint>,
     #[account(mut, seeds = [b"escrow", share_mint.key().as_ref(), lender.key().as_ref()], bump = request.escrow_bump, token::mint = share_mint)]
     pub escrow: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, close = lender, seeds = [b"withdraw", share_mint.key().as_ref(), lender.key().as_ref()], bump = request.bump, has_one = lender)]
+    // Not `close = lender`: a partial claim keeps the request open (a full claim closes it in the handler).
+    #[account(mut, seeds = [b"withdraw", share_mint.key().as_ref(), lender.key().as_ref()], bump = request.bump, has_one = lender)]
     pub request: Account<'info, WithdrawRequest>,
     #[account(mut, token::mint = mint, token::authority = lender)]
     pub to: InterfaceAccount<'info, TokenAccount>,
@@ -1224,7 +1353,8 @@ pub struct CancelWithdraw<'info> {
     pub lender: Signer<'info>,
     #[account(seeds = [b"pool-v2"], bump = pool.bump)]
     pub pool: Account<'info, TranchePool>,
-    #[account(constraint = share_mint.key() == pool.senior_mint || share_mint.key() == pool.junior_mint @ NotchError::BadTrancheMint)]
+    // `mut`: the shares that were earned while in escrow are burned on cancel.
+    #[account(mut, constraint = share_mint.key() == pool.senior_mint || share_mint.key() == pool.junior_mint @ NotchError::BadTrancheMint)]
     pub share_mint: InterfaceAccount<'info, Mint>,
     #[account(mut, token::mint = share_mint, token::authority = lender)]
     pub share_account: InterfaceAccount<'info, TokenAccount>,
@@ -1232,6 +1362,25 @@ pub struct CancelWithdraw<'info> {
     pub escrow: InterfaceAccount<'info, TokenAccount>,
     #[account(mut, close = lender, seeds = [b"withdraw", share_mint.key().as_ref(), lender.key().as_ref()], bump = request.bump, has_one = lender)]
     pub request: Account<'info, WithdrawRequest>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+/// Accounts for the devnet cleanup of a request made before the price lock (see `cancel_legacy_withdraw`).
+#[derive(Accounts)]
+pub struct CancelLegacyWithdraw<'info> {
+    #[account(mut)]
+    pub lender: Signer<'info>,
+    #[account(seeds = [b"pool-v2"], bump = pool.bump)]
+    pub pool: Account<'info, TranchePool>,
+    #[account(constraint = share_mint.key() == pool.senior_mint || share_mint.key() == pool.junior_mint @ NotchError::BadTrancheMint)]
+    pub share_mint: InterfaceAccount<'info, Mint>,
+    #[account(mut, token::mint = share_mint, token::authority = lender)]
+    pub share_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, seeds = [b"escrow", share_mint.key().as_ref(), lender.key().as_ref()], bump, token::mint = share_mint)]
+    pub escrow: InterfaceAccount<'info, TokenAccount>,
+    /// CHECK: a legacy `WithdrawRequest` that Anchor cannot deserialize; the handler checks owner, size, discriminator and lender.
+    #[account(mut, seeds = [b"withdraw", share_mint.key().as_ref(), lender.key().as_ref()], bump)]
+    pub request: UncheckedAccount<'info>,
     pub token_program: Interface<'info, TokenInterface>,
 }
 
@@ -1326,4 +1475,6 @@ pub enum NotchError {
     DepositTooSmall,
     #[msg("The withdrawal would leave a dust supply of shares behind")]
     DustSupply,
+    #[msg("This withdraw request is not a legacy (pre price-lock) request of this lender")]
+    NotLegacyRequest,
 }

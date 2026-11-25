@@ -27,9 +27,9 @@ if (!c.exists || !c.active || c.availableBucket < 1) throw new Error('not good f
 const check = await buildCheckCreditIx({ wallet: studentWallet, minAvailable: 30_000_000n, maxAgeSeconds: 7 * 86_400 });
 ```
 
-`getCredit` returns `{ exists, availableBucket, availableBucketLabel, onTimeRepayments, defaulted, expiresAt, postedAt, expired, active }`
+`getCredit` returns `{ exists, availableBucket, availableBucketLabel, onTimeRepayments, defaulted, expiresAt, postedAt, expired, overdue, active }`
 (`{ exists: false }` for a wallet with no line). `check_credit` fails with one of `NoCreditLine`, `Defaulted`,
-`RecordExpired`, `InsufficientCredit`, `StaleRecord`.
+`RecordExpired`, `LoanOverdue` (a loan is past due and unpaid), `InsufficientCredit`, `StaleRecord`.
 
 ## From your own Anchor program (CPI)
 
