@@ -12,6 +12,7 @@ import { Inbox, handleInbox } from './inbox.js';
 import { createStoreFromEnv } from './store.js';
 import { createAuthFromEnv } from './supabase-auth.js';
 import { PepperError, cvmPepper } from './pepper.js';
+import { createSampleLimiter, callerKey } from './sample-limit.js';
 
 // The underwriter as it runs inside a Phala Cloud confidential VM (Intel TDX, dstack).
 //
@@ -25,6 +26,7 @@ import { PepperError, cvmPepper } from './pepper.js';
 //    Without it the server checks DKIM against real DNS like enclave/src/server.js.
 
 const DEMO = process.env.DEMO_FIXTURES === '1';
+const sampleLimiter = createSampleLimiter(); // demo only: GET /samples/*.eml is rate limited
 const PORT = Number(process.env.PORT || 8787);
 
 // ---- dstack: quote + info over /var/run/dstack.sock ----
@@ -180,6 +182,12 @@ const server = http.createServer(async (req, res) => {
   // Demo only: a freshly signed sample email per request (fresh MoMo number, fresh transaction id).
   const sample = DEMO && req.method === 'GET' && url.pathname.match(/^\/samples\/(momo|deel|bank)\.eml$/);
   if (sample) {
+    // Demo only, and rate limited per caller and overall: a fresh signed income email is a fresh underwriter record (final gate #1).
+    const taken = sampleLimiter.take(callerKey(req));
+    if (!taken.ok) {
+      res.writeHead(429, { 'content-type': 'application/json', 'retry-after': String(taken.retryAfterS), 'access-control-allow-origin': '*' });
+      return res.end(JSON.stringify({ ok: false, reason: `demo samples are rate limited (demo only): try again in ${taken.retryAfterS} s` }));
+    }
     let eml;
     if (sample[1] === 'momo') {
       eml = await fixtures.momoStatementEmail({ msisdn: fixtures.randomMsisdn() });

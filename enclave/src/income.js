@@ -42,7 +42,8 @@
 //      deposit counts (a cash-out up to 7 days BEFORE it counts too: take cash out, put it back in). Every debit is
 //      used once and in proportion, with no minimum size, so splitting a deposit into small pieces buys nothing and
 //      leaving 90% behind does not pass a 90% test. Spending on merchants, bills and airtime is not cycling.
-//   2. Net cash. Cash-outs that no deposit used up (waiting 8 days to withdraw beats rule 1) are taken off what is left.
+//   2. Net cash. Every debit that leaves the wallet (cash-out, person-to-person or other-network transfer, move to the holder's own bank)
+//      that no deposit used up (waiting 8 days to move it on beats rule 1) is taken off what is left, however late it happens in the window.
 //   3. Regularity. What is left must fall in at least CASH_MIN_MONTHS of the 3 thirty-day months of the window, or
 //      nothing counts. One big deposit in one month is not income.
 //   4. Evenness. A month may count for at most CASH_MONTH_CAP times the (lower) median month, so a token deposit in a
@@ -51,6 +52,13 @@
 // PEER RETURNS (audit #7: helper SIMs send money in and the holder sends it straight back). A peer credit whose money goes back
 // to the SAME counterparty within PEER_RETURN_WINDOW_MS (14 days, before or after the credit) counts only for the part that did not
 // go back (each debit used once). A return under PEER_RETURN_DEADZONE (10%) of the credit is change, not a loop.
+// MONEY PASSED BACK (final gate #2: a merchant-till loop). A peer credit that arrives within PASSBACK_WINDOW_MS (7 days) AFTER a debit of
+// similar size (a merchant/till payment, a bill, or a transfer to anyone; min/max of the two amounts >= PASSBACK_SIMILAR) is the same
+// money coming back: it counts only for the part not covered (each debit used once), and the debit it undoes no longer counts as
+// real spending. For CASH, every unmatched outgoing debit of the window (cash-outs, transfers, other networks, moves to the holder's own
+// bank that no rule above used up) is subtracted (CASH RULE 2). It is NOT subtracted from peer income: an honest earner pays rent and
+// family by transfer too, and the passed-back match plus the cap below already bound a peer loop. SOFT CAP: whatever is left of soft
+// income (peers + cash) is capped at SOFT_CAP_USD_PER_MONTH, because no soft rule can tell a genuine float loop from honest trade.
 // SPEND BACKING (audits #6 and #7: anything that waits longer than the windows above). Soft income, cash deposits plus peer
 // transfers, may not exceed SPEND_BACKING (2x) the REAL spending of the window: merchant payments, bills, airtime, i.e. money that
 // left for goods. Transfers, cash-outs, savings, betting and loan repayments prove nothing and do not count as spending. So
@@ -86,6 +94,14 @@ export const CASH_MONTH_CAP = 2;
 export const PEER_RETURN_WINDOW_MS = 14 * DAY;
 export const PEER_RETURN_DEADZONE = 0.1;
 export const SPEND_BACKING = 2;
+// Final gate #2 (merchant-till loop): a peer credit that follows a similar-size debit (a merchant/till payment, or any debit to a
+// party) within PASSBACK_WINDOW_MS is money passed back, not income (see PEER RETURNS above), and the debit it undoes is not real
+// spending either. Soft income (peers + cash) is also capped at SOFT_CAP_USD_PER_MONTH (any currency, converted), because
+// every soft rule above can be gamed a little by looping a float through enough hands; a cap bounds what is left to a number
+// that no float can scale. Verified income (earned_income: payers and payroll the rules recognise) is never capped.
+export const PASSBACK_WINDOW_MS = 7 * DAY;
+export const PASSBACK_SIMILAR = 0.5; // a debit is "similar" to a credit when min/max of the two amounts is at least this
+export const SOFT_CAP_USD_PER_MONTH = 250;
 export const PASS_MIN = 100; // in statement currency units (GHS); smaller credits are never judged pass-through
 export const WINDOW_DAYS = 90;
 export const BUCKETS = 3; // 30-day buckets in the window
@@ -165,7 +181,7 @@ export function classifyRows(rows, { holder = '' } = {}) {
     if (c.amount <= 0 || c.untrusted || rankOf(c.cls) === 0 || c.cls === 'cash_deposit') continue;
     const d = asc.find((x) => x.amount < 0 && !usedDebit.has(x) && Math.abs(-x.amount - c.amount) < 0.005
       && counterparty(x) === counterparty(c) && x.date <= c.date && c.date - x.date <= 3 * DAY);
-    if (d) { usedDebit.add(d); c.cls = 'refund'; }
+    if (d) { usedDebit.add(d); d.refunded = true; c.cls = 'refund'; }
   }
 
   // pass-through: large credit, similar-size debits within 48 hours, every debit used once
@@ -223,9 +239,9 @@ export function finalizeIncome(rows, { now = new Date(), cashOwnMoney = 'bank' }
   }
   const regular = new Set([...months].filter(([, m]) => m.size >= 2).map(([k]) => k));
   const peerWeight = regular.size >= 2 ? PEER_WEIGHT : PEER_WEIGHT * SINGLE_PAYER_FACTOR;
-  const returned = peerReturns(rows);
+  const { share: returned, backUsed } = peerReturns(rows);
 
-  const cash = cashStep(rows, now, inWindow, { cashOwnMoney });
+  const cash = cashStep(rows, now, inWindow, { cashOwnMoney }, backUsed);
 
   const totals = Object.fromEntries(CLASSES.map((c) => [c, { count: 0, amount: 0 }]));
   const events = [];
@@ -242,10 +258,15 @@ export function finalizeIncome(rows, { now = new Date(), cashOwnMoney = 'bank' }
   // Net-flow check over the window: soft income needs real spending behind it.
   const soft = credits.filter((r) => (r.cls === 'peer_transfer' || r.cls === 'cash_deposit') && r.weight > 0 && inWindow(r));
   const softCounted = sum(soft.map((r) => r.amount * r.weight));
-  const realSpend = sum(rows.filter((d) => d.amount < 0 && inWindow(d) && isRealSpend(d)).map((d) => -d.amount - (d.passUsed || 0)));
+  const realSpend = sum(rows.filter((d) => d.amount < 0 && inWindow(d) && isRealSpend(d)).map((d) => -d.amount - (d.passUsed || 0) - (backUsed.get(d) || 0)));
   const spendLimit = SPEND_BACKING * Math.max(0, realSpend);
   const backing = softCounted > spendLimit ? (softCounted > 0 ? spendLimit / softCounted : 0) : 1;
   if (backing < 1) for (const r of soft) r.weight *= backing;
+  // Soft cap: whatever soft income is left may not exceed SOFT_CAP_USD_PER_MONTH over the window (no float can scale it).
+  const softUsd = sum(soft.map((r) => r.amount * r.weight * (USD_PER[r.currency] ?? 0)));
+  const capUsd = SOFT_CAP_USD_PER_MONTH * (WINDOW_DAYS / 30);
+  const capFactor = softUsd > capUsd ? capUsd / softUsd : 1;
+  if (capFactor < 1) for (const r of soft) r.weight *= capFactor;
   for (const r of credits) {
     const cls = r.cls || 'unknown';
     const weight = r.weight || 0;
@@ -272,7 +293,7 @@ export function finalizeIncome(rows, { now = new Date(), cashOwnMoney = 'bank' }
   const counted = round2(sum(events.map((e) => e.amount * e.weight)));
   return {
     events, totals, signals, countedTotal: counted, regularPeers: regular.size, cash: cash.summary,
-    netFlow: { softCounted: round2(softCounted), realSpend: round2(realSpend), backing: round2(backing) },
+    netFlow: { softCounted: round2(softCounted), realSpend: round2(realSpend), backing: round2(backing), capFactor: round2(capFactor) },
   };
 }
 
@@ -283,29 +304,45 @@ function isRealSpend(d) {
   return d.dcls === 'spend' && !isCashOut(d) && !LEAVING_TYPE.test(d.type) && !d.untrusted;
 }
 
-// For each peer credit: the share (0..1) that went straight back to the same counterparty within PEER_RETURN_WINDOW_MS,
-// before or after it. Every debit is used once (oldest credit first), so splitting buys nothing. Shares under the dead zone
-// read as 0 (change, small repayments).
+// For each peer credit: the share (0..1) that went back, in two ways. (1) Straight back to the same counterparty within
+// PEER_RETURN_WINDOW_MS, before or after it. (2) MONEY PASSED BACK: covered by earlier debits of similar size (a merchant/till
+// payment, a bill, a transfer to anyone) within PASSBACK_WINDOW_MS before it. Every debit is used once (oldest credit first), so
+// splitting buys nothing. Shares under the dead zone read as 0 (change, small repayments). Also returns `backUsed`: how much of
+// each debit a credit used up, so it stops counting as real spending.
 function peerReturns(rows) {
   const peers = rows.filter((r) => r.amount > 0 && r.cls === 'peer_transfer' && !r.untrusted && r.date).sort((a, b) => a.date - b.date);
-  const debits = rows.filter((r) => r.amount < 0 && r.date && r.party).sort((a, b) => a.date - b.date);
+  const debits = rows.filter((r) => r.amount < 0 && r.date).sort((a, b) => a.date - b.date);
   const used = new Map();
-  const out = new Map();
+  const share = new Map();
+  const backUsed = new Map();
+  const change = new Map(); // small returns under the dead zone: change, not a loop and not outflow either
+  const free = (d) => -d.amount - (d.passUsed || 0) - (used.get(d) || 0);
   for (const c of peers) {
     let need = c.amount;
+    const take = [];
+    const grab = (d) => {
+      const t = Math.min(free(d), need);
+      used.set(d, (used.get(d) || 0) + t);
+      take.push([d, t]);
+      need -= t;
+    };
     for (const d of debits) {
       if (need <= 0.004) break;
-      if (counterparty(d) !== counterparty(c) || Math.abs(d.date - c.date) > PEER_RETURN_WINDOW_MS) continue;
-      const free = -d.amount - (d.passUsed || 0) - (used.get(d) || 0);
-      if (free <= 0.004) continue;
-      const take = Math.min(free, need);
-      used.set(d, (used.get(d) || 0) + take);
-      need -= take;
+      if (!d.party || counterparty(d) !== counterparty(c) || Math.abs(d.date - c.date) > PEER_RETURN_WINDOW_MS || free(d) <= 0.004) continue;
+      grab(d);
     }
-    const share = (c.amount - need) / c.amount;
-    out.set(c, share < PEER_RETURN_DEADZONE ? 0 : share);
+    for (const d of debits) {
+      if (need <= 0.004) break;
+      const similar = Math.min(-d.amount, c.amount) / Math.max(-d.amount, c.amount) >= PASSBACK_SIMILAR;
+      if (d.untrusted || !(d.date <= c.date && c.date - d.date <= PASSBACK_WINDOW_MS) || !(d.dcls === 'spend' || d.party) || !similar || free(d) <= 0.004) continue;
+      grab(d);
+    }
+    const s = (c.amount - need) / c.amount;
+    share.set(c, s < PEER_RETURN_DEADZONE ? 0 : s);
+    if (s < PEER_RETURN_DEADZONE) { for (const [d, t] of take) { used.set(d, used.get(d) - t); change.set(d, (change.get(d) || 0) + t); } continue; }
+    for (const [d, t] of take) backUsed.set(d, (backUsed.get(d) || 0) + t);
   }
-  return out;
+  return { share, backUsed, change };
 }
 
 // ---- cash deposits (see CASH RULES at the top) ------------------------------------------------------------------------
@@ -324,11 +361,11 @@ const isCashOut = (d) => CASH_OUT.test(d.type);
 const leaves = (d, mode) => isCashOut(d) || LEAVING_TYPE.test(d.type) || (d.dcls === 'own_money' && (mode === 'all' || (mode === 'bank' && !d.savingsProduct)));
 
 // -> { weights: Map(row -> weight 0..CASH_WEIGHT), summary }. Every step only lowers.
-function cashStep(rows, now, inWindow, { cashOwnMoney }) {
+function cashStep(rows, now, inWindow, { cashOwnMoney }, backUsed = new Map()) {
   const deposits = rows.filter((r) => r.amount > 0 && r.cls === 'cash_deposit' && !r.untrusted && inWindow(r)).sort((a, b) => a.date - b.date);
   const summary = { deposits: deposits.length, total: round2(sum(deposits.map((r) => r.amount))), cycled: 0, unmatchedCashOut: 0, monthsWithCash: 0, countable: 0, counted: 0 };
   const weights = new Map();
-  if (!deposits.length) return { weights, summary };
+  if (!deposits.length) return { weights, summary, used: new Map() };
 
   // 1. cycling: oldest deposit first, earliest debit first, every debit used once and only up to its size
   const debits = rows.filter((r) => r.amount < 0 && r.date).sort((a, b) => a.date - b.date);
@@ -350,8 +387,10 @@ function cashStep(rows, now, inWindow, { cashOwnMoney }) {
   }
   summary.cycled = round2(summary.total - sum([...left.values()]));
 
-  // 2. net cash: cash-outs no deposit used up come off what is left
-  const unmatched = sum(debits.filter((d) => isCashOut(d) && inWindow(d)).map((d) => Math.max(0, free(d))));
+  // 2. net cash: every debit that LEAVES the wallet (cash-outs, transfers, other networks, own bank) and that no deposit used up
+  // comes off what is left, however long after the deposit it happens (final gate #2; the 7 day rule above only matches
+  // timing, this is the net of the whole window). Refunded debits (the money came back) and passed-back payments are not outflow.
+  const unmatched = sum(debits.filter((d) => inWindow(d) && !d.untrusted && !d.refunded && leaves(d, cashOwnMoney)).map((d) => Math.max(0, free(d) - (backUsed.get(d) || 0))));
   summary.unmatchedCashOut = round2(unmatched);
   const afterCycling = sum([...left.values()]);
   const net = afterCycling > 0 ? Math.max(0, afterCycling - unmatched) / afterCycling : 0;
@@ -366,7 +405,7 @@ function cashStep(rows, now, inWindow, { cashOwnMoney }) {
   const filled = [...perMonth.values()].filter((v) => v > 0.004).sort((a, b) => a - b);
   summary.monthsWithCash = filled.length;
   summary.countable = round2(sum(filled));
-  if (filled.length < CASH_MIN_MONTHS) return { weights, summary };
+  if (filled.length < CASH_MIN_MONTHS) return { weights, summary, used };
 
   // 4. evenness: a month counts for at most CASH_MONTH_CAP x the lower median month
   const cap = CASH_MONTH_CAP * filled[Math.floor((filled.length - 1) / 2)];
@@ -378,7 +417,7 @@ function cashStep(rows, now, inWindow, { cashOwnMoney }) {
     weights.set(c, CASH_WEIGHT * frac);
   }
   summary.counted = round2(sum(deposits.map((c) => c.amount * (weights.get(c) || 0))));
-  return { weights, summary };
+  return { weights, summary, used };
 }
 
 // Average of the end-of-day balances over the last 90 days (or the statement's span if shorter). Rows are newest first.

@@ -116,7 +116,7 @@ test('ATTACK take cash out first, put it back in: a cash-out in the 7 days BEFOR
 test('ATTACK send the cash on to a person (or an accomplice) within a week: cancelled; ordinary spending is not', () => {
   assert.equal(counted(run(monthly(1000, (d) => [p2p(d - 1, 1000)]))), 0);
   assert.equal(counted(run(monthly(1000, (d) => [p2p(d - 7, 1000, { hh: 9 })]))), 0); // just inside day 7
-  assert.equal(counted(run(monthly(1000, (d) => [p2p(d - 8, 1000)]))), 1500); // day 8: outside the window (only the net-cash rule is left, and a transfer is not a cash-out)
+  assert.equal(counted(run(monthly(1000, (d) => [p2p(d - 8, 1000)]))), 0); // day 8: outside the 7 day match, but the net-cash rule now subtracts every unmatched debit that leaves (final gate #2), not only cash-outs
   // paying a shop, airtime, bills: spending, not cycling
   assert.equal(counted(run(monthly(1000, (d) => [pay(d - 1, 1000)]))), 1500);
   assert.equal(counted(run(monthly(1000, (d) => [row({ type: 'AIRTIME', party: P(4), acct: 'MTNONLINEAIRTIMEVENDOR', amount: -900, date: at(d - 1) })]))), 1500);
