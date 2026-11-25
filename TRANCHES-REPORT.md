@@ -64,3 +64,9 @@ Normal loans are due in 30 days. New instruction `draw_with_term(amount, term_s)
   https://explorer.solana.com/tx/cof59LhXdLKLJfJsJAgiLmHf7NGtQD3iszQosBbpkKtPs3GG4kP5nUZXcGXUsdcAoM2K1uVzuUcogtFtzkqRSKC?cluster=devnet
 - ok: senior lender cancel_withdraw
   https://explorer.solana.com/tx/LmQqeiMenZ2X8RD6EAr2w9KRCcVwydWZtoZENVuqmhK1biG5FDYsYhYKv9S3obQ1Djte57Cfxb6JBnraQxbABsY?cluster=devnet
+
+## Known edges after the last gate (Nov 25)
+- **Dust supply** (someone burns shares straight through the token program until 0 < supply < 1e6): deposits stay open and get at least one share per base unit, so nobody can rob the next depositor or lock the tranche. Accepted leak: if the share price was above 1 before the burn, a very large deposit can take at most (price − 1) × the other holders' shares from them. That is under 1 USDC in total, and it can't be repeated (`reviews/2026-11-25-final/dust-profit.test.mjs`).
+- **Last lender stuck with dust:** while the supply is dust, a claim that would leave a dust remainder is refused. A griefer holding 1 share can keep about 1 USDC of the last honest lender's shares from leaving. Deposits stay open.
+- **Junior wiped to zero NAV with shares still outstanding** (an existing case): deposits into that tranche are refused until the holders' shares are cleared, and a dead junior also blocks senior deposits. Needs an admin reset path before mainnet.
+- **Claim before mark_default:** about one minute with the every-minute keeper, and arming a withdraw request costs the lender its yield.
