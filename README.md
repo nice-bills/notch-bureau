@@ -59,6 +59,8 @@ otherwise the service falls back to the rule-based extractor.
 
 `check_credit(min_available, max_age_s)` on the Notch program is read-only. It succeeds only if the wallet has a line, is not defaulted, its signed record has not expired, was posted within `max_age_s`, and has at least `min_available` left. Otherwise it fails with `NoCreditLine`, `Defaulted`, `RecordExpired`, `InsufficientCredit` or `StaleRecord`. On success it returns and logs `{ wallet, available_bucket, on_time_repayments, defaulted: false }` where the bucket is coarse (0: under 25, 1: 25 to 100, 2: 100 to 500, 3: 500+ USDC), never the exact limit.
 
+**Privacy of the exact limit (accepted, audit #12).** `check_credit` returns only a coarse bucket, but the credit line account (`CreditLine.limit`) and the `LimitPosted` event are public on chain and hold the exact limit. The limit is about 0.3 x monthly counted income, so anyone who knows a wallet can read an income band from chain. We accept this for the devnet demo: a lender must be able to see the limit it is exposed to, and the signed record is what the program checks. Before mainnet, either post only the bucket plus a hash commitment to the limit (the borrower reveals it when drawing), or keep the line in a confidential account. Tracked in "Mainnet bar" below.
+
 - `programs/hostel-deposit`: a minimal consumer that CPIs `check_credit` before it records a booking.
 - `sdk/` (`@notch/bureau`): `getCredit(rpc, wallet)` and `buildCheckCreditIx(...)`, with a 10-line integration example in its README.
 - Tests: `tests/bureau.test.js` (LiteSVM), `sdk/test`, and step 10 of `app/scripts/e2e-devnet.mjs`.
@@ -71,4 +73,4 @@ otherwise the service falls back to the rule-based extractor.
 
 ## Mainnet bar
 
-Passing local or devnet tests does not establish mainnet safety. Before any real funds: implement and remotely verify confidential-compute attestation; replace static currency conversion; bind repayment history to verified on-chain state; add a real borrower experience and repayment terms; deploy against the intended stablecoin; obtain independent Solana security review; and handle lending, privacy, and consumer-credit requirements for the launch jurisdiction.
+Passing local or devnet tests does not establish mainnet safety. Before any real funds: implement and remotely verify confidential-compute attestation; replace static currency conversion; bind repayment history to verified on-chain state; hide the exact limit on chain (bucket or commitment, audit #12); add a real borrower experience and repayment terms; deploy against the intended stablecoin; obtain independent Solana security review; and handle lending, privacy, and consumer-credit requirements for the launch jurisdiction.

@@ -1,0 +1,11 @@
+Gates run 2026-11-25 (all green on the final run)
+pnpm e2e:all:
+  root LiteSVM        tests 89   pass 89   fail 0
+  enclave             tests 234  pass 234  fail 0
+  sdk                 tests 6    pass 6    fail 0
+  app vitest          44 passed (2 files)
+  devnet e2e          ALL GREEN (206/206 passed), steps 1-14
+  browser e2e (local validator, real wallet signMessage on /underwrite)   6 passed
+node enclave/scripts/e2e-supabase.mjs --require:  21/21 checks passed
+  (the first run of the day was 20/21: the Realtime "never a step backwards" check timed out once; the immediate rerun was 21/21)
+Real MoMo statement (aggregates only, NOTCH_LLM=off): limit 47.47 -> 47.25 USDC; counted income 7,475 -> 7,440.21 GHS.

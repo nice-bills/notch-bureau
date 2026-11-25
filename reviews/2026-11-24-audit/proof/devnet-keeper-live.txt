@@ -1,0 +1,27 @@
+LIVE KEEPER PROOF (devnet, 2026-11-25). No secrets in this file; every signature is public chain data.
+
+Deployed function: https://rtdjnqbgpqygjkjvrcsp.supabase.co/functions/v1/keeper   (Supabase Edge Function, redeployed with supabase/deploy-keeper.sh)
+
+First live attempt FAILED and found a real bug (the deployed keeper could never send):
+  reply: {"ok":true,"cluster":"devnet","linesSeen":160,"overdue":1,"marked":0,"failed":1,...}
+  log:   FAILED 2C5M6VyNFYv9hQh5jWkqd3n9CsYi1coWccYmn2pwBNbf: Buffer is not defined
+  Cause: the bundled @solana/kit calls a bare `Buffer` when it encodes a transaction; Deno (Supabase) has no global Buffer.
+  Fix:   supabase/functions/keeper/index.ts sets globalThis.Buffer from node:buffer. Redeployed.
+  (So before this fix the hourly cron could see lines (after the 538187c filter fix) but never mark one. The old filter hid the problem.)
+
+After the fix, same overdue line, called by hand with {"send": true}:
+  reply: {"ok":true,"cluster":"devnet","linesSeen":160,"overdue":1,"marked":1,"failed":0,...}
+  mark_default tx 4KA5qDCyTf6BVeryqW7xPf5PQx1rGkkLiBV5knXKVDzg3SYiJCGu2v2N76JGZginMGX1YSGrZf9CiNYA1ghGKmi8
+  https://explorer.solana.com/tx/4KA5qDCyTf6BVeryqW7xPf5PQx1rGkkLiBV5knXKVDzg3SYiJCGu2v2N76JGZginMGX1YSGrZf9CiNYA1ghGKmi8?cluster=devnet
+
+Permanent end-to-end step (app/scripts/e2e-devnet.mjs, step 14, run inside `pnpm e2e:all`, 8/8 checks):
+  fresh borrower funded, post_limit, deposit + draw_with_term 5 USDC due in 10 s, never repaid:
+    post_limit  3s4661Aostdhjmb1NbmEBFraoovUnHgDWh1ZGWDe9vud2q4pJfNLeftk5dUqAXStRzWc8Av1iDxMCyUxRirQZAVa
+    draw        3eHDKw8GiXEubfXvYpeD6kP5WPifUsAACtK2ATBrSPb1Njxs4gXvvguSB8pa7YejEcw5Ds6EqBe5S94wbmF3qk81
+  then the DEPLOYED keeper with {"send": true}  ->  lines 172, overdue 1, marked 1, failed 0
+    mark_default 4bC6zMjxnF6Z44ttG4kfJfDcRapWK5gzcHt1r7YL1kxe1BUmpT9TzsRjJbzk1YVLPAebnry3PDj9EMWi9sfuKi9f
+    https://explorer.solana.com/tx/4bC6zMjxnF6Z44ttG4kfJfDcRapWK5gzcHt1r7YL1kxe1BUmpT9TzsRjJbzk1YVLPAebnry3PDj9EMWi9sfuKi9f?cluster=devnet
+  line read back from chain: defaulted = true, drawn = 0, deposit = 0.
+
+Devnet program upgrade (deploy tx): 4bYF3f6tMaGLPBHpYr9iLprsMZXKofd3SEVtfcaF25knGvrcVDJsyrproUALDWQKkQUpFyuMBfaamcsstCcb6pFv
+  deployed program SHA-256 == target/deploy/notch.so: 37e72d7d9b6b23249cc9229d2d1be899e7136edd8ad83c0f8f57f6a8cda20f7a

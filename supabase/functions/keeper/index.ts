@@ -9,8 +9,14 @@
 // Supabase injects SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY by itself.
 //
 // Without {"send": true} in the body it is a DRY RUN: it lists what it would mark and sends nothing.
+import { Buffer } from 'node:buffer';
 import { createKeyPairSignerFromBytes, createSolanaRpc } from '@solana/kit';
 import { DEFAULT_PROGRAM_ID, keeperPass } from './lib.ts';
+
+// The bundled @solana/kit (node build) calls a bare `Buffer` when it encodes a transaction and a request URL. Deno has no global
+// Buffer, so the first real `send` died with "Buffer is not defined" (found by the live e2e, step 14). The functions only read
+// `Buffer` when called, long after this line has run.
+(globalThis as { Buffer?: unknown }).Buffer ??= Buffer;
 
 const env = (k: string) => Deno.env.get(k) ?? '';
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
