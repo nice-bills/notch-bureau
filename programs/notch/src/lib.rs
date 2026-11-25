@@ -350,6 +350,11 @@ pub mod notch {
         if supply == 0 {
             require!(amount >= MIN_FIRST_DEPOSIT, NotchError::DepositTooSmall);
         }
+        // A holder can burn their own shares straight through the token program, skipping every check here. A tranche
+        // whose supply was burned down to dust (0 < supply < MIN_FIRST_DEPOSIT) would price one share at most of the NAV
+        // and let rounding rob the next depositor: refuse to mint into it. Above the floor, a share is worth at most
+        // NAV / 1e6 base units, so rounding can cost a depositor at most that (a burn only gifts value to other holders).
+        require!(supply == 0 || supply >= MIN_FIRST_DEPOSIT, NotchError::DustSupply);
         let shares = if supply == 0 { amount } else {
             require!(nav > 0, NotchError::InvalidPoolState);
             let s = (amount as u128).checked_mul(supply as u128).ok_or(NotchError::MathOverflow)?

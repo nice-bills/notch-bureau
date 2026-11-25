@@ -167,3 +167,17 @@ test('LG1: cancel_withdraw never burns the share supply down to dust', async () 
   const worth = (got * readPool(ctx.svm, ctx.pool).juniorNav) / mintSupply(ctx.svm, ctx.shareMint);
   assert.ok(worth >= 2_990_000n, `3 USDC deposit is worth ${worth}`);
 });
+
+// Last gate #3 (reviews/2026-11-25-final/burn-poc.test.mjs): a sole holder burns shares straight through the token program
+// down to a dust supply, then rounding on the next deposit pays the attacker (a 19 USDC deposit got 1 share worth 14.5).
+test('LG3: no deposit mints into a tranche burned down to a dust supply', async () => {
+  const { getBurnInstruction } = await import('@solana-program/token');
+  const ctx = await setup({ seed: 0n });
+  const a = ctx.lender;
+  assert.ok((await sendL(ctx, a, depositIx(ctx, a, 10n * USDC))).ok);
+  assert.ok((await sendL(ctx, a, getBurnInstruction({ account: a.shares, mint: ctx.juniorMint, authority: a.signer, amount: 10n * USDC - 1n }))).ok, 'direct burn works (token program)');
+  assert.equal(mintSupply(ctx.svm, ctx.juniorMint), 1n);
+  const v = await newLender(ctx, 100n * USDC);
+  for (const amt of [5n * USDC, 19n * USDC]) assert.ok(!(await sendL(ctx, v, depositIx(ctx, v, amt))).ok, `deposit ${amt} into a dust tranche refused`);
+  assert.equal(tokenBalance(ctx.svm, v.shares), 0n);
+});
