@@ -1,0 +1,11 @@
+Gates, 2026-11-25, program build sha256 d5953286083b5e58 (= deployed devnet bytes)
+cd app && pnpm e2e:all : EXIT 0
+  node tests (LiteSVM)  100/100
+  enclave               244/244
+  sdk                   7/7
+  vitest (app)          44/44
+  devnet e2e            ALL GREEN (206/206 passed), steps 1-14
+  browser e2e           6 passed
+node enclave/scripts/e2e-supabase.mjs --require : 21/21 (one earlier run was 20/21: the known Realtime timing flake; the rerun is 21/21)
+Found by the devnet e2e (first run of this gate): cancel_withdraw burned rounding dust when the price had NOT risen; fixed (cross-multiplied price test), test added, program redeployed, whole gate rerun green.
+Real statement (aggregates only, NOTCH_LLM=off): counted income 7,440 -> 6,842 GHS; limit 47.25 -> 43.44 USDC

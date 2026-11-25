@@ -7,16 +7,16 @@ One line per item in `REVIEW.md`. "Proof" files are in `proof/`: the BEFORE file
 | # | Item | State | Commit | Permanent test (fails before, passes after) | Proof |
 |---|------|-------|--------|---------------------------------------------|-------|
 | 1 | Keeper never saw a current (154-byte) line | fixed | 538187c | `enclave/test/keeper-real-layout.test.js` (3 tests, built from a line the real program produced) | `proof/keeper-before-fix.txt` 0/3, `proof/keeper-after-fix.txt` 3/3. **Live:** deployed keeper marked a real overdue devnet line, see `proof/devnet-keeper-live.txt` |
-| 2 | Dust repayments max the reputation cap | fixed | 6e1105b | `tests/audit.test.js` F1 (5 tests): size floor `min(limit, max(5 USDC, limit/4))`, held >= 30 s, once per posted record (`counted_nonce`) | `proof/program-before-fix.txt` (2 pass / 13 fail), `proof/program-after-fix.txt` 15/15 |
+| 2 | Dust repayments max the reputation cap | **only partly fixed in 6e1105b (the final gate found it still pumpable); fixed for real on 2026-11-25, see `../2026-11-25-final/FIXES.md`** | 6e1105b, then the final-gate commit | `tests/audit.test.js` F1: the 6e1105b rule was `min(limit, max(5 USDC, limit/4))`, held >= 30 s, once per posted record, which a 0.05 USDC limit and six cheap emails beat. Now: 5 USDC fixed, held >= 7 days, once per record AND once per 14 days | `proof/program-before-fix.txt` (2 pass / 13 fail), `proof/program-after-fix.txt` 15/15 |
 | 3 | `/underwrite` took anyone's statement for any wallet | fixed | f3e93b5 (server) + this commit (frozen UI signs) | `enclave/test/audit-underwrite.test.js` (6): statements only through the inbox, direct path needs the wallet's Ed25519 signature over wallet + email hash + time | `proof/audit-underwrite.BEFORE.txt` 3 fail, `.AFTER.txt` 6/6. UI side: browser e2e `app/e2e/notch.spec.ts` (the test wallet now has `signMessage`; the app signs every direct /underwrite) |
-| 4 | "Ready" withdraw request makes the cooldown pointless | fixed | 6e1105b | `tests/audit.test.js` F2 (5): claim window `[unlock, unlock + 2 days]`, escrowed shares earn nothing and carry losses (`min(price at request, price at claim)`) | same program proof files. **Known residual (documented in `lib.rs`, tested):** a claim between "overdue" and `mark_default` still pays the pre-loss price; the window is the keeper's latency (hourly) |
+| 4 | "Ready" withdraw request makes the cooldown pointless | fixed | 6e1105b | `tests/audit.test.js` F2 (5): claim window `[unlock, unlock + 2 days]`, escrowed shares earn nothing and carry losses (`min(price at request, price at claim)`) | same program proof files. **OVERSTATED here before 2026-11-25:** it said an armed request "earns nothing while armed" and that the lender "has to time a 2-day window". Cancelling an armed request actually returned the shares with the fee they earned, so arming was free, and due dates are public. Fixed on 2026-11-25 (cancel forfeits the escrow gain). **Residual that remains:** a matured, armed request can still claim between "overdue" and `mark_default` at the pre-loss price; the window is now the keeper's cadence (every minute), see `../2026-11-25-final/FIXES.md` |
 | 5 | Overdue borrower can keep drawing | fixed | 6e1105b (program) + dfb0c13 (underwriter) | `tests/audit.test.js` F3; `enclave/test/audit-small.test.js` "#5 (enclave side)": no new limit while overdue; `chain-history` returns `overdue` | program proof files; `proof/audit-small.BEFORE.txt` / `.AFTER.txt` |
 
 ## Income gaming
 
 | # | Item | State | Commit | Permanent test | Proof |
 |---|------|-------|--------|----------------|-------|
-| 6 | Cash cycled out by P2P after 8+ days counts as income | fixed | f3e93b5 | `enclave/test/audit-income.test.js` (#6, 4 tests): cash counts only up to 2x real spending (spend-backing), any unmatched `leaves()` debit subtracts | `proof/income-before-fix.txt` 0/11, `proof/income-after-fix.txt` 11/11 |
+| 6 | Cash cycled out by P2P after 8+ days counts as income | fixed by spend-backing in f3e93b5; **"any unmatched `leaves()` debit subtracts" was NOT true of that code (only cash-outs subtracted) and a merchant-till loop beat the spend-backing; both fixed on 2026-11-25** | f3e93b5, then the final-gate commit | `enclave/test/audit-income.test.js` (#6, 4 tests): cash counts only up to 2x real spending (spend-backing). 2026-11-25: unmatched leaving debits now really subtract from cash, passed-back payments no longer count as spending, and soft income is capped (`final-gate-income.test.js`) | `proof/income-before-fix.txt` 0/11, `proof/income-after-fix.txt` 11/11 |
 | 7 | Peer income faked with two helper SIMs | fixed | f3e93b5 | same file (#7, 6 tests): payer returns inside 14 days, money sent to the payer shortly before, and net flow per counterparty; honest peers and a spending trader untouched (controls) | same |
 
 ## Smaller (6)
@@ -38,10 +38,10 @@ One line per item in `REVIEW.md`. "Proof" files are in `proof/`: the BEFORE file
 
 ## Devnet program
 
-Upgraded on 2026-11-25 to the 6e1105b code (SHA-256 of the deployed program equals the build, `37e72d7d...`). It needed 4,792 more bytes, so the program account was extended by 10,240 bytes first (minimum extension). No stray buffers were left (`solana program show --buffers` is empty).
+Upgraded on 2026-11-25 to the 6e1105b code (later the same day to the final-gate build, see `../2026-11-25-final/FIXES.md`) (SHA-256 of the deployed program equals the build, `37e72d7d...`). It needed 4,792 more bytes, so the program account was extended by 10,240 bytes first (minimum extension). No stray buffers were left (`solana program show --buffers` is empty).
 
 - **Migrates (kept):** config, pool v2, vault, senior and junior mints and all share balances, dedupe and identity accounts. Old 98 and 106-byte credit lines still decode: draw and repay still work on them, a legacy repayment can never count as on-time, and the next `post_limit` grows the line to 154 bytes (the borrower pays the extra rent).
-- **Abandoned:** open `WithdrawRequest` accounts made by the old program (they have no `nav_at_request` / `supply_at_request`; devnet test data only, no real funds). `posted_at` moved into the new trailing block of the line. Nothing on devnet holds real value.
+- **Abandoned, and stuck:** open `WithdrawRequest` accounts made by the old program (they have no `nav_at_request` / `supply_at_request`; devnet test data only, no real funds). The new struct is 16 bytes longer, so claim and cancel cannot read them and the same PDA blocks a new request: their escrowed shares are locked. On 2026-11-25 `cancel_legacy_withdraw` was added, but it needs the owner's signature and the 2 devnet owners are throwaway wallets. `posted_at` moved into the new trailing block of the line. Nothing on devnet holds real value.
 
 ## Live keeper
 
@@ -50,4 +50,4 @@ See `proof/devnet-keeper-live.txt` (permanent e2e step 14 of `app/scripts/e2e-de
 The live run also found a SECOND keeper bug the unit tests could not see: the deployed function died with `Buffer is not defined` on its first real send (Deno has no global `Buffer`). Fixed in `supabase/functions/keeper/index.ts`, redeployed, proven by the step above. Until then the hourly cron could not have marked anything.
 
 ## Gates (2026-11-25): see `proof/gates-2026-11-25.txt`
-`pnpm e2e:all` green (89 + 234 + 6 + 44, devnet 206/206, browser 6/6) and `e2e-supabase.mjs --require` 21/21 (one earlier Realtime timing flake, rerun green). Real statement, aggregates only: 47.47 -> 47.25 USDC.
+`pnpm e2e:all` green (89 + 234 + 6 + 44, devnet 206/206, browser 6/6) and `e2e-supabase.mjs --require` 21/21 (one earlier Realtime timing flake, rerun green). Real statement, aggregates only: 47.47 -> 47.25 USDC (then 43.44 after the final gate).

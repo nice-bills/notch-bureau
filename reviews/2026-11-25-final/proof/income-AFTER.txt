@@ -1,0 +1,7 @@
+✔ FG2 repro: a merchant-till loop of a 1000 or 5000 GHS float counts for nothing (it counted 14,500 and 72,500 GHS) (7.804459ms)
+✔ FG2: the loop cannot hide by changing the amounts (return in two halves, or the payment split in two) (3.662181ms)
+✔ FG2: a loop that evades the size match (ten small payments out, one big credit back) is still bounded by the soft cap, whatever the float (17.296656ms)
+✔ FG2: cash cashed in, then moved out by a person-to-person transfer 8+ days later, counts for nothing (every unmatched leaving debit subtracts) (0.737604ms)
+✔ FG2 controls: honest peers who pay a shopkeeper and a landlord are still counted; verified income is never capped (0.712461ms)
+ℹ pass 5
+ℹ fail 0

@@ -1,0 +1,10 @@
+✔ keeper constants match the program: discriminators, line length, pool address, instruction bytes (13.995165ms)
+✔ keeper decoding and selection agree with app/src/notch.ts and app/scripts/keeper.mjs (1.984593ms)
+✔ a dry run lists what it would mark and sends nothing (2.234482ms)
+✔ send mode marks only the overdue line, with a real signed transaction carrying mark_default (15.859701ms)
+✔ one failing transaction is counted and the next line is still tried; the cap per run holds (33.376722ms)
+✔ final gate #7: lines are marked most overdue first (oldest due date, then the biggest loan), in the library and in the CLI keeper (0.721105ms)
+✔ final gate #7: a run sends up to MAX_SENDS_PER_RUN (40, it was 10) most overdue first, and a spent time budget leaves the rest for the next run (2.780358ms)
+✔ mainnet and unknown clusters are refused, and sending needs a fee payer (1.340802ms)
+ℹ pass 8
+ℹ fail 0
