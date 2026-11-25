@@ -104,13 +104,39 @@ test('send mode marks only the overdue line, with a real signed transaction carr
 });
 
 test('one failing transaction is counted and the next line is still tried; the cap per run holds', async () => {
-  const many = Array.from({ length: 12 }, () => ({ pubkey: '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV', data: lineBytes({ drawn: 1n, due: 10n }) }));
+  const many = Array.from({ length: keeper.MAX_SENDS_PER_RUN + 2 }, () => ({ pubkey: '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV', data: lineBytes({ drawn: 1n, due: 10n }) }));
   const { rpc, sent } = fakeRpc({ lines: many, failTx: new Set([`sig0`.padEnd(88, '1')]) });
   const payer = await generateKeyPairSigner();
   const r = await keeper.keeperPass({ rpc, rpcUrl: 'https://api.devnet.solana.com', program: PROGRAM, payer, send: true, pollMs: 1 });
-  assert.equal(r.overdue, 12);
+  assert.equal(r.overdue, keeper.MAX_SENDS_PER_RUN + 2);
   assert.equal(sent.length, keeper.MAX_SENDS_PER_RUN);
-  assert.deepEqual([r.failed, r.marked, r.skipped], [1, 9, 2]);
+  assert.deepEqual([r.failed, r.marked, r.skipped], [1, keeper.MAX_SENDS_PER_RUN - 1, 2]);
+});
+
+// ---- final gate #7: throughput (most overdue first, a bigger cap, a time budget) ----
+test('final gate #7: lines are marked most overdue first (oldest due date, then the biggest loan), in the library and in the CLI keeper', () => {
+  const now = 1_000_000n;
+  const accounts = [
+    { pubkey: 'recent', data: lineBytes({ drawn: 5_000_000n, due: 900_000n }) },
+    { pubkey: 'oldest-small', data: lineBytes({ drawn: 1_000_000n, due: 100n }) },
+    { pubkey: 'old-big', data: lineBytes({ drawn: 9_000_000n, due: 500n }) },
+    { pubkey: 'old-small', data: lineBytes({ drawn: 2_000_000n, due: 500n }) },
+  ];
+  const want = ['oldest-small', 'old-big', 'old-small', 'recent'];
+  assert.deepEqual(keeper.selectOverdue(accounts, now).map((o) => o.pubkey), want);
+  assert.deepEqual(cliSelectOverdue(accounts, now).map((o) => o.pubkey), want);
+});
+
+test('final gate #7: a run sends up to MAX_SENDS_PER_RUN (40, it was 10) most overdue first, and a spent time budget leaves the rest for the next run', async () => {
+  assert.ok(keeper.MAX_SENDS_PER_RUN >= 40);
+  const lines = Array.from({ length: 8 }, (_, i) => ({ pubkey: '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV', data: lineBytes({ drawn: 1n, due: BigInt(100 - i) }) }));
+  const { rpc, sent } = fakeRpc({ lines });
+  const payer = await generateKeyPairSigner();
+  let t = 0;
+  const r = await keeper.keeperPass({ rpc, rpcUrl: 'https://api.devnet.solana.com', program: PROGRAM, payer, send: true, pollMs: 1, budgetMs: 50, clock: () => (t += 20) });
+  // the clock moves 20 ms per look: start 20, then the checks read 40 (20 spent), 60 (40 spent) and 80 (60 spent, over the 50): 2 sent, 6 left
+  assert.equal(sent.length, 2);
+  assert.deepEqual([r.marked, r.skipped, r.overdue], [2, 6, 8]);
 });
 
 test('mainnet and unknown clusters are refused, and sending needs a fee payer', async () => {

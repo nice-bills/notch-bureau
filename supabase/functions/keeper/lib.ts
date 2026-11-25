@@ -30,8 +30,10 @@ const hex = (h: string) => Uint8Array.from(h.match(/../g)!.map((b) => parseInt(b
 export const LINE_DISCRIMINATOR = hex('dce2cd18dc978168');
 /** Anchor instruction discriminator of mark_default: sha256("global:mark_default")[0..8]. */
 export const MARK_DEFAULT_DISCRIMINATOR = hex('b6e77b8442d0898b');
-/** Most lines handled per run; the next hourly run takes the rest. Keeps a run inside the function's time limit. */
-export const MAX_SENDS_PER_RUN = 10;
+/** Most lines handled per run (the run also stops at `budgetMs`); the next run (every minute) takes the rest, most overdue first. */
+export const MAX_SENDS_PER_RUN = 40;
+/** Wall-clock budget of one run's sends. The cron fires every minute, so a run that stays under this does not overlap the next. */
+export const DEFAULT_BUDGET_MS = 45_000;
 
 /**
  * The getProgramAccounts filter for credit lines: the Anchor discriminator ONLY. Never filter on `dataSize`: the account
@@ -68,6 +70,8 @@ export function selectOverdue(accounts: RawAccount[], now: bigint | number): { p
     try { line = decodeLine(data); } catch { continue; }
     if (isPastDue(line, now)) out.push({ pubkey, line });
   }
+  // Most overdue first (oldest due date), then the biggest loan: when a batch falls due together the worst gets marked first.
+  out.sort((a, b) => (a.line.due < b.line.due ? -1 : a.line.due > b.line.due ? 1 : a.line.drawn > b.line.drawn ? -1 : a.line.drawn < b.line.drawn ? 1 : 0));
   return out;
 }
 
@@ -107,11 +111,15 @@ export interface PassResult { cluster: string; linesSeen: number; overdue: numbe
  */
 export async function keeperPass(opts: {
   rpc: any; rpcUrl: string; program: string; payer?: any; send: boolean; confirmAttempts?: number; pollMs?: number; log?: (m: string) => void;
+  budgetMs?: number; clock?: () => number;
 }): Promise<PassResult> {
   const { rpc, rpcUrl, program, payer, send } = opts;
   const log = opts.log ?? (() => {});
   const confirmAttempts = opts.confirmAttempts ?? 40;
   const pollMs = opts.pollMs ?? 1000;
+  const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS;
+  const clock = opts.clock ?? Date.now;
+  const started = clock();
   if (send && !payer) throw new Error('send needs a fee payer (KEEPER_KEYPAIR)');
   const cluster = await assertDevnet(rpc, rpcUrl);
   const pool = await poolAddress(program);
@@ -131,7 +139,10 @@ export async function keeperPass(opts: {
   const out: PassResult = { cluster, linesSeen: accounts.length, overdue: overdue.length, marked: 0, failed: 0, signatures: [], dryRun: !send, skipped: 0 };
   if (!send) return out;
 
-  for (const { pubkey } of overdue.slice(0, MAX_SENDS_PER_RUN)) {
+  let attempted = 0;
+  for (const { pubkey } of overdue) {
+    if (attempted >= MAX_SENDS_PER_RUN || clock() - started >= budgetMs) break; // the rest waits for the next run
+    attempted++;
     try {
       const { value: bh } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
       const tx = await pipe(
@@ -158,6 +169,6 @@ export async function keeperPass(opts: {
       log(`FAILED ${pubkey}: ${String((e as Error)?.message ?? e).split('\n')[0]}`);
     }
   }
-  out.skipped = Math.max(0, overdue.length - MAX_SENDS_PER_RUN);
+  out.skipped = Math.max(0, overdue.length - attempted);
   return out;
 }

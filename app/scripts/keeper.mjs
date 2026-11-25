@@ -62,6 +62,8 @@ export function selectOverdue(accounts, nowSeconds) {
     try { line = decodeLine(data); } catch { continue; }
     if (isPastDue(line, nowSeconds)) out.push({ pubkey, line });
   }
+  // Most overdue first (oldest due date), then the biggest loan: when a batch falls due together the worst gets marked first.
+  out.sort((a, b) => (a.line.due < b.line.due ? -1 : a.line.due > b.line.due ? 1 : a.line.drawn > b.line.drawn ? -1 : a.line.drawn < b.line.drawn ? 1 : 0));
   return out;
 }
 
