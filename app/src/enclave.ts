@@ -33,13 +33,31 @@ export async function getAttestation(signal?: AbortSignal): Promise<Attestation>
   return r.json();
 }
 
-/** Send a raw .eml to the sealed underwriter. Only the signed limit comes back. */
-export async function underwrite(eml: Uint8Array, wallet: string): Promise<EnclaveResult> {
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+const toB64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
+
+/** What the wallet signs to say "this email is for me": wallet, the email's SHA-256 and the time. Same text the underwriter checks. */
+export const underwriteMessage = (wallet: string, emlSha256Hex: string, ts: number) => `notch-underwrite-v1|${wallet}|${emlSha256Hex}|${ts}`;
+
+/**
+ * Send a raw .eml to the sealed underwriter. Only the signed limit comes back.
+ * `signMessage` is the connected wallet's: the underwriter wants proof that you hold the wallet the limit is for, so nobody
+ * can send your email for another wallet. Without it the request is refused (HTTP 401).
+ */
+export async function underwrite(eml: Uint8Array, wallet: string, signMessage?: (m: Uint8Array) => Promise<Uint8Array>): Promise<EnclaveResult> {
   let r: Response;
+  const headers: Record<string, string> = { 'content-type': 'message/rfc822', 'x-wallet': wallet };
+  if (signMessage) {
+    const ts = Date.now();
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', eml as BufferSource));
+    const sig = await signMessage(new TextEncoder().encode(underwriteMessage(wallet, hex(digest), ts)));
+    headers['x-notch-ts'] = String(ts);
+    headers['x-notch-sig'] = toB64(sig);
+  }
   try {
     r = await fetch(`${ENCLAVE_URL}/underwrite`, {
       method: 'POST',
-      headers: { 'content-type': 'message/rfc822', 'x-wallet': wallet },
+      headers,
       body: eml as BodyInit,
     });
   } catch {

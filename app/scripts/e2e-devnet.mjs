@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 //   1  funds a fresh borrower with SOL (from the admin wallet) and test USDC (admin is the mint authority)
 //   2  sends a DKIM-signed demo .eml to the underwriter over HTTP and gets a signed record back
 //   3  posts the record (Ed25519 verify ix + post_limit) and reads the CreditLine back
-//   4  deposit 20% -> draw -> repay principal + 2% fee -> deposit comes back, on-time counter +1 -> withdraw_borrower
+//   4  deposit 20% -> draw -> repay principal + 2% fee -> deposit comes back, on-time counter +1 (13 USDC held 32 s) -> withdraw_borrower
 //   5  a second fresh wallet lends; share maths is checked against PoolStats. It then requests a withdrawal
 //      (shares go to escrow, still counted in supply), an early claim is refused (CooldownActive), and cancel
 //      returns the shares. The claim payout itself needs a 3 day wait, so it is covered by the LiteSVM tests.
@@ -112,6 +112,8 @@ import {
   withdrawBorrowerIx,
 } from '../src/notch.ts';
 import { fixtures, makeServer, makeUnderwriter } from './enclave-lib.mjs';
+import { signUnderwrite } from '../../enclave/src/underwrite-http.js';
+import { InboxedUnderwriter } from '../../enclave/test/fixtures/inboxed.js';
 import { signRecord } from '../../enclave/src/record.js';
 import { identityHash, normalizeMsisdn } from '../../enclave/src/statement.js';
 import { getDeviceOwner, getIdentityOwner } from '../../enclave/src/chain-history.js';
@@ -209,7 +211,17 @@ const usd = (n) => `${Number(n) / 1e6}`;
 // ---------------------------------------------------------------------------------------------
 // chain helpers
 // ---------------------------------------------------------------------------------------------
-async function send(label, payer, ixs, { expectFail = false } = {}) {
+// The public devnet drops transactions now and then. A transaction whose blockhash expired without ever being seen did not land,
+// so sending it again with a fresh blockhash is safe (it cannot execute twice).
+async function send(label, payer, ixs, o = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await sendOnce(label, payer, ixs, o); } catch (e) {
+      if (attempt >= 3 || !/blockhash expired before the transaction landed/.test(e.message)) throw e;
+      console.log(`  note  dropped by devnet, sending again (${attempt}/2): ${label}`);
+    }
+  }
+}
+async function sendOnce(label, payer, ixs, { expectFail = false } = {}) {
   const { value: bh } = await call(rpc.getLatestBlockhash({ commitment: 'confirmed' }));
   const tx = await pipe(
     createTransactionMessage({ version: 0 }),
@@ -303,7 +315,10 @@ const fakeSgt = new Map();
 // The secret pepper of the phone-number hash (real servers refuse to start without one). A fresh one per run: every number in
 // this run is fresh too, so the identity PDAs of earlier runs are simply not in play.
 const E2E_PEPPER = crypto.randomBytes(32).toString('hex');
+// InboxedUnderwriter: every email counts as delivered to the fixtures' inbox address, so steps 9 and 12 can send MoMo statements the
+// short way. The delivery rule itself (statements ONLY via the inbox, audit #3) is proven in step 13 and step 14 on plain Underwriters.
 const underwriter = makeUnderwriter(opts.enclaveKey, {
+  cls: InboxedUnderwriter,
   idPepper: E2E_PEPPER,
   identityProvider: (idHash) => getIdentityOwner(idHash, { endpoint: opts.rpc, programId: opts.program }),
   deviceProvider: (deviceHash) => getDeviceOwner(deviceHash, { endpoint: opts.rpc, programId: opts.program }),
@@ -311,7 +326,9 @@ const underwriter = makeUnderwriter(opts.enclaveKey, {
   chainRpc: makeRpc({ endpoint: opts.rpc }),
   usdcMint: opts.mint,
 });
-const server = makeServer(underwriter);
+// The in-process server skips the wallet signature on /underwrite ONLY here: this script's wallets are kit signers whose secret keys
+// cannot be read. The signed path is proven in step 14 (strict server, real ed25519 wallet) and by the browser e2e (the app signs with its wallet).
+const server = makeServer(underwriter, { insecureAllowUnsignedForTests: true });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const ENCLAVE = `http://127.0.0.1:${server.address().port}`;
 const uwKey = new Uint8Array(getAddressEncoder().encode(address(underwriter.publicKey)));
@@ -329,9 +346,22 @@ try {
 } catch { console.log(`demo enclave at ${opts.enclaveUrl}: not reachable (not needed for this run)`); }
 
 // ---- underwriter client + email factory ----
+// The public devnet RPC rate-limits (HTTP 429) when the script is busy; the enclave passes that on as a reason. That is the network, not
+// the code under test: wait and ask again (a refused request spends nothing, the dedupe is only written on success).
+async function with429Retry(call) {
+  let out;
+  for (let i = 0; i < 4; i++) {
+    out = await call();
+    if (!/HTTP 429/.test(String(out.body?.reason ?? ''))) return out;
+    await sleep(5_000 * (i + 1));
+  }
+  return out;
+}
 async function underwrite(eml, wallet) {
-  const r = await fetch(`${ENCLAVE}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', 'x-wallet': wallet }, body: eml });
-  return { status: r.status, body: await r.json() };
+  return with429Retry(async () => {
+    const r = await fetch(`${ENCLAVE}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', 'x-wallet': wallet }, body: eml });
+    return { status: r.status, body: await r.json() };
+  });
 }
 // POST /posted's chain check, against a REAL devnet transaction (retries: the public RPC may not have indexed it yet).
 const postedRpc = makeRpc({ endpoint: opts.rpc });
@@ -444,7 +474,7 @@ try {
 
   // -------------------------------------------------------------------------------------------
   step('4', 'deposit 20% -> draw -> repay -> deposit back -> withdraw_borrower');
-  const drawAmt = 10n * USDC;
+  const drawAmt = 13n * USDC; // the limit is 50: a repayment counts only from min(limit, max(5, limit/4)) = 12.5 USDC (audit #2)
   const needed = depositNeededFor(drawAmt); // 2 USDC
   const fee = feeFor(drawAmt); // 0.2 USDC (2% rounded up)
   const payoff = payoffFor(drawAmt);
@@ -494,6 +524,8 @@ try {
     expectProgramError('repay 1 micro-USDC short of principal + fee', r3, 'FeeRequired');
   }
 
+  console.log('  note  waiting 32 s: a repayment counts as on-time only if the loan was held >= 30 s (audit #2)');
+  await sleep(32_000);
   const balBeforeRepay = await tokenBal(borrower.address, mint);
   await send(`repay ${usd(payoff)} USDC (principal + ceil 2% fee)`, borrower, [repayIx(A, borrower.address, line, bAta, payoff)]);
   l = decodeLine(await accountBytes(line));
@@ -895,7 +927,7 @@ try {
     check('a booking for exactly the remaining credit is accepted', !cBook2.err && (await readBooking(carol.address))?.rent === availC);
     await send('carol: repay 5 USDC + 2% fee (clean up the pool)', carol, [repayIx(A, carol.address, c.line, cAta, payoffFor(5n * USDC))]);
     const sdkC2 = await sdkGetCredit(rpc, carol.address, { programAddress: program });
-    check('SDK sees carol\'s on-time repayment (1) after repaying', sdkC2.onTimeRepayments === 1, jsonSafe(sdkC2));
+    check('SDK: carol\'s small 5 USDC repayment (below the 12.5 USDC floor of a 50 limit) does NOT count as on-time (audit #2, live on devnet)', sdkC2.onTimeRepayments === 0, jsonSafe(sdkC2));
   }
   // -------------------------------------------------------------------------------------------
   step('11', 'Tranches: senior + junior deposits, subordination floor, fee waterfall, forced default hits junior first, per-tranche timed withdraw');
@@ -1103,10 +1135,11 @@ try {
       const sig = nacl.sign.detached(msg, signer.secretKey);
       return Buffer.from(JSON.stringify({ nonce: iss.nonce, signature: Buffer.from(sig).toString('base64'), signedMessage: Buffer.from(msg).toString('base64') })).toString('base64');
     }
-    const underwriteDev = async (eml, wallet, header) => {
-      const r = await fetch(`${ENCLAVE}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', 'x-wallet': wallet, ...(header ? { 'x-notch-device': header } : {}) }, body: eml });
+    const underwriteDev = (eml, wallet, header) => with429Retry(async () => {
+      const h = typeof header === 'function' ? await header() : header; // a function: a FRESH proof on every try (a proof is single use, even when the chain read behind it hit a 429)
+      const r = await fetch(`${ENCLAVE}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', 'x-wallet': wallet, ...(h ? { 'x-notch-device': h } : {}) }, body: eml });
       return { status: r.status, body: await r.json() };
-    };
+    });
     const nowS = () => Math.floor(Date.now() / 1000);
 
     const challenge = await nonce();
@@ -1166,32 +1199,32 @@ try {
     {
       const thief = newWallet();
       fakeSgt.set(thief.address, [phoneMint]); // the same phone's token shows up in another wallet (an SGT can move)
-      const r1 = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), thief.address, await proof(thief));
+      const r1 = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), thief.address, () => proof(thief));
       check('enclave refuses a second wallet holding the same phone', r1.status === 422 && /already linked to a different wallet/.test(r1.body.reason || '') && !jsonSafe(r1.body).includes(phoneMint), jsonSafe(r1.body));
 
-      const r2 = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), seeker.address, sHeader);
+      const r2 = await underwriteDev(await momoStatementEmail({ msisdn: sMsisdn, rows: traderRows() }), seeker.address, sHeader); // the seeker's OWN number: one wallet, one identity (audit #10)
       check('ATTACK replay of a used SIWS proof refused', r2.status === 422 && /unknown, already used or expired/.test(r2.body.reason || ''), jsonSafe(r2.body));
 
       const victim = newWallet();
       fakeSgt.set(victim.address, [fakeMint()]);
-      const forgery = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), victim.address, await proof(victim, { signer: newWallet().kp }));
+      const forgery = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), victim.address, () => proof(victim, { signer: newWallet().kp }));
       check('ATTACK a real Seeker owner\'s public address signed by someone else\'s key: refused', forgery.status === 422 && /signature does not match/.test(forgery.body.reason || ''), jsonSafe(forgery.body));
-      const mismatch = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), victim.address, await proof(thief));
+      const mismatch = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), victim.address, () => proof(thief));
       check('ATTACK a proof signed by one wallet presented for another wallet: refused', mismatch.status === 422 && /signature does not match/.test(mismatch.body.reason || ''), jsonSafe(mismatch.body));
       const noProof = await underwrite(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), victim.address);
       check('the same address with NO proof is just an ordinary borrower (no uplift, no device)', noProof.status === 200 && noProof.body.seeker === undefined && base64ToBytes(noProof.body.message).length === 128 && Math.abs(noProof.body.limitUsdc - base.body.limitUsdc) < 0.005);
 
       const plain = newWallet();
-      const none = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), plain.address, await proof(plain));
+      const none = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), plain.address, () => proof(plain));
       check('valid proof but no SGT: ordinary limit, v2 record, seeker=false', none.status === 200 && none.body.seeker === false && base64ToBytes(none.body.message).length === 128 && Math.abs(none.body.limitUsdc - base.body.limitUsdc) < 0.005);
 
       const down = newWallet();
       fakeSgt.set(down.address, new SgtUnavailable('mainnet RPC unreachable (simulated)'));
       const dEml = await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() });
-      const outage = await underwriteDev(dEml, down.address, await proof(down));
+      const outage = await underwriteDev(dEml, down.address, () => proof(down));
       check('an SGT RPC outage is 503 "try again", never "not a Seeker"', outage.status === 503 && outage.body.retry === true, jsonSafe(outage.body));
       fakeSgt.set(down.address, [fakeMint()]);
-      const back = await underwriteDev(dEml, down.address, await proof(down));
+      const back = await underwriteDev(dEml, down.address, () => proof(down));
       check('...and the same email goes through once the RPC is back (nothing was spent)', back.status === 200 && back.body.seeker === true, jsonSafe(back.body));
 
       const junk = await underwriteDev(await momoStatementEmail({ msisdn: randomMsisdn(), rows: traderRows() }), down.address, 'not-base64-json');
@@ -1200,7 +1233,7 @@ try {
 
     // ---- 12e. a restarted enclave still refuses: the chain says the phone is taken (fresh process state, chain reader only)
     {
-      const restarted = new Underwriter({ resolver: fixtures.resolver, trusted: underwriter.trusted, llm: null,
+      const restarted = new InboxedUnderwriter({ resolver: fixtures.resolver, trusted: underwriter.trusted, llm: null,
         deviceProvider: (h) => getDeviceOwner(h, { endpoint: opts.rpc, programId: opts.program }),
         sgtReader: async () => [phoneMint] });
       const thief = newWallet();
@@ -1343,6 +1376,77 @@ try {
       check('...and the same statement to the same address goes through once the RPC is back', f2.status === 200 && (await getRecord(flaky, fIn.pollToken)).seeker === true, jsonSafe(f2.body));
     } finally {
       inboxApp.close();
+    }
+  }
+  // -------------------------------------------------------------------------------------------
+  step('14', 'Audit: signed direct /underwrite (strict server), and the DEPLOYED keeper (Supabase Edge Function) marks a really overdue devnet line as defaulted');
+  {
+    // 14a. strict server: the direct path wants the wallet's own signature over this very email (audit #3)
+    const strictU = makeUnderwriter(null, { idPepper: E2E_PEPPER, chainRpc: makeRpc({ endpoint: opts.rpc }), usdcMint: opts.mint });
+    const strict = makeServer(strictU);
+    await new Promise((r) => strict.listen(0, '127.0.0.1', r));
+    const STRICT = `http://127.0.0.1:${strict.address().port}`;
+    try {
+      const kp = nacl.sign.keyPair();
+      const w = getAddressDecoder().decode(kp.publicKey);
+      const post = async (eml, headers) => { const r = await fetch(`${STRICT}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', ...headers }, body: eml }); return { status: r.status, body: await r.json() }; };
+      const eml = await freshEmail(fixtures.deelPayout);
+      const noSig = await post(eml, { 'x-wallet': w });
+      check('ATTACK: /underwrite without the wallet signature is refused (401)', noSig.status === 401 && !noSig.body.ok, jsonSafe(noSig.body));
+      const other = nacl.sign.keyPair();
+      const wrong = await post(eml, signUnderwrite({ wallet: w, eml, secretKey: other.secretKey }));
+      check('ATTACK: a signature from another key is refused (401)', wrong.status === 401, jsonSafe(wrong.body));
+      const good = await post(eml, signUnderwrite({ wallet: w, eml, secretKey: kp.secretKey }));
+      check('the wallet\'s own signature over this email is accepted', good.status === 200 && good.body.ok === true, jsonSafe(good.body));
+      const mm = await fixtures.momoStatementEmail({ msisdn: fixtures.randomMsisdn() });
+      const mmSigned = await post(mm, signUnderwrite({ wallet: w, eml: mm, secretKey: kp.secretKey }));
+      check('ATTACK (audit #3): a signed request still cannot carry a MoMo statement; statements come only through the inbox', mmSigned.status >= 400 && !mmSigned.body.ok && /inbox/i.test(mmSigned.body.reason || ''), jsonSafe(mmSigned.body));
+    } finally { strict.close(); }
+
+    // 14b. the deployed keeper, end to end
+    const keeperEnv = { ...readEnvFile(path.join(os.homedir(), '.config', 'notch', 'keeper.env')), ...process.env };
+    const secret = keeperEnv.KEEPER_SHARED_SECRET;
+    const keeperUrl = keeperEnv.NOTCH_KEEPER_URL || 'https://rtdjnqbgpqygjkjvrcsp.supabase.co/functions/v1/keeper';
+    if (!secret) {
+      console.log('  note  KEEPER_SHARED_SECRET not set (env or ~/.config/notch/keeper.env): live keeper step SKIPPED');
+    } else {
+      const kB = await generateKeyPairSigner();
+      trancheWallets.push(kB);
+      const kUsdc = await deriveAta(kB.address, mint), kLine = await deriveLine(program, kB.address);
+      await send('fund the keeper-test borrower (0.015 SOL, 10 USDC)', admin, [
+        getTransferSolInstruction({ source: admin, destination: kB.address, amount: lamports(15_000_000n) }),
+        createAtaIdempotentIx(admin.address, kUsdc, kB.address, mint),
+        getMintToInstruction({ mint, token: kUsdc, mintAuthority: admin, amount: 10n * USDC }),
+      ]);
+      const u = await underwrite(await freshEmail(fixtures.deelPayout), kB.address);
+      if (u.status !== 200 || !u.body.ok) throw new Error(`underwriter refused ${kB.address}: ${jsonSafe(u.body)}`);
+      const rec = base64ToBytes(u.body.message), dec = decodeRecord(rec);
+      await send('keeper-test borrower: post_limit', kB, postLimitIxs(A, { payer: kB.address, borrower: kB.address, line: kLine, dedupe: await deriveDedupe(program, dec.dedupe), record: rec }, uwKey, base64ToBytes(u.body.signature)));
+      const kAmt = 5n * USDC, kNeed = depositNeededFor(kAmt);
+      await send(`keeper-test borrower: deposit ${usd(kNeed)} + draw_with_term ${usd(kAmt)} USDC due in 10 s, never repaid`, kB, [
+        depositBorrowerIx(A, kB.address, kLine, kUsdc, kNeed), drawWithTermIx(A, kB.address, kLine, kUsdc, kAmt, 10)]);
+      check('the line is open with a balance and not defaulted', decodeLine(await accountBytes(kLine)).drawn === kAmt && !decodeLine(await accountBytes(kLine)).defaulted);
+      const callKeeper = async () => {
+        const r = await fetch(keeperUrl, { method: 'POST', headers: { 'x-keeper-secret': secret, 'content-type': 'application/json' }, body: JSON.stringify({ send: true }) });
+        const j = await r.json().catch(() => ({}));
+        return { status: r.status, j };
+      };
+      let ran = null, lastReply = null;
+      for (let i = 0; i < 12; i++) {
+        await sleep(i === 0 ? 14_000 : 5_000); // wall clock ~ chain clock; the keeper reads the chain's clock
+        const k = await callKeeper();
+        lastReply = k;
+        if (k.status !== 200 || !k.j.ok) throw new Error(`deployed keeper replied ${k.status}: ${String(k.j.reason ?? '').slice(0, 200)}`);
+        if (decodeLine(await accountBytes(kLine)).defaulted) { ran = k; break; }
+      }
+      check('the DEPLOYED keeper marked the overdue line (line.defaulted on chain)', !!ran, lastReply ? `lines ${lastReply.j.linesSeen}, overdue ${lastReply.j.overdue}, marked ${lastReply.j.marked}, failed ${lastReply.j.failed}` : '');
+      if (ran) {
+        const sigs = ran.j.signatures ?? [];
+        check('the keeper reply lists the mark_default transaction signature(s) and no failures', ran.j.failed === 0 && sigs.length >= 1, `marked ${ran.j.marked}, failed ${ran.j.failed}`);
+        for (const sg of sigs) console.log(`  keeper mark_default tx: ${explorerTx(sg)}`);
+      }
+      const kd = decodeLine(await accountBytes(kLine));
+      check('on chain: line defaulted, balance and deposit cleared', kd.defaulted && kd.drawn === 0n && kd.deposit === 0n);
     }
   }
 } catch (e) {

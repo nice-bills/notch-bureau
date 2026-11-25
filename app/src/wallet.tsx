@@ -11,7 +11,7 @@ import {
   type StandardDisconnectFeature,
   type StandardEventsFeature,
 } from '@wallet-standard/features';
-import { SolanaSignTransaction, type SolanaSignTransactionFeature } from '@solana/wallet-standard-features';
+import { SolanaSignMessage, SolanaSignTransaction, type SolanaSignMessageFeature, type SolanaSignTransactionFeature } from '@solana/wallet-standard-features';
 import { address, type Address } from '@solana/kit';
 import { CHAIN_ID } from './config';
 
@@ -22,7 +22,7 @@ export interface DetectedWallet {
 }
 
 type SolanaWallet = Wallet & {
-  features: StandardConnectFeature & StandardEventsFeature & SolanaSignTransactionFeature & Partial<StandardDisconnectFeature>;
+  features: StandardConnectFeature & StandardEventsFeature & SolanaSignTransactionFeature & Partial<StandardDisconnectFeature> & Partial<SolanaSignMessageFeature>;
 };
 
 const isSolanaWallet = (w: Wallet): w is SolanaWallet =>
@@ -36,6 +36,8 @@ interface WalletState {
   disconnect: () => Promise<void>;
   /** Sign a compiled transaction (wire bytes with empty signatures). Returns the signed wire bytes. */
   signTransaction: (wire: Uint8Array) => Promise<Uint8Array>;
+  /** Sign a message (Ed25519 signature bytes). Used to prove you hold the wallet when you send an email to the underwriter. */
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>;
 }
 
 const Ctx = createContext<WalletState | null>(null);
@@ -112,9 +114,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [connected],
   );
 
+  const signMessage = useCallback(
+    async (message: Uint8Array) => {
+      if (!connected) throw new Error('Connect a wallet first.');
+      const w = connected.wallet.wallet as SolanaWallet;
+      const feature = w.features[SolanaSignMessage];
+      if (!feature) throw new Error('This wallet cannot sign messages, which Notch needs to know the email is for your wallet. Try Phantom, Backpack or Solflare.');
+      const [out] = await feature.signMessage({ account: connected.account, message });
+      return out.signature;
+    },
+    [connected],
+  );
+
   const value = useMemo(
-    () => ({ wallets, connected, connecting, connect, disconnect, signTransaction }),
-    [wallets, connected, connecting, connect, disconnect, signTransaction],
+    () => ({ wallets, connected, connecting, connect, disconnect, signTransaction, signMessage }),
+    [wallets, connected, connecting, connect, disconnect, signTransaction, signMessage],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

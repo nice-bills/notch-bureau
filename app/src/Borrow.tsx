@@ -34,7 +34,7 @@ const SAMPLES = [
 ];
 
 export function Borrow() {
-  const { connected, signTransaction } = useWallet();
+  const { connected, signTransaction, signMessage } = useWallet();
   const { addrs, line, pool, usdc, refresh, session, configured } = useChain();
   const owner = connected?.address ?? null;
   const [uwKey, setUwKey] = useState<string | null>(null);
@@ -114,7 +114,7 @@ export function Borrow() {
     setUwBusy(true);
     setUwError(null);
     try {
-      const res = await underwrite(eml.bytes, owner);
+      const res = await underwrite(eml.bytes, owner, signMessage);
       if (!res.ok) {
         setUwError(res.friendly);
         session.setSigned(null);

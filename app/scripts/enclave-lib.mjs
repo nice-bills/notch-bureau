@@ -13,10 +13,10 @@ import * as fixtures from '../../enclave/test/fixtures/emails.js';
 export { fixtures };
 
 /** Underwriter keyed from `keyFile` (created if missing; omit for a throwaway in-memory key). */
-export function makeUnderwriter(keyFile, { llm = null, ...extra } = {}) {
+export function makeUnderwriter(keyFile, { llm = null, cls = Underwriter, ...extra } = {}) {
   let secretKey;
   if (keyFile && fs.existsSync(keyFile)) secretKey = Uint8Array.from(JSON.parse(fs.readFileSync(keyFile, 'utf8')));
-  const u = new Underwriter({ secretKey, resolver: fixtures.resolver, trusted: [...DEFAULT_TRUSTED, 'bank.test'], llm, ...extra });
+  const u = new cls({ secretKey, resolver: fixtures.resolver, trusted: [...DEFAULT_TRUSTED, 'bank.test'], llm, ...extra });
   if (keyFile && !secretKey) fs.writeFileSync(keyFile, JSON.stringify(Array.from(u.keys.secretKey)), { mode: 0o600 });
   return u;
 }

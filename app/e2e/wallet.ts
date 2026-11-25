@@ -15,6 +15,8 @@ export interface TestWallet {
   signer: KeyPairSigner;
   /** How many transactions the wallet was asked to sign (the app must not ask for dry runs). */
   signCount: number;
+  /** How many messages the wallet was asked to sign (the underwriter wants a signature over each email). */
+  messageCount?: number;
 }
 
 export async function newWallet(): Promise<TestWallet> {
@@ -50,6 +52,10 @@ export async function installWallet(context: BrowserContext, w: TestWallet): Pro
     const signed = signWire(w, new Uint8Array(Buffer.from(wireB64, 'base64')));
     return await rpcSend('sendTransaction', [b64(signed), { encoding: 'base64', skipPreflight: true }]) as string;
   });
+  await context.exposeFunction('__e2eSignMessage', (msgB64: string) => {
+    w.messageCount = (w.messageCount ?? 0) + 1;
+    return b64(nacl.sign.detached(new Uint8Array(Buffer.from(msgB64, 'base64')), w.secretKey));
+  });
   await context.addInitScript(walletScript, { addr: w.address, name: WALLET_NAME, icon: ICON });
 }
 
@@ -72,7 +78,7 @@ function walletScript({ addr, name, icon }: { addr: string; name: string; icon: 
     address: addr,
     publicKey: fromBase58(addr),
     chains: ['solana:devnet', 'solana:mainnet', 'solana:testnet'],
-    features: ['solana:signTransaction', 'solana:signAndSendTransaction'],
+    features: ['solana:signTransaction', 'solana:signAndSendTransaction', 'solana:signMessage'],
     label: 'E2E account',
   });
   let connected = false;
@@ -97,6 +103,11 @@ function walletScript({ addr, name, icon }: { addr: string; name: string; icon: 
         supportedTransactionVersions: ['legacy', 0],
         signTransaction: async (...inputs: { transaction: Uint8Array }[]) =>
           Promise.all(inputs.map(async (i) => ({ signedTransaction: fromB64(await w.__e2eSign(toB64(i.transaction))) }))),
+      },
+      'solana:signMessage': {
+        version: '1.1.0',
+        signMessage: async (...inputs: { message: Uint8Array }[]) =>
+          Promise.all(inputs.map(async (i) => ({ signedMessage: i.message, signature: fromB64(await w.__e2eSignMessage(toB64(i.message))) }))),
       },
       'solana:signAndSendTransaction': {
         version: '1.0.0',

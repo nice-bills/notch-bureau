@@ -69,7 +69,7 @@ export function tamperAmount(eml: Uint8Array): { bytes: Uint8Array; before: stri
 const enclaveRaw = (r: EnclaveResult) => JSON.stringify(r.ok ? { ok: true, limitUsdc: r.limitUsdc } : { ok: false, reason: r.reason }, null, 2);
 
 export function Attacks() {
-  const { connected } = useWallet();
+  const { connected, signMessage } = useWallet();
   const { addrs, session } = useChain();
   const owner = connected?.address ?? null;
   const [out, setOut] = useState<Record<string, Step[] | { error: string } | 'running'>>({});
@@ -82,7 +82,7 @@ export function Attacks() {
     try {
       const email = await baseEmail();
       const { bytes, before, after } = tamperAmount(email.bytes);
-      const res = await underwrite(bytes, owner ?? DEMO_WALLET);
+      const res = await underwrite(bytes, owner ?? DEMO_WALLET, owner ? signMessage : undefined);
       set('a', [
         { label: `Changed ${before} to ${after} inside the email, nothing else`, blocked: null, friendly: `The edited copy was sent to the sealed computer as ${email.name}.`, raw: '' },
         { label: 'Sealed computer’s answer', blocked: !res.ok, friendly: res.ok ? 'It accepted a forged email. That should not happen.' : res.friendly, raw: enclaveRaw(res) },
@@ -98,7 +98,7 @@ export function Attacks() {
       const email = await baseEmail();
       const who = owner ?? DEMO_WALLET;
       const steps: Step[] = [];
-      const first = await underwrite(email.bytes, who);
+      const first = await underwrite(email.bytes, who, owner ? signMessage : undefined);
       let r1 = null as Awaited<ReturnType<typeof underwrite>> & { ok: true } | null;
       if (first.ok) {
         r1 = first;
@@ -108,7 +108,7 @@ export function Attacks() {
         steps.push({ label: 'First time', blocked: null, friendly: `Already counted earlier: ${first.friendly}`, raw: enclaveRaw(first) });
         if (session.signed) r1 = session.signed as typeof r1;
       }
-      const second = await underwrite(email.bytes, who);
+      const second = await underwrite(email.bytes, who, owner ? signMessage : undefined);
       steps.push({ label: 'Same email, second time: sealed computer', blocked: !second.ok, friendly: second.ok ? 'It counted the same email twice. That should not happen.' : second.friendly, raw: enclaveRaw(second) });
 
       // Even a copy of the first signed record cannot be posted twice on Solana.

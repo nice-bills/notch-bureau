@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeUnderwriter, makeServer, fixtures, readEnv } from './enclave-lib.mjs';
+import { InboxedUnderwriter } from '../../enclave/test/fixtures/inboxed.js';
 import { llmConfigFromEnv } from '../../enclave/src/llm-extract.js';
 import { pepperOrExit } from '../../enclave/src/pepper.js';
 
@@ -38,7 +39,9 @@ for (const [file, f] of [['deel.eml', deelPayout], ['bank.eml', bankStatement]])
 
 // The AI reader is on when enclave/.env (or the shell) sets NOTCH_LLM_URL + NOTCH_LLM_MODEL; NOTCH_LLM=off forces rules only.
 const llm = process.env.NOTCH_LLM === 'off' ? null : llmConfigFromEnv({ ...readEnv(path.join(here, '..', '..', 'enclave', '.env')), ...process.env });
-const u = makeUnderwriter(process.env.NOTCH_KEY_FILE, { llm, idPepper });
+// DEMO ONLY: the frozen UI's "MTN MoMo payment" button posts a fixture statement straight to /underwrite. A real enclave refuses that
+// (statements only through the inbox, audit #3); this local demo server treats its own fixtures as delivered to the fixtures' inbox.
+const u = makeUnderwriter(process.env.NOTCH_KEY_FILE, { llm, idPepper, cls: InboxedUnderwriter });
 const server = makeServer(u);
 const port = Number(process.env.PORT || 8787);
 server.listen(port, () => {

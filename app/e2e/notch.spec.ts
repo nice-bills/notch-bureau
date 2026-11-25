@@ -125,8 +125,10 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   const pageContent = await page.evaluate(() => document.body.textContent ?? '');
   const networkText = JSON.stringify(replyJson);
   for (const secret of SECRETS_IN_MOMO_EMAIL) {
+    // The base64 of the signed record and its signature are random-looking text: a short secret like "GHS" shows up in it by chance (about 1 run in 50).
+    const noB64 = (t: string) => t.split(String(replyJson.message)).join('').split(String(replyJson.signature)).join('');
     for (const [where, hay] of [['visible text', pageText], ['page text', pageContent], ['page HTML', pageHtml], ['raw reply', rawText], ['network reply', networkText]] as const) {
-      expect(hay.toLowerCase().includes(secret.toLowerCase()), `"${secret}" leaked into the ${where}`).toBe(false);
+      expect(noB64(hay).toLowerCase().includes(secret.toLowerCase()), `"${secret}" leaked into the ${where}`).toBe(false);
     }
   }
   // nothing was posted yet
@@ -204,7 +206,7 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   await expect(toast(page, `Repaid ${usdFull(payoff)} USDC. Your ${usdFull(needed)} USDC deposit came back to you.`)).toBeVisible();
   line = await waitFor('repay lands', () => readLine(w.address), (l) => l?.drawn === 0n);
   expect(line!.deposit).toBe(0n);
-  expect(line!.repaidOnTime).toBe(1);
+  expect(line!.repaidOnTime).toBe(0); // drawn and repaid within seconds: a repayment counts only after a 30 s hold, at >= 25% of the limit (audit #2)
   expect(line!.repaidLate).toBe(0);
   expect(await tokenBalance(w.address)).toBe(balBeforeRepay - payoff + needed);
   expect(await tokenBalance(w.address)).toBe(walletUsdc0 - fee);
@@ -212,7 +214,7 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   expect(pool2.stats.outstanding).toBe(pool0.stats.outstanding);
   expect(pool2.stats.feesEarned - pool0.stats.feesEarned).toBe(fee);
   await expect(stat(page.locator('.line-card'), 'Borrowed').locator('.stat-value')).toHaveText('0.00');
-  await expect(stat(page.locator('.line-card'), 'Repaid on time').locator('.stat-value')).toHaveText('1');
+  await expect(stat(page.locator('.line-card'), 'Repaid on time').locator('.stat-value')).toHaveText('0');
   await shot('repaid');
 
   // --- put the deposit back, then withdraw it ----------------------------------------------------------------
