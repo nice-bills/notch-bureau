@@ -168,16 +168,35 @@ test('LG1: cancel_withdraw never burns the share supply down to dust', async () 
   assert.ok(worth >= 2_990_000n, `3 USDC deposit is worth ${worth}`);
 });
 
-// Last gate #3 (reviews/2026-11-25-final/burn-poc.test.mjs): a sole holder burns shares straight through the token program
-// down to a dust supply, then rounding on the next deposit pays the attacker (a 19 USDC deposit got 1 share worth 14.5).
-test('LG3: no deposit mints into a tranche burned down to a dust supply', async () => {
+// Last gate #3 (reviews/2026-11-25-final/burn-poc.test.mjs, brick.test.mjs): a holder can burn shares straight through the
+// token program down to a dust supply. Then rounding robbed the next depositor (19 USDC in -> 1 share worth 14.5), and a
+// first fix that refused deposits let a 1 USDC griefer lock the tranche forever. In the dust state a deposit now gets at
+// least one share per base unit: the tranche stays open and the depositor never loses.
+const worthOf = (ctx, acct) => { const s = mintSupply(ctx.svm, ctx.juniorMint); return s ? (tokenBalance(ctx.svm, acct) * readPool(ctx.svm, ctx.pool).juniorNav) / s : 0n; };
+test('LG3: burning a tranche to a dust supply can neither rob the next depositor nor lock the tranche', async () => {
   const { getBurnInstruction } = await import('@solana-program/token');
-  const ctx = await setup({ seed: 0n });
+  // (1) rob attempt: 10 USDC NAV behind 1 share
+  let ctx = await setup({ seed: 0n });
   const a = ctx.lender;
   assert.ok((await sendL(ctx, a, depositIx(ctx, a, 10n * USDC))).ok);
   assert.ok((await sendL(ctx, a, getBurnInstruction({ account: a.shares, mint: ctx.juniorMint, authority: a.signer, amount: 10n * USDC - 1n }))).ok, 'direct burn works (token program)');
   assert.equal(mintSupply(ctx.svm, ctx.juniorMint), 1n);
-  const v = await newLender(ctx, 100n * USDC);
-  for (const amt of [5n * USDC, 19n * USDC]) assert.ok(!(await sendL(ctx, v, depositIx(ctx, v, amt))).ok, `deposit ${amt} into a dust tranche refused`);
-  assert.equal(tokenBalance(ctx.svm, v.shares), 0n);
+  let v = await newLender(ctx, 100n * USDC);
+  for (const amt of [5n * USDC, 19n * USDC]) {
+    const before = worthOf(ctx, v.shares);
+    assert.ok((await sendL(ctx, v, depositIx(ctx, v, amt))).ok, `deposit ${amt} accepted`);
+    assert.ok(worthOf(ctx, v.shares) - before >= amt - 1n, `deposit ${amt} is worth at least what went in`);
+  }
+  // (2) brick attempt: 1 USDC in, burn 1 share -> supply 999,999
+  ctx = await setup({ seed: 0n });
+  const g = await newLender(ctx, 2n * USDC);
+  assert.ok((await sendL(ctx, g, depositIx(ctx, g, 1n * USDC))).ok);
+  assert.ok((await sendL(ctx, g, getBurnInstruction({ account: g.shares, mint: ctx.juniorMint, authority: g.signer, amount: 1n }))).ok);
+  v = await newLender(ctx, 2000n * USDC);
+  for (const amt of [1n * USDC, 1000n * USDC]) {
+    const before = worthOf(ctx, v.shares);
+    assert.ok((await sendL(ctx, v, depositIx(ctx, v, amt))).ok, `honest deposit ${amt} still accepted`);
+    assert.ok(worthOf(ctx, v.shares) - before >= amt - 2n, `honest deposit ${amt} keeps its value`);
+  }
+  assert.ok((await sendL(ctx, v, depositIx(ctx, v, 10n * USDC, 'senior'))).ok, 'senior deposits still work');
 });

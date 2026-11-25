@@ -350,15 +350,16 @@ pub mod notch {
         if supply == 0 {
             require!(amount >= MIN_FIRST_DEPOSIT, NotchError::DepositTooSmall);
         }
-        // A holder can burn their own shares straight through the token program, skipping every check here. A tranche
-        // whose supply was burned down to dust (0 < supply < MIN_FIRST_DEPOSIT) would price one share at most of the NAV
-        // and let rounding rob the next depositor: refuse to mint into it. Above the floor, a share is worth at most
-        // NAV / 1e6 base units, so rounding can cost a depositor at most that (a burn only gifts value to other holders).
-        require!(supply == 0 || supply >= MIN_FIRST_DEPOSIT, NotchError::DustSupply);
+        // A holder can burn their own shares straight through the token program, skipping every check here, and leave a
+        // dust supply (0 < supply < MIN_FIRST_DEPOSIT). Refusing deposits then would let 1 USDC lock the tranche forever;
+        // pricing normally would let rounding rob the next depositor. So in the dust state a deposit gets at least one
+        // share per base unit (as if the tranche were new): the burner can only lose (their NAV is shared with the new
+        // depositor), never gain, and the tranche stays open. Above the floor, rounding costs at most NAV / 1e6 base units.
         let shares = if supply == 0 { amount } else {
             require!(nav > 0, NotchError::InvalidPoolState);
             let s = (amount as u128).checked_mul(supply as u128).ok_or(NotchError::MathOverflow)?
                 .checked_div(nav as u128).ok_or(NotchError::MathOverflow)?;
+            let s = if supply < MIN_FIRST_DEPOSIT { s.max(amount as u128) } else { s };
             u64::try_from(s).map_err(|_| NotchError::MathOverflow)?
         };
         require!(shares > 0, NotchError::InvalidAmount);
