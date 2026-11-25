@@ -85,3 +85,27 @@ test('FG2 controls: honest peers who pay a shopkeeper and a landlord are still c
   for (const d of [80, 50, 20]) earned.push(row({ acct: 'PAYSTACK PAYOUT', ref: 'Payout', amount: 12000, date: at(d, 9) }));
   assert.equal(run(earned).f.countedTotal, 36000);
 });
+
+// Last gate #2 (reviews/2026-11-25-final/honest.mjs): spending that comes BEFORE income zeroed honest peer income
+// (1,200 -> 0), and a weekly trader who restocks then sells fell to 325. Only a counterparty paid at loop frequency
+// (PASSBACK_MIN_DEBITS_30D in 30 days) can make a credit "passed back".
+test('LG2 controls: honest spending before the income does not wipe it out', () => {
+  const rows = [];
+  for (const d of [80, 50, 20]) {
+    rows.push(row({ party: P(1), acct: 'KOFI A', amount: 400, date: at(d) }));
+    rows.push(row({ party: P(2), acct: 'AMA B', amount: 400, date: at(d, 11) }));
+    rows.push(row({ type: 'PAYMENT', acct: 'SHOPRITE', amount: -500, date: at(d + 3, 12) }));
+    rows.push(row({ party: P(4), acct: 'ESI MANU', amount: -300, date: at(d + 4, 12) }));
+  }
+  assert.equal(run(rows).f.countedTotal, 1200);
+});
+
+test('LG2 controls: a weekly trader who restocks at a wholesaler and then gets paid keeps the sales', () => {
+  const rows = [];
+  for (let d = 86; d >= 2; d -= 7) {
+    rows.push(row({ type: 'PAYMENT', acct: 'MAKOLA WHOLESALE', amount: -250, date: at(d + 2, 12) }));
+    rows.push(row({ party: P(10 + (d % 3)), acct: 'CUSTOMER ' + (d % 3), amount: 300, date: at(d) }));
+    rows.push(row({ type: 'PAYMENT', acct: 'ECG PREPAID', amount: -60, date: at(d - 1, 12) }));
+  }
+  assert.ok(run(rows).f.countedTotal >= 1900, String(run(rows).f.countedTotal));
+});

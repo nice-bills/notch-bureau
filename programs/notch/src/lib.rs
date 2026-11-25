@@ -657,7 +657,15 @@ pub mod notch {
                 .checked_div(nav.checked_sub(v_req).ok_or(NotchError::MathOverflow)?).ok_or(NotchError::MathOverflow)?;
             u64::try_from(k.min(escrowed as u128)).map_err(|_| NotchError::MathOverflow)?
         };
-        let forfeit = escrowed.checked_sub(keep).ok_or(NotchError::MathOverflow)?;
+        let mut keep = keep;
+        let mut forfeit = escrowed.checked_sub(keep).ok_or(NotchError::MathOverflow)?;
+        // Never burn the supply down to dust (0 < supply < MIN_FIRST_DEPOSIT): a dust supply reopens the first-depositor
+        // attack (one share priced at the whole NAV). Same rule as claim_withdraw; in that case the gain is not forfeited.
+        let left = (supply as u64).checked_sub(forfeit).ok_or(NotchError::MathOverflow)?;
+        if forfeit > 0 && left < MIN_FIRST_DEPOSIT {
+            keep = escrowed;
+            forfeit = 0;
+        }
         if forfeit > 0 {
             token_interface::burn_checked(CpiContext::new_with_signer(ctx.accounts.token_program.key(), token_interface::BurnChecked {
                 mint: ctx.accounts.share_mint.to_account_info(), from: ctx.accounts.escrow.to_account_info(),

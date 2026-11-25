@@ -101,6 +101,11 @@ export const SPEND_BACKING = 2;
 // that no float can scale. Verified income (earned_income: payers and payroll the rules recognise) is never capped.
 export const PASSBACK_WINDOW_MS = 7 * DAY;
 export const PASSBACK_SIMILAR = 0.5; // a debit is "similar" to a credit when min/max of the two amounts is at least this
+// Only a debit counterparty paid at loop frequency (at least this many debits inside some 30-day span) can make a peer
+// credit "passed back". A loop needs many cycles to scale a float; an honest person pays the landlord or the supermarket
+// a few times a month, and a weekly restock is ~4. Without this, honest spending that happens to come BEFORE income
+// zeroed it (last gate #2). Slower loops stay bounded by the soft-income cap.
+export const PASSBACK_MIN_DEBITS_30D = 6;
 export const SOFT_CAP_USD_PER_MONTH = 250;
 export const PASS_MIN = 100; // in statement currency units (GHS); smaller credits are never judged pass-through
 export const WINDOW_DAYS = 90;
@@ -317,6 +322,7 @@ function peerReturns(rows) {
   const backUsed = new Map();
   const change = new Map(); // small returns under the dead zone: change, not a loop and not outflow either
   const free = (d) => -d.amount - (d.passUsed || 0) - (used.get(d) || 0);
+  const hot = loopCounterparties(debits);
   for (const c of peers) {
     let need = c.amount;
     const take = [];
@@ -334,7 +340,7 @@ function peerReturns(rows) {
     for (const d of debits) {
       if (need <= 0.004) break;
       const similar = Math.min(-d.amount, c.amount) / Math.max(-d.amount, c.amount) >= PASSBACK_SIMILAR;
-      if (d.untrusted || !(d.date <= c.date && c.date - d.date <= PASSBACK_WINDOW_MS) || !(d.dcls === 'spend' || d.party) || !similar || free(d) <= 0.004) continue;
+      if (d.untrusted || !hot.has(counterparty(d)) || !(d.date <= c.date && c.date - d.date <= PASSBACK_WINDOW_MS) || !(d.dcls === 'spend' || d.party) || !similar || free(d) <= 0.004) continue;
       grab(d);
     }
     const s = (c.amount - need) / c.amount;
@@ -343,6 +349,21 @@ function peerReturns(rows) {
     for (const [d, t] of take) backUsed.set(d, (backUsed.get(d) || 0) + t);
   }
   return { share, backUsed, change };
+}
+
+// Debit counterparties paid at loop frequency: PASSBACK_MIN_DEBITS_30D or more debits inside some 30-day span.
+function loopCounterparties(debits) {
+  const by = new Map();
+  for (const d of debits) { const k = counterparty(d); if (!by.has(k)) by.set(k, []); by.get(k).push(+d.date); }
+  const hot = new Set();
+  for (const [k, ts] of by) {
+    ts.sort((a, b) => a - b);
+    for (let i = 0, j = 0; j < ts.length; j++) {
+      while (ts[j] - ts[i] > 30 * DAY) i++;
+      if (j - i + 1 >= PASSBACK_MIN_DEBITS_30D) { hot.add(k); break; }
+    }
+  }
+  return hot;
 }
 
 // ---- cash deposits (see CASH RULES at the top) ------------------------------------------------------------------------

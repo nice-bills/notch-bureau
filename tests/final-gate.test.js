@@ -142,3 +142,28 @@ test('final gate #3 (found by the devnet e2e): cancel with NO price change retur
   assert.equal(bal(ctx, b.shares), got, 'every share back');
   assert.equal(mintSupply(ctx.svm, ctx.shareMint), supply, 'nothing burned');
 });
+
+// Last gate #1 (reviews/2026-11-25-final/dust.test.mjs): cancel_withdraw burned the escrow gain with no dust check, so a
+// lender with a 1-share second wallet could burn the supply down to ~50 shares and price one share at ~2 USDC
+// (first-depositor inflation). Cancel must never leave 0 < supply < MIN_FIRST_DEPOSIT.
+test('LG1: cancel_withdraw never burns the share supply down to dust', async () => {
+  const ctx = await setup({ seed: 100n * USDC, borrowerFunds: 200n * USDC });
+  const a = ctx.lender;
+  const b = await newLender(ctx, 10n * USDC);
+  assert.ok((await sendL(ctx, b, depositIx(ctx, b, 1n))).ok, 'second wallet holds 1 share');
+  assert.ok((await sendL(ctx, a, await requestWithdrawIx(ctx, a, 100n * USDC))).ok);
+  await open(ctx, 200);
+  assert.ok((await sendB(ctx, depositBorrowerIx(ctx, U(20)))).ok);
+  assert.ok((await sendB(ctx, drawIx(ctx, 100n * USDC))).ok);
+  advance(ctx, 31);
+  assert.ok((await sendB(ctx, repayIx(ctx, U(102)))).ok);
+  assert.ok((await sendL(ctx, a, await cancelWithdrawIx(ctx, a))).ok);
+  const sup = mintSupply(ctx.svm, ctx.shareMint);
+  assert.ok(sup === 0n || sup >= 1_000_000n, `supply after cancel is dust: ${sup}`);
+  // and an honest depositor is not robbed: 3 USDC in is worth ~3 USDC
+  const v = await newLender(ctx, 100n * USDC);
+  assert.ok((await sendL(ctx, v, depositIx(ctx, v, 3n * USDC))).ok);
+  const got = tokenBalance(ctx.svm, v.shares);
+  const worth = (got * readPool(ctx.svm, ctx.pool).juniorNav) / mintSupply(ctx.svm, ctx.shareMint);
+  assert.ok(worth >= 2_990_000n, `3 USDC deposit is worth ${worth}`);
+});
