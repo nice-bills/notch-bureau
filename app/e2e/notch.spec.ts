@@ -18,7 +18,7 @@ import {
 import { ERROR_MESSAGES } from '../src/errors.ts';
 import { escrowShares, readLine, readPool, readUnderwriter, readWithdrawRequest, shareBalance, tokenBalance, waitFor } from './chain.ts';
 import { loadState, saveState } from './state.ts';
-import { PHONE, connectWallet, fundedWallet, log, openSession, openTab, screenshot, slide, stat, plain, usd2, usdFull, type Session } from './app.ts';
+import { PHONE, connectWallet, fundedWallet, log, openSession, openTab, screenshot, slide, stat, plain, usd2, usd2r, usdFull, type Session } from './app.ts';
 
 const SOL = (n: number) => BigInt(Math.round(n * 1e9));
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
@@ -27,7 +27,7 @@ const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const SECRETS_IN_MOMO_EMAIL = ['1,250', '1250', '1,300', '1300', 'GHS', 'KWAME', 'ASANTE', 'KOFI', 'MENSAH', '024 000', 'MP261122', 'design work'];
 const REPLY_KEYS = ['expiry', 'extraction', 'limitUsdc', 'message', 'nonce', 'ok', 'signature'];
 
-const toast = (page: Page, text: string | RegExp) => page.locator('.action-status.good').filter({ hasText: text });
+const toast = (page: Page, text: string | RegExp) => page.locator('.action-status.good, .done-view').filter({ hasText: text });
 const failure = (page: Page, text: string | RegExp) => page.locator('.action-status.bad').filter({ hasText: text });
 const back = (page: Page) => page.getByRole('button', { name: 'Back', exact: true }).click();
 
@@ -167,7 +167,8 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   const sent = page.getByRole('dialog', { name: 'Sent' });
   await expect(sent).toBeVisible({ timeout: 60_000 });
   await expect(sent).toContainText(`${usd2(draw)} USDC`);
-  await expect(toast(page, `${usdFull(draw)} USDC sent to your wallet.`)).toBeVisible();
+  await expect(sent).toContainText('is in your wallet');
+  await expect(sent.getByRole('link', { name: 'View on Solana Explorer' })).toBeVisible();
   line = await waitFor('draw lands', () => readLine(w.address), (l) => l?.drawn === draw);
   expect(line!.deposit).toBe(needed);
   const nowS = BigInt(Math.floor(Date.now() / 1000));
@@ -198,7 +199,7 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   await expect(repay).toContainText(`Deposit back+${usdFull(needed)}`);
   await shot('repay-sheet');
   await repay.getByRole('button', { name: `Repay ${usdFull(payoff)} USDC` }).click();
-  await expect(toast(page, `Repaid ${usdFull(payoff)} USDC. Your ${usdFull(needed)} USDC deposit came back to you.`)).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Paid back' })).toContainText(`Your ${usd2(needed)} USDC deposit is back in your wallet.`);
   await expect(page.getByRole('dialog', { name: 'Paid back' })).toBeVisible();
   line = await waitFor('repay lands', () => readLine(w.address), (l) => l?.drawn === 0n);
   expect(line!.deposit).toBe(0n);
@@ -314,7 +315,7 @@ test.describe('Notch, browser end to end', () => {
       await page.getByRole('button', { name: 'Add to Risky' }).click();
       const dep = page.getByRole('dialog', { name: 'Add to Risky' });
       await dep.getByLabel('Amount').fill('5');
-      await expect(dep).toContainText(`You get about ${usdFull(expShares)} shares`);
+      await expect(dep).toContainText('It grows with the fees Risky earns');
       await dep.getByRole('button', { name: 'Deposit 5.00 USDC' }).click();
       await expect(toast(page, `Deposited 5.00 USDC into Risky for ${usdFull(expShares)} shares.`)).toBeVisible();
       const shares = await waitFor('shares minted', () => shareBalance(w.address), (v) => v > 0n);
@@ -326,14 +327,15 @@ test.describe('Notch, browser end to end', () => {
       expect(afterDeposit.shareSupply - before.shareSupply).toBe(shares);
       await page.keyboard.press('Escape');
       const worth = (shares * afterDeposit.stats.juniorNav) / afterDeposit.shareSupply;
-      await expect(page.getByTestId('yours-junior')).toHaveText(usd2(worth));
+      await expect(page.getByTestId('yours-junior')).toHaveText(usd2r(worth));
 
       // request withdrawal: shares move to escrow, supply unchanged; the sheet shows the 3 dates
       await page.getByRole('button', { name: 'Withdraw', exact: true }).click();
       const wd = page.getByRole('dialog', { name: 'Withdraw takes 3 days' });
       await expect(wd).toContainText('Claim by this day');
+      await expect(wd).toContainText('Today’s price is the most you can get');
       await wd.getByRole('button', { name: 'All' }).click();
-      await expect(wd.getByLabel('Risky shares to cash in')).toHaveValue(plain(shares));
+      await expect(wd.getByLabel('USDC to take out of Risky')).toHaveValue(plain(worth));
       await wd.getByRole('button', { name: 'Request withdrawal' }).click();
       await expect(toast(page, `Requested ${usdFull(shares)} Risky shares. You can claim in 3 days, within 2 days after that.`)).toBeVisible();
       const req = await waitFor('request exists', () => readWithdrawRequest(w.address), (r) => r !== null);

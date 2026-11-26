@@ -14,7 +14,7 @@ const SOL = (n: number) => BigInt(Math.round(n * 1e9));
 const USDC = (n: number) => BigInt(Math.round(n * 1e6));
 const b58 = (u: Uint8Array) => getBase58Decoder().decode(u);
 const unb58 = (s: string) => new Uint8Array(getBase58Encoder().encode(s));
-const toast = (page: Page, text: string | RegExp) => page.locator('.action-status.good').filter({ hasText: text });
+const toast = (page: Page, text: string | RegExp) => page.locator('.action-status.good, .done-view').filter({ hasText: text });
 
 /** Records whether the main area was ever empty (no screen, or a screen with no text) while tabs switch. */
 async function watchForBlank(page: Page) {

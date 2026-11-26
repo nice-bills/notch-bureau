@@ -118,6 +118,11 @@ export function usdFull(micro: bigint): string {
 }
 
 /** The value an input holds for an amount: no thousands separators, no trailing zeros ("0.8", "4"). */
+/** usd2, rounded to the nearest cent (what the app shows for money you hold: 9.999999 reads 10.00). */
+export function usd2r(micro: bigint): string {
+  return usd2(((micro + 5_000n) / 10_000n) * 10_000n);
+}
+
 export function plain(micro: bigint): string {
   const frac = (micro % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '');
   return frac ? `${micro / 1_000_000n}.${frac}` : `${micro / 1_000_000n}`;
