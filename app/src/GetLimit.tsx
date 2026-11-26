@@ -15,6 +15,7 @@ import { buzz } from './glass';
 import { ActionStatus, Btn, Icon, Notice, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Ticket } from './Ticket';
+import { Restoring } from './Home';
 
 const SAMPLES = [
   { file: '/samples/deel.eml', label: 'Deel payout' },
@@ -34,7 +35,7 @@ const store = {
 type Live = 'idle' | 'received' | 'checking' | 'done' | 'refused';
 
 export function GetLimit() {
-  const { connected, signMessage, signTransaction } = useWallet();
+  const { connected, signMessage, signTransaction, restoring } = useWallet();
   const { addrs, line, refresh, session, sol } = useChain();
   const { go, openSignIn, att } = useUi();
   const owner = connected?.address ?? null;
@@ -59,6 +60,7 @@ export function GetLimit() {
       return { signature, note: 'Your limit is now on Solana.' };
     });
 
+  if (!owner && restoring) return <div><Nav title="Get your limit" onBack={() => go('home')} /><Restoring /></div>;
   if (!owner) {
     return (
       <div>
@@ -100,7 +102,8 @@ export function GetLimit() {
                 {/* One approval: post the limit, put down 20% and borrow, all in one transaction. */}
                 <Btn onClick={() => go('borrow')} disabled={!uwKey || postAct.busy}>Choose an amount and borrow</Btn>
                 <p className="help" style={{ textAlign: 'center', margin: '4px 0 0' }}>Posting your limit, the deposit and the loan go in one approval.</p>
-                <Btn variant="secondary" onClick={onPost} busy={postAct.busy} disabled={!uwKey}>Post my limit</Btn>
+                {/* The separate path (one more approval later): a small link, not a second big button. */}
+                <button type="button" className="textlink" onClick={onPost} disabled={!uwKey || postAct.busy} aria-busy={postAct.busy || undefined}>{postAct.busy ? 'Posting…' : 'Post my limit'}</button>
               </>
             )}
             {!uwKey && !posted && <p className="help warn">Waiting for the sealed computer’s public key…</p>}

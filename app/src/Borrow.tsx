@@ -12,13 +12,13 @@ import { Nav } from './GetLimit';
 import { FaucetButton } from './Faucet';
 import { lineAfterPost, postIxsFor, unposted } from './post';
 import { reportPosted } from './enclave';
-import { lineState, withAta } from './Home';
+import { Restoring, lineState, withAta } from './Home';
 
 const UNITS = [1n, 2n, 5n, 10n, 20n, 50n, 100n, 200n, 500n, 1000n, 5000n].map((u) => u * 1_000_000n);
 const MOTIFS = ['kente', 'sun', 'horn'] as const;
 
 export function Borrow() {
-  const { connected, signTransaction } = useWallet();
+  const { connected, signTransaction, restoring } = useWallet();
   const { line: chainLine, pool, usdc, addrs, refresh, patch, loading, session } = useChain();
   const { go, att } = useUi();
   const owner = connected?.address ?? null;
@@ -80,6 +80,7 @@ export function Borrow() {
     });
 
   const head = <><Nav title="Borrow" onBack={() => go('home')} /><Banners /></>;
+  if (!owner && restoring) return <>{head}<Restoring /></>;
   if (!owner) return <>{head}<Empty icon="wallet" title="Connect a wallet first" text="Borrowing uses your wallet’s limit." /></>;
   if (loading || (owner && !pool)) return <>{head}<div className="bamt"><label>Reading your line…</label><div className="v"><span className="skel" style={{ fontSize: 64 }}>00.00</span></div></div></>;
   if (!s.live) return <>{head}<Empty icon="mail" title={line?.defaulted ? 'This line is closed' : 'No limit yet'} text={line?.defaulted ? 'A payment was missed, so this wallet can’t borrow again.' : 'Get your limit first: it takes one statement.'} action={line?.defaulted ? undefined : { label: 'Get my limit', on: () => go('limit') }} /></>;

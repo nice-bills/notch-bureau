@@ -9,6 +9,7 @@ import {
   claimWithdrawIx,
   createAtaIdempotentIx,
   depositIx,
+  payoffFor,
   deriveAta,
   deriveEscrow,
   deriveWithdrawRequest,
@@ -159,9 +160,12 @@ export function Lend() {
 
 function DepositSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
   const { connected, signTransaction } = useWallet();
-  const { addrs, pool, usdc, refresh } = useChain();
+  const { addrs, pool, usdc, refresh, line } = useChain();
   const owner = connected!.address;
   const [str, setStr] = useState('');
+  // An open loan: keep what it takes to pay it back in the wallet (Max leaves it; going below it gets a warning).
+  const owe = line && line.drawn > 0n ? payoffFor(line.drawn) : 0n;
+  const spare = usdc > owe ? usdc - owe : 0n;
   const dep = parseUsdc(str);
   const [doneAmt, setDoneAmt] = useState(0n);
   const act = useAction(async () => { await refresh(); });
@@ -174,6 +178,7 @@ function DepositSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
     : dep && room !== null && dep > room ? `Safe can take ${formatUsdc(room)} USDC right now. Safe money needs enough Risky money underneath it.`
     : dep && supply === 0n && dep < MIN_FIRST_DEPOSIT ? 'The first deposit into an empty share must be at least 1 USDC.'
     : null;
+  const leavesShort = !err && !!dep && owe > 0n && usdc - dep < owe;
 
   const onDeposit = () =>
     act.run(async () => {
@@ -199,8 +204,9 @@ function DepositSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
   return (
     <Sheet title={`Add to ${NAME[t]}`} onClose={onClose}>
       <p className="sh-p">{t === 'senior' ? 'Safe is paid back first and takes a loss only after Risky is used up.' : 'Risky earns a bigger part of the fees and takes losses first.'}</p>
-      <Field label="Amount" suffix="USDC" value={str} onChange={setStr} action={{ label: 'Max', onClick: () => setStr(toInput(room !== null && room < usdc ? room : usdc)) }}
-        error={err} hint={dep ? `It grows with the fees ${NAME[t]} earns and shrinks if a loss reaches ${NAME[t]}.` : `Your wallet: ${formatUsdc(usdc)} test USDC.`} />
+      <Field label="Amount" suffix="USDC" value={str} onChange={setStr} action={{ label: 'Max', onClick: () => setStr(toInput(room !== null && room < spare ? room : spare)) }}
+        error={err} hint={dep ? `It grows with the fees ${NAME[t]} earns and shrinks if a loss reaches ${NAME[t]}.` : owe > 0n ? `Your wallet: ${formatUsdc(usdc)} test USDC. Max keeps ${formatUsdc(owe, { up: true })} back for your loan.` : `Your wallet: ${formatUsdc(usdc)} test USDC.`} />
+      {leavesShort && <p className="help warn" role="alert" data-testid="lend-leaves-short">This leaves {formatUsdc(usdc - dep!)} USDC, but your loan needs {formatUsdc(owe, { up: true })} to pay back. Lent money takes 3 days to come back.</p>}
       <Btn onClick={onDeposit} busy={act.busy} disabled={!dep || dep <= 0n || !!err || sharesOut === 0n}>Deposit {dep ? `${formatUsdc(dep)} USDC` : 'USDC'}</Btn>
       <ActionStatus a={act} />
     </Sheet>

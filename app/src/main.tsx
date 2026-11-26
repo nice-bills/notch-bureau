@@ -10,8 +10,15 @@ import { CHAIN_ID } from './config';
 import { isAndroid, isIOS, isIOSOtherBrowser } from './device';
 import { consumePhantomRedirect, linkedAddress, registerPhantomLink } from './phantom-link';
 import { registerWalletConnect } from './walletconnect';
+import { handOffPhantomReturn } from './tabs';
+import { Btn } from './ui';
 
-// Phantom's answer to a deeplink request arrives in the URL: read it before React renders.
+void boot();
+
+async function boot() {
+// Phantom's answer arrives in the URL, in a NEW Safari tab. Hand it to the older Notch tab if one answers (this tab
+// then closes itself), otherwise read it here, before React renders.
+if ((await handOffPhantomReturn()) === 'handed') { showHanded(); return; }
 consumePhantomRedirect();
 
 if (isAndroid) {
@@ -47,3 +54,20 @@ createRoot(document.getElementById('root')!).render(
     </WalletProvider>
   </StrictMode>,
 );
+}
+
+/** This tab handed Phantom's answer to the older Notch tab but Safari kept it open: say where to go. */
+function showHanded() {
+  createRoot(document.getElementById('root')!).render(
+    <div className="app no-tabs">
+      <div className="card pcard empty" style={{ marginTop: 48 }} role="status" data-testid="handed">
+        <b>Done. Notch carries on in your other tab.</b>
+        <p>Phantom opened this extra tab. You can close it.</p>
+        <div style={{ marginTop: 16, display: 'grid', gap: 8 }}>
+          <Btn onClick={() => window.close()}>Close this tab</Btn>
+          <button type="button" className="textlink" onClick={() => location.reload()}>Keep using this tab</button>
+        </div>
+      </div>
+    </div>,
+  );
+}

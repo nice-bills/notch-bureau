@@ -9,7 +9,7 @@ import { envelope, foilCard, stamp, type Ink, type Motif } from './art';
 import { ActionStatus, Btn, DoneView, Icon, Money, Sheet, Skel, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { MIN_FEE_LAMPORTS } from './chain';
-import { NeedsTestMoney, useSticky } from './Faucet';
+import { FaucetButton, NeedsTestMoney, useSticky } from './Faucet';
 
 /** Ata + idempotent create, so a wallet that never held test USDC still works. */
 export async function withAta(a: NotchAddresses, owner: ReturnType<typeof address>) {
@@ -42,18 +42,21 @@ export function Avatar() {
   );
 }
 
+/** While a remembered wallet reconnects (a reload, or a new tab after a wallet app): never "Connect a wallet first". */
+export function Restoring() {
+  return (
+    <div className="boot" aria-busy="true" aria-label="Reconnecting your wallet">
+      <span className="skel" style={{ display: 'block', width: '30%', height: 14 }} />
+      <span className="skel" style={{ display: 'block', width: '60%', height: 28, marginTop: 10 }} />
+      <span className="skel" style={{ display: 'block', width: '100%', height: 180, marginTop: 24, borderRadius: 28 }} />
+      <p className="help" style={{ textAlign: 'center', marginTop: 16 }}>Reconnecting your wallet…</p>
+    </div>
+  );
+}
+
 export function Home() {
   const { connected, restoring } = useWallet();
-  if (restoring) {
-    return (
-      <div className="boot" aria-busy="true" aria-label="Reconnecting your wallet">
-        <span className="skel" style={{ display: 'block', width: '30%', height: 14 }} />
-        <span className="skel" style={{ display: 'block', width: '60%', height: 28, marginTop: 10 }} />
-        <span className="skel" style={{ display: 'block', width: '100%', height: 180, marginTop: 24, borderRadius: 28 }} />
-        <p className="help" style={{ textAlign: 'center', marginTop: 16 }}>Reconnecting your wallet…</p>
-      </div>
-    );
-  }
+  if (restoring) return <Restoring />;
   if (!connected) return <Welcome />;
   return <HomeConnected />;
 }
@@ -156,7 +159,7 @@ function HomeConnected() {
           <div className="actions">
             {/* one approval posts the limit, puts down 20% and borrows */}
             <Btn onClick={() => go('borrow')}>Borrow now</Btn>
-            <Btn variant="secondary" onClick={() => go('limit')}>Limit ready, post it</Btn>
+            <button type="button" className="textlink" onClick={() => go('limit')}>Limit ready, post it</button>
           </div>
           {empty && <NeedsTestMoney need={empty} />}
         </>
@@ -270,6 +273,7 @@ function RepaySheet({ onClose }: { onClose: () => void }) {
             <div className="r"><span>Deposit back</span><b style={{ color: 'var(--green)' }}>+{formatUsdc(back)}</b></div>
           </div>
           {short && <p className="help warn">Your wallet holds {formatUsdc(usdc)} USDC. You need {formatUsdc(payoff - usdc, { up: true })} more up front; the deposit returns after.</p>}
+          {short && <div style={{ display: 'flex', justifyContent: 'center', margin: '0 0 12px' }} data-testid="repay-faucet"><FaucetButton label="Get test USDC" variant="primary" /></div>}
           <Btn onClick={onRepay} busy={act.busy} disabled={short || drawn === 0n}>Repay {formatUsdc(payoff, { up: true })} USDC</Btn>
         </>
       ) : (

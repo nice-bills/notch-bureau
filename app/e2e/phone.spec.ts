@@ -167,11 +167,11 @@ test.describe('Phone review fixes', () => {
       await expect(sheet.getByRole('link', { name: /Open in Solflare/ })).toBeVisible();
 
       log('a cancel in the Phantom app comes back as plain words, still signed out');
-      phantom.reject = true;
+      phantom.state.reject = true;
       await sheet.getByRole('menuitem', { name: /Phantom app/ }).click();
       await expect(page.locator('.return-banner.bad')).toContainText('You cancelled in Phantom. Nothing was signed.', { timeout: 30_000 });
       await expect(page.getByRole('button', { name: 'Get started' })).toBeVisible();
-      phantom.reject = false;
+      phantom.state.reject = false;
 
       log('connect: to the Phantom app and back');
       await page.getByRole('button', { name: 'Get started' }).click();
@@ -273,6 +273,51 @@ test.describe('Phone review fixes', () => {
       await context.close();
     }
   });
+
+  test('12. iPhone: Phantom answers in a NEW tab: the older tab takes it and the new tab closes; with no older tab, the new tab carries on and says so', async ({ browser }) => {
+    const w = await fundedWallet(SOL(0.003), 0n);
+    const context = await browser.newContext({
+      ...PHONE,
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1',
+      baseURL: APP_URL,
+    });
+    const phantom = fakePhantom(w);
+    phantom.state.newTab = true;
+    await context.route('https://phantom.app/ul/v1/**', (r) => phantom(r));
+    // A tab another app opened has one history entry: open about:blank, then replace it with the answer URL.
+    const openAnswerInNewTab = async () => {
+      const p = await context.newPage();
+      await p.evaluate((u) => location.replace(u), phantom.state.lastBack);
+      return p;
+    };
+    const page = await context.newPage();
+    try {
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Get started' }).click();
+      await page.getByRole('dialog', { name: 'Sign in to start' }).getByRole('menuitem', { name: /Phantom app/ }).click();
+      await expect.poll(() => phantom.state.lastBack).toContain('phantom=connect');
+
+      log('the answer opens in a new tab: it hands it to the older tab and closes itself');
+      const extra = await openAnswerInNewTab();
+      await extra.waitForEvent('close', { timeout: 15_000 });
+      await expect(page.getByRole('button', { name: /^Your wallet / })).toBeVisible({ timeout: 30_000 });
+      expect(context.pages()).toHaveLength(1);
+
+      log('no older tab to take it: the new tab handles the answer itself and says the old one can go');
+      await page.getByRole('button', { name: /^Your wallet / }).click();
+      await page.getByRole('button', { name: 'Disconnect' }).click();
+      await page.getByRole('button', { name: 'Get started' }).click();
+      phantom.state.lastBack = '';
+      await page.getByRole('dialog', { name: 'Sign in to start' }).getByRole('menuitem', { name: /Phantom app/ }).click();
+      await expect.poll(() => phantom.state.lastBack).toContain('phantom=connect');
+      await page.close();
+      const solo = await openAnswerInNewTab();
+      await expect(solo.getByRole('button', { name: /^Your wallet / })).toBeVisible({ timeout: 30_000 });
+      await expect(solo.getByTestId('tab-hint')).toContainText('You can close the older Notch tab.');
+    } finally {
+      await context.close();
+    }
+  });
 });
 
 /**
@@ -283,7 +328,7 @@ test.describe('Phone review fixes', () => {
 function fakePhantom(w: TestWallet) {
   const kp = nacl.box.keyPair();
   const calls: string[] = [];
-  const state = { reject: false };
+  const state = { reject: false, newTab: false, lastBack: '' };
   const handler = async (route: Route) => {
     const u = new URL(route.request().url());
     const action = u.pathname.split('/').pop()!;
@@ -315,7 +360,9 @@ function fakePhantom(w: TestWallet) {
       w.signCount++;
       seal({ transaction: b58(signWire(w, unb58(req.transaction))) });
     }
+    // newTab: like the real iPhone, the asking tab stays where it is and the answer opens in a NEW tab (the test opens it)
+    if (state.newTab) { state.lastBack = back.toString(); return route.abort('aborted'); }
     return route.fulfill({ status: 302, headers: { location: back.toString() } });
   };
-  return Object.defineProperty(Object.assign(handler, { calls }), 'reject', { set(v: boolean) { state.reject = v; }, get() { return state.reject; } }) as typeof handler & { calls: string[]; reject: boolean };
+  return Object.assign(handler, { calls, state });
 }

@@ -31,7 +31,7 @@ const METADATA_PROGRAM = address('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 const SYSTEM_PROGRAM = address('11111111111111111111111111111111');
 const fail = (m) => { console.error(`error: ${m}`); process.exit(1); };
 
-const o = { rpc: 'https://api.devnet.solana.com', keypair: path.join(os.homedir(), '.config/solana/id.json'), name: 'Test USDC', symbol: 'USDC' };
+const o = { rpc: 'https://api.devnet.solana.com', keypair: path.join(os.homedir(), '.config/solana/id.json'), name: 'Notch Test USDC', symbol: 'tUSDC' };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];

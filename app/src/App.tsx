@@ -14,6 +14,7 @@ import { PHANTOM_LINK_NAME, linkedAddress, takeError, takeSignedTransaction } fr
 import { WC_NAME } from './walletconnect';
 import { browseLinks, isIOSOtherBrowser, isPhone } from './device';
 import { FaucetButton } from './Faucet';
+import { claimLatest, newTabReturn, supersededByNewerTab } from './tabs';
 // The everyday screens are in the main bundle: switching tabs must never wait for a download (on a phone through a
 // tunnel that showed as a blank screen). Only the "Try to cheat it" lab (and its crypto library) loads on demand.
 import { Home } from './Home';
@@ -174,6 +175,7 @@ function Shell() {
       <div className={cx('app', !tabbed && 'no-tabs')}>
         <main id="main" tabIndex={-1} style={{ outline: 'none' }}>
           <PhantomReturn />
+          <TabNotes />
           <ScreenGuard key={route} onHome={() => go('home')}>
             <div className="screen-in">
               {route === 'home' && <Home />}
@@ -233,6 +235,36 @@ function PhantomReturn() {
       <button type="button" className="x tap" aria-label="Close" onClick={() => setState(null)}><Icon name="x" /></button>
     </div>
   );
+}
+
+/** Phantom opens its answer in a new Safari tab (see tabs.ts): say which tab is current, and offer to close the other. */
+function TabNotes() {
+  const [hint, setHint] = useState(newTabReturn);
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    const check = () => { if (document.visibilityState === 'visible') setStale(supersededByNewerTab()); };
+    document.addEventListener('visibilitychange', check);
+    addEventListener('focus', check);
+    addEventListener('pageshow', check);
+    return () => { document.removeEventListener('visibilitychange', check); removeEventListener('focus', check); removeEventListener('pageshow', check); };
+  }, []);
+  useEffect(() => { if (!hint) return; const t = setTimeout(() => setHint(false), 12_000); return () => clearTimeout(t); }, [hint]);
+  if (stale) return (
+    <div className="tab-note stale" role="alert" data-testid="stale-tab">
+      <p><b>Notch moved to a newer tab.</b> Phantom opened it. This one is out of date.</p>
+      <div className="row">
+        <Btn small onClick={() => { window.close(); }}>Close this tab</Btn>
+        <Btn small variant="secondary" onClick={() => { claimLatest(); location.reload(); }}>Use this tab</Btn>
+      </div>
+    </div>
+  );
+  if (hint) return (
+    <div className="tab-note" role="status" data-testid="tab-hint">
+      <p>Phantom opened this in a new tab. You can close the older Notch tab.</p>
+      <button type="button" className="x tap" aria-label="Close" onClick={() => setHint(false)}><Icon name="x" /></button>
+    </div>
+  );
+  return null;
 }
 
 function TabBar({ route, go }: { route: Route; go: (r: Route) => void }) {
