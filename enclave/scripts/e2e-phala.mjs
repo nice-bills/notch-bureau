@@ -19,7 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nacl from 'tweetnacl';
-import { address, generateKeyPairSigner, getAddressEncoder } from '@solana/kit';
+import { address, generateKeyPairSigner, getAddressDecoder, getAddressEncoder } from '@solana/kit';
+import { signUnderwrite } from '../src/underwrite-http.js';
 import { decodeLine, decodeRecord, deriveDedupe, deriveIdentity, deriveLine, ed25519VerifyIx, postLimitIxs, base64ToBytes } from '../../app/src/notch.ts';
 import { signRecord } from '../src/record.js';
 import { verifyAttestation } from './verify-attestation.mjs';
@@ -79,14 +80,32 @@ try {
 
   // ---- 2 prepare records (no chain writes yet)
   step('2', 'fresh MoMo statement -> CVM /underwrite (signed inside the TEE)');
-  const borrower = await generateKeyPairSigner();
+  // A plain Ed25519 keypair: /underwrite needs the wallet's own signature over the email (only the address is used on chain).
+  const borrowerKp = nacl.sign.keyPair();
+  const borrower = { address: getAddressDecoder().decode(borrowerKp.publicKey) };
   const sample = await fetch(`${url}/samples/momo.eml`, { signal: AbortSignal.timeout(60_000) });
   check('CVM serves a fresh signed demo MoMo statement email', sample.ok && (sample.headers.get('content-type') || '').includes('rfc822'), `HTTP ${sample.status}`);
   const eml = Buffer.from(await sample.arrayBuffer());
+  // A MoMo statement may not be uploaded directly (audit #3): prove the CVM refuses it, then send it the real way.
+  const direct = await fetch(`${url}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', ...signUnderwrite({ wallet: borrower.address, eml, secretKey: borrowerKp.secretKey }) }, body: eml, signal: AbortSignal.timeout(120_000) });
+  const directReply = await direct.json();
+  check('CVM refuses a MoMo statement uploaded directly (inbox only)', !directReply.ok && /inbox/i.test(String(directReply.reason)), String(directReply.reason).slice(0, 80));
   const t0 = Date.now();
-  const u = await fetch(`${url}/underwrite`, { method: 'POST', headers: { 'content-type': 'message/rfc822', 'x-wallet': borrower.address }, body: eml, signal: AbortSignal.timeout(120_000) });
-  const reply = await u.json();
-  check('CVM underwrites the statement', u.ok && reply.ok === true, `${Date.now() - t0} ms, reader ${reply.extraction}, limit ${reply.limitUsdc} USDC${reply.ok ? '' : `, reason ${reply.reason}`}`);
+  const ts = Date.now();
+  const inboxSig = Buffer.from(nacl.sign.detached(Buffer.from(`notch-inbox-v1|${borrower.address}|${ts}`), borrowerKp.secretKey)).toString('base64');
+  const ib = await (await fetch(`${url}/inbox/new`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ wallet: borrower.address, ts, signature: inboxSig }), signal: AbortSignal.timeout(60_000) })).json();
+  check('CVM hands the wallet its own statement inbox address', ib.ok === true && typeof ib.address === 'string', ib.ok ? ib.address.replace(/^[^@]+/, '<code>') : ib.reason);
+  if (!ib.ok) throw new Error(`inbox failed: ${ib.reason}`);
+  const dl = await fetch(`${url}/demo/deliver`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ address: ib.address }), signal: AbortSignal.timeout(120_000) });
+  check('CVM demo mailer delivers a signed statement to that inbox', dl.status < 300 || dl.status === 422, `HTTP ${dl.status}`);
+  let reply = { ok: false, reason: 'timed out waiting for the inbox result' };
+  for (let i = 0; i < 60; i++) {
+    const p = await (await fetch(`${url}/record/${borrower.address}`, { headers: { 'x-notch-token': ib.pollToken }, signal: AbortSignal.timeout(30_000) })).json();
+    if (p.status === 'ready') { const { status: _s, ...rest } = p; reply = rest; break; }
+    if (p.status === 'refused' || p.status === 'locked') { reply = { ok: false, reason: p.reason }; break; }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  check('CVM underwrites the statement from the inbox', reply.ok === true, `${Date.now() - t0} ms, reader ${reply.extraction}, limit ${reply.limitUsdc} USDC${reply.ok ? '' : `, reason ${reply.reason}`}`);
   if (!reply.ok) throw new Error(`underwrite failed: ${reply.reason}`);
   const record = base64ToBytes(reply.message);
   const signature = base64ToBytes(reply.signature);
@@ -95,7 +114,8 @@ try {
   check('signature verifies off-chain against the ATTESTED key', nacl.sign.detached.verify(record, signature, uwKey));
   check('record is for the borrower wallet', Buffer.from(record.subarray(8, 40)).equals(Buffer.from(getAddressEncoder().encode(borrower.address))));
   check('statement-backed record carries an identity hash (one MoMo number = one wallet)', rec.idHash.some((b) => b !== 0));
-  check('reply leaks nothing beyond the signed record fields', JSON.stringify(Object.keys(reply).sort()) === JSON.stringify(['expiry', 'extraction', 'limitUsdc', 'message', 'nonce', 'ok', 'signature']));
+  const allowed = ['expiry', 'extraction', 'limitUsdc', 'message', 'nonce', 'ok', 'signature'];
+  check('reply leaks nothing beyond the signed record fields', Object.keys(reply).every((k) => allowed.includes(k)), Object.keys(reply).sort().join(','));
 
   // A record signed by the OLD local demo key, for a different fresh wallet (negative check in step 5).
   const other = await generateKeyPairSigner();

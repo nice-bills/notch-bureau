@@ -135,9 +135,10 @@ export async function verifyAttestation(baseUrl, { expectComposeHash, expectPubk
     if (repo) {
       try {
         const build = await import(pathToFileURL(path.join(here, '..', '..', 'deploy', 'phala', 'build-compose.mjs')).href);
-        const m = compose.match(/^\s*NOTCH_BUNDLE:\s*"([^"]+)"/m);
-        if (!m) throw new Error('no NOTCH_BUNDLE in the attested compose');
-        const bundle = JSON.parse(zlib.gunzipSync(Buffer.from(m[1].replace(/\./g, ''), 'base64')));
+        // NOTCH_BUNDLE_0, _1, ...: parts joined in order (a single env value is capped at 128 KiB). Older composes: NOTCH_BUNDLE.
+        const parts = [...compose.matchAll(/^\s*NOTCH_BUNDLE(?:_(\d+))?:\s*"([^"]+)"/gm)].sort((a, b) => Number(a[1] ?? 0) - Number(b[1] ?? 0));
+        if (!parts.length) throw new Error('no NOTCH_BUNDLE in the attested compose');
+        const bundle = JSON.parse(zlib.gunzipSync(Buffer.from(parts.map((m) => m[2]).join('').replace(/\./g, ''), 'base64')));
         const local = build.bundleFiles();
         const diffs = [];
         for (const [name, p] of local) {

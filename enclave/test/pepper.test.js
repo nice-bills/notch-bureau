@@ -113,7 +113,7 @@ test('the Phala compose never carries a pepper or the insecure switch, and the b
   assert.throws(() => assertPepperSafe({}, ['NOTCH_ID_PEPPER']), /derived inside the TEE/);
   assert.throws(() => assertPepperSafe({ NOTCH_INSECURE_NO_PEPPER: '1' }, []), /must not be in the compose file/);
   const text = composeText();
-  assert.ok(!/NOTCH_ID_PEPPER|NOTCH_INSECURE_NO_PEPPER/.test(text.replace(/NOTCH_BUNDLE: ".*"/s, '')), 'neither name is an env value of the compose file');
+  assert.ok(!/NOTCH_ID_PEPPER|NOTCH_INSECURE_NO_PEPPER/.test(text.replace(/NOTCH_BUNDLE(_\d+)?: "[^"]*"/g, '')), 'neither name is an env value of the compose file');
   // the bundle (code the CVM runs) contains the derivation and the server wiring
   const src = fs.readFileSync(path.join(enclave, 'src/cvm-server.js'), 'utf8');
   assert.match(src, /cvmPepper\(process\.env/);

@@ -32,7 +32,7 @@ export const NOTCH_ENV = {
   NOTCH_USDC_MINT: '8w1jur5oikV5aax7Q8eTSZwfZwVvFQDTknMTREJ75NNS', // devnet test USDC
 };
 // Names only (values come from Phala's encrypted env): never put a value here.
-export const SEALED_ENV = ['NOTCH_LLM_URL', 'NOTCH_LLM_MODEL', 'NOTCH_LLM_KEY', 'NOTCH_LLM_TIMEOUT_MS', 'NOTCH_INBOX_DOMAIN', 'NOTCH_INBOUND_SECRET', 'NOTCH_INBOX_REQUIRE_WALLET_SIG'];
+export const SEALED_ENV = ['NOTCH_LLM_URL', 'NOTCH_LLM_MODEL', 'NOTCH_LLM_KEY', 'NOTCH_LLM_TIMEOUT_MS', 'NOTCH_INBOX_DOMAIN', 'NOTCH_INBOUND_SECRET', 'NOTCH_INBOX_REQUIRE_WALLET_SIG', 'NOTCH_STORE', 'SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'];
 
 // The phone-number pepper is derived INSIDE the TEE by cvm-server.js (dstack key derivation, enclave/src/pepper.js). It must
 // never be an environment value: an env value is visible to whoever deploys, and a missing pepper must stop the server, not
@@ -70,9 +70,17 @@ export function buildBundle() {
 
 // Unpack the bundle, install from the lockfile (integrity-pinned), start the server.
 const UNPACK = 'const z=require("zlib"),f=require("fs"),p=require("path");'
-  + 'const b=JSON.parse(z.gunzipSync(Buffer.from(process.env.NOTCH_BUNDLE.replace(/\\./g,""),"base64")));'
+  + 'const e=process.env,n=Object.keys(e).filter(k=>/^NOTCH_BUNDLE_\\d+$/.test(k)).sort((a,b)=>a.slice(13)-b.slice(13));'
+  + 'const b=JSON.parse(z.gunzipSync(Buffer.from(n.map(k=>e[k]).join("").replace(/\\./g,""),"base64")));'
   + 'for(const[k,v]of Object.entries(b)){f.mkdirSync(p.dirname(k),{recursive:true});f.writeFileSync(k,Buffer.from(v,"base64"))}';
 export const START = `node -e '${UNPACK}' && npm ci --ignore-scripts --no-audit --no-fund && exec node enclave/src/cvm-server.js`;
+
+export const BUNDLE_PART = 100_000;
+export function bundleParts(b64) {
+  const parts = [];
+  for (let i = 0; i < b64.length; i += BUNDLE_PART) parts.push(b64.slice(i, i + BUNDLE_PART));
+  return parts;
+}
 
 export function composeText() {
   assertPepperSafe();
@@ -97,7 +105,8 @@ export function composeText() {
     ...Object.entries(NOTCH_ENV).map(([k, v]) => `      ${k}: ${q(v)}`),
     // Sealed (encrypted) values, injected by Phala at boot. Listed by name only.
     ...SEALED_ENV.map((k) => `      ${k}: \${${k}:-}`),
-    `      NOTCH_BUNDLE: ${q(b64)}`,
+    // Split in parts: Linux refuses any single env value over 128 KiB ("argument list too long"). The CVM joins them in order.
+    ...bundleParts(b64).map((part, i) => `      NOTCH_BUNDLE_${i}: ${q(part)}`),
     '',
   ];
   return lines.join('\n');

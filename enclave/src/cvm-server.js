@@ -166,6 +166,25 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   if (req.method === 'GET' && url.pathname === '/health') return send(200, { ok: true });
+  // DEMO ONLY (DEMO_FIXTURES=1, attested): email a synthetic, freshly DKIM-signed MoMo statement to an inbox address,
+  // through the same `receive` path the mail worker uses. Rate limited like /samples. Absent in a production build.
+  if (DEMO && req.method === 'POST' && url.pathname === '/demo/deliver') {
+    const taken = sampleLimiter.take(callerKey(req));
+    if (!taken.ok) return send(429, { ok: false, reason: `demo samples are rate limited (demo only): try again in ${taken.retryAfterS} s` }, { 'retry-after': String(taken.retryAfterS) });
+    let body = '';
+    for await (const c of req) { body += c; if (body.length > 2048) return send(413, { ok: false, reason: 'too large' }); }
+    let address;
+    try { address = String(JSON.parse(body).address || '').trim().toLowerCase(); } catch { address = ''; }
+    if (!address.endsWith(`@${inbox.domain}`)) return send(400, { ok: false, reason: 'send JSON {"address": "<your inbox address>"}' });
+    try {
+      const eml = await fixtures.momoStatementEmail({ msisdn: fixtures.randomMsisdn(), to: address });
+      const r = await inbox.receive(u, { rcpt: address, eml, secret: inbox.secret });
+      return send(r.status, r.body);
+    } catch (e) {
+      console.error('demo deliver error:', e.message);
+      return send(500, { ok: false, reason: 'could not process the message' });
+    }
+  }
   try {
     if (await handleInbox(inbox, u, req, url, send)) return;
   } catch (e) {
