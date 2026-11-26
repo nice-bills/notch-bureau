@@ -26,6 +26,7 @@ import { formatDateTime, formatUsdc, parseUsdc, toInput } from './amount';
 import { ActionStatus, Btn, Field, Icon, Money, Sheet, Skel, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Avatar } from './Home';
+import { NeedsTestMoney, useSticky } from './Faucet';
 import type { PoolView } from './chain';
 
 export const NAME: Record<Tranche, string> = { senior: 'Safe', junior: 'Risky' };
@@ -66,7 +67,7 @@ export function claimValue(p: PoolView, t: Tranche, r: WithdrawRequest): bigint 
 
 export function Lend() {
   const { connected } = useWallet();
-  const { pool, shares, requests, loading, poolLoaded } = useChain();
+  const { pool, shares, requests, loading, poolLoaded, usdc } = useChain();
   const { openSignIn } = useUi();
   const owner = connected?.address ?? null;
   const now = useNowSeconds();
@@ -80,6 +81,7 @@ export function Lend() {
     return usdcForShares(shares[t] + pend, supplyOf(pool, t), trancheNav(pool.stats, t));
   };
   const total = value('senior') + value('junior');
+  const moneyCard = useSticky(owner && !loading && usdc === 0n && total === 0n ? true : null);
   const s = pool?.stats;
   const navTotal = s ? s.seniorNav + s.juniorNav : 0n;
   const pct = (t: Tranche) => (navTotal === 0n || !s ? 0 : Number((trancheNav(s, t) * 1000n) / navTotal) / 10);
@@ -103,11 +105,11 @@ export function Lend() {
         <div className="amt" data-testid="lent-total"><Skel loading={busyRead}><Money v={formatUsdc(owner ? total : s?.idle ?? 0n, { max: 2 })} /></Skel><span className="u">USDC</span></div>
         {!owner && <p className="help">Connect a wallet to lend. Every borrower puts down 20% first, and pays a flat 2% fee.</p>}
       </div>
+      {moneyCard && <NeedsTestMoney need="usdc" />}
 
       <div className="trs" role="radiogroup" aria-label="Pick a share of the pool">
         {(['senior', 'junior'] as Tranche[]).map((t) => (
           <button key={t} type="button" role="radio" aria-checked={sel === t} className={cx('trc tap', t === 'senior' ? 'safe' : 'risky', sel === t && 'sel')} onClick={() => setSel(t)}>
-            <span className="bar" aria-hidden="true"><i style={{ height: `${pct(t)}%` }} /></span>
             <b className="n">{NAME[t]}</b>
             <span className="rate">{t === 'senior' ? 'Paid first, smaller fee share' : 'Hurt first, bigger fee share'}</span>
             <span className="rate">1 share = {pool ? sharePrice(pool, t) : '…'}</span>

@@ -1,42 +1,58 @@
-import { Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Component, Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
 import { ChainProvider, useChain } from './data';
 import { useWallet } from './wallet';
 import { getAttestation, type Attestation } from './enclave';
-import { ENCLAVE_URL, POLLAR_ON, PROGRAM_ID, explorerAddress } from './config';
+import { ENCLAVE_URL, POLLAR_ON, PROGRAM_ID, explorerAddress, explorerTx } from './config';
 import { shortAddr } from './amount';
 import { FX_DEFS } from './art';
 import { startLight, watchLenses } from './glass';
 import { Btn, GoogleMark, Icon, Sheet, cx } from './ui';
 import { googleLogin, pollarLogout, watchPollar, type PollarState } from './pollar';
+import { submitSigned } from './chain';
+import { explainError } from './errors';
+import { PHANTOM_LINK_NAME, takeError, takeSignedTransaction } from './phantom-link';
+import { browseLinks, isIOS, isPhone } from './device';
+import { FaucetButton } from './Faucet';
+// The everyday screens are in the main bundle: switching tabs must never wait for a download (on a phone through a
+// tunnel that showed as a blank screen). Only the "Try to cheat it" lab (and its crypto library) loads on demand.
 import { Home } from './Home';
-// Every screen but Home is its own chunk, fetched while the browser is idle after the first paint (and at the
-// latest when its tab is pressed), so the first load parses only what Home needs.
-const load = {
-  limit: () => import('./GetLimit'),
-  borrow: () => import('./Borrow'),
-  lend: () => import('./Lend'),
-  pool: () => import('./Pool'),
-  cheat: () => import('./Attacks'),
-};
-const GetLimit = lazy(() => load.limit().then((m) => ({ default: m.GetLimit })));
-const Borrow = lazy(() => load.borrow().then((m) => ({ default: m.Borrow })));
-const Lend = lazy(() => load.lend().then((m) => ({ default: m.Lend })));
-const Pool = lazy(() => load.pool().then((m) => ({ default: m.Pool })));
-const Attacks = lazy(() => load.cheat().then((m) => ({ default: m.Attacks })));
-export const prefetch = (r: string) => { if (r in load) void load[r as keyof typeof load]().catch(() => {}); };
-function prefetchAll() {
-  const go = () => Object.values(load).forEach((f) => void f().catch(() => {}));
-  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
-  if (ric) ric(go, { timeout: 2500 }); else setTimeout(go, 1200);
-}
+import { GetLimit } from './GetLimit';
+import { Borrow } from './Borrow';
+import { Lend } from './Lend';
+import { Pool } from './Pool';
+const loadAttacks = () => import('./Attacks');
+const Attacks = lazy(() => loadAttacks().then((m) => ({ default: m.Attacks })));
 function ScreenSkel() {
   return (
-    <div aria-busy="true" style={{ padding: '24px' }}>
+    <div className="boot" aria-busy="true" aria-label="Loading">
       <span className="skel" style={{ display: 'block', width: '40%', height: 14 }} />
       <span className="skel" style={{ display: 'block', width: '70%', height: 32, marginTop: 10 }} />
       <span className="skel" style={{ display: 'block', width: '100%', height: 160, marginTop: 24, borderRadius: 28 }} />
     </div>
   );
+}
+
+/** A screen that throws shows a plain message with a way out, never a blank page. */
+class ScreenGuard extends Component<{ children: ReactNode; onHome: () => void }, { err: Error | null }> {
+  state = { err: null as Error | null };
+  static getDerivedStateFromError(err: Error) { return { err }; }
+  componentDidCatch(err: Error, info: ErrorInfo) { console.error('screen crashed', err, info.componentStack); }
+  render() {
+    const { err } = this.state;
+    if (!err) return this.props.children;
+    const chunk = /dynamically imported module|importing a module script|loading chunk|failed to fetch/i.test(err.message);
+    return (
+      <div className="card pcard crash" role="alert">
+        <h2 style={{ margin: 0, fontSize: 20 }}>{chunk ? 'This screen did not download' : 'This screen hit a problem'}</h2>
+        <p className="help">{chunk ? 'The connection dropped while loading it. Your wallet and data are fine.' : 'Your wallet and your money are fine. Go back and try again.'}</p>
+        <div className="row-btns" style={{ marginTop: 12 }}>
+          <Btn variant="secondary" onClick={() => { this.setState({ err: null }); this.props.onHome(); }}>Go home</Btn>
+          <Btn onClick={() => location.reload()}>Reload</Btn>
+        </div>
+        <details className="real-error"><summary>Show the real error</summary><pre>{err.message}</pre></details>
+      </div>
+    );
+  }
 }
 
 export type Route = 'home' | 'limit' | 'borrow' | 'lend' | 'pool' | 'cheat';
@@ -101,7 +117,6 @@ function Shell() {
   }, []);
   useEffect(() => startLight(), []);
   useEffect(() => watchLenses(), []);
-  useEffect(() => prefetchAll(), []);
   useEffect(() => { window.scrollTo({ top: 0 }); }, [route]);
 
   const loadAtt = useCallback(() => {
@@ -127,7 +142,10 @@ function Shell() {
     setRoute(r);
   }, []);
   const ui = useMemo<Ui>(() => ({ route, go, openSignIn: () => setSheet('signin'), openAccount: () => setSheet('account'), att, pollar }), [route, go, att, pollar]);
-  const tabbed = TABS.some((t) => t.id === route);
+  const { connected, restoring } = useWallet();
+  // No tab bar on the welcome screen (it covered "Get started"); everywhere else it floats over a bottom inset.
+  const welcome = route === 'home' && !connected && !restoring;
+  const tabbed = TABS.some((t) => t.id === route) && !welcome;
 
   return (
     <UiCtx.Provider value={ui}>
@@ -135,14 +153,17 @@ function Shell() {
       <a className="skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
       <div className={cx('app', !tabbed && 'no-tabs')}>
         <main id="main" tabIndex={-1} style={{ outline: 'none' }}>
-          <Suspense fallback={<ScreenSkel />}>
-            {route === 'home' && <Home />}
-            {route === 'limit' && <GetLimit />}
-            {route === 'borrow' && <Borrow />}
-            {route === 'lend' && <Lend />}
-            {route === 'pool' && <Pool />}
-            {route === 'cheat' && <Attacks />}
-          </Suspense>
+          <PhantomReturn />
+          <ScreenGuard key={route} onHome={() => go('home')}>
+            <div className="screen-in">
+              {route === 'home' && <Home />}
+              {route === 'limit' && <GetLimit />}
+              {route === 'borrow' && <Borrow />}
+              {route === 'lend' && <Lend />}
+              {route === 'pool' && <Pool />}
+              {route === 'cheat' && <Suspense fallback={<ScreenSkel />}><Attacks /></Suspense>}
+            </div>
+          </ScreenGuard>
         </main>
         <footer className="help" style={{ textAlign: 'center', padding: '32px 24px 0', fontSize: 12 }}>
           Solana devnet only. Test money, no real funds. Program <a className="mono" href={explorerAddress(PROGRAM_ID)} target="_blank" rel="noreferrer">{shortAddr(PROGRAM_ID, 5)}</a>
@@ -152,6 +173,33 @@ function Shell() {
       {sheet === 'signin' && <SignInSheet onClose={() => setSheet(null)} pollar={pollar} setPollar={setPollar} />}
       {sheet === 'account' && <AccountSheet onClose={() => setSheet(null)} att={att} retryAtt={loadAtt} pollar={pollar} setPollar={setPollar} />}
     </UiCtx.Provider>
+  );
+}
+
+// Read once per page load (React may run a state initializer twice in development).
+let phantomErr: string | null | undefined;
+const returnError = () => (phantomErr === undefined ? (phantomErr = takeError()) : phantomErr);
+
+/** Back from the Phantom app with a signed transaction: send it, and say what happened. */
+function PhantomReturn() {
+  const { refresh } = useChain();
+  const [state, setState] = useState<{ tone: 'info' | 'good' | 'bad'; text: string; sig?: string } | null>(() => {
+    const e = returnError();
+    return e ? { tone: 'bad', text: e } : null;
+  });
+  useEffect(() => {
+    const t = takeSignedTransaction();
+    if (!t) return;
+    setState({ tone: 'info', text: 'Phantom signed it. Sending to Solana…' });
+    submitSigned(t.signed, t.lastValidBlockHeight)
+      .then(({ signature }) => { setState({ tone: 'good', text: 'Done: your transaction is on Solana.', sig: signature }); void refresh(); })
+      .catch((e) => setState({ tone: 'bad', text: explainError(e).message }));
+  }, [refresh]);
+  if (!state) return null;
+  return (
+    <div className={cx('action-status return-banner', state.tone === 'good' && 'good', state.tone === 'bad' && 'bad')} role={state.tone === 'bad' ? 'alert' : 'status'}>
+      <p>{state.text}{state.sig && <> <a href={explorerTx(state.sig)} target="_blank" rel="noreferrer">View on Solana Explorer</a></>}</p>
+    </div>
   );
 }
 
@@ -172,7 +220,7 @@ function TabBar({ route, go }: { route: Route; go: (r: Route) => void }) {
       <span className="lensel" style={{ transform: `translateX(${Math.max(0, i) * 100}%)` }} aria-hidden="true" />
       {TABS.map((t) => (
         <a key={t.id} href={`#${t.id}`} aria-current={route === t.id ? 'page' : undefined} className="tap"
-          onPointerDown={(e) => { if (e.button === 0) { setPressed(TABS.indexOf(t)); prefetch(t.id); } }}
+          onPointerDown={(e) => { if (e.button === 0) setPressed(TABS.indexOf(t)); }}
           onClick={(e) => { e.preventDefault(); go(t.id); }}>
           <Icon name={t.icon} />
           {t.label}
@@ -229,21 +277,35 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
     <Sheet title="Sign in to start" onClose={onClose}>
       <p className="sh-p">Your wallet holds your limit. Notch never asks for your seed phrase.</p>
       <div role="menu" aria-label="Wallets">
-        {wallets.map((w) => (
-          <button key={w.name} type="button" role="menuitem" className="opt tap" disabled={connecting}
-            onClick={() => { setErr(null); connect(w).then(onClose).catch((e) => setErr(e instanceof Error ? e.message : String(e))); }}>
-            <span className="badge"><img src={w.icon} alt="" /></span>
-            <span className="t"><b>{w.name}</b><small>Self-custody wallet on devnet</small></span>
-            {connecting ? <span className="spinner chev" aria-hidden="true" /> : <span className="chev"><Icon name="chev" /></span>}
-          </button>
-        ))}
-        {wallets.length === 0 && (
-          <div className="opt" style={{ cursor: 'default' }}>
+        {wallets.map((w) => {
+          const [title, sub] = walletLabel(w.name);
+          return (
+            <button key={w.name} type="button" role="menuitem" className="opt tap" disabled={connecting}
+              onClick={() => { setErr(null); connect(w).then(onClose).catch((e) => setErr(e instanceof Error ? e.message : String(e))); }}>
+              <span className="badge"><img src={w.icon} alt="" /></span>
+              <span className="t"><b>{title}</b><small>{sub}</small></span>
+              {connecting ? <span className="spinner chev" aria-hidden="true" /> : <span className="chev"><Icon name="chev" /></span>}
+            </button>
+          );
+        })}
+        {wallets.length === 0 && !isPhone && (
+          <a className="opt tap" href="https://phantom.com/download" target="_blank" rel="noreferrer">
             <span className="badge"><Icon name="wallet" /></span>
-            <span className="t"><b>No wallet found</b><small>Install Phantom, Backpack or Solflare, set it to devnet, then reload.</small></span>
-          </div>
+            <span className="t"><b>No wallet in this browser</b><small>Install Phantom, Backpack or Solflare, set it to devnet, then reload.</small></span>
+          </a>
         )}
       </div>
+      {isPhone && (
+        <div className="stack" style={{ marginTop: 4 }} aria-label="Open in a wallet app">
+          <p className="help" style={{ margin: '8px 0 0' }}>{wallets.length ? 'Or open' : 'Open'} Notch inside your wallet’s own browser:</p>
+          {browseLinks().map((l) => (
+            <a key={l.name} className="opt-link tap" href={l.href}>
+              <Icon name="out" />
+              <span>Open in {l.name}<small>{isIOS ? 'Best on iPhone if you use another wallet' : 'Works with any Android wallet app'}</small></span>
+            </a>
+          ))}
+        </div>
+      )}
       {POLLAR_ON ? (
         <button type="button" className="opt tap" onClick={() => void onGoogle()} disabled={gWorking || pollar?.step === 'authenticated'}>
           <span className="badge"><GoogleMark /></span>
@@ -265,6 +327,13 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
       )}
     </Sheet>
   );
+}
+
+/** Plain names for the wallets a phone browser shows. */
+function walletLabel(name: string): [string, string] {
+  if (name === 'Mobile Wallet Adapter') return ['Wallet app on this phone', 'Phantom, Solflare or Seed Vault opens to approve'];
+  if (name === PHANTOM_LINK_NAME) return ['Phantom app', 'Opens Phantom to approve, then comes back here'];
+  return [name, 'Self-custody wallet on devnet'];
 }
 
 function AccountSheet({ onClose, att, retryAtt, pollar, setPollar }: { onClose: () => void; att: Attestation | null | 'down'; retryAtt: () => void; pollar: PollarState | null; setPollar: (s: PollarState | null) => void }) {
@@ -300,6 +369,7 @@ function AccountSheet({ onClose, att, retryAtt, pollar, setPollar }: { onClose: 
           <div className="fact"><GoogleMark /><span><b>Google, via Pollar</b><small>{pollar.email ?? 'Signed in'}{pollar.solana ? <> · wallet <span className="mono">{shortAddr(pollar.solana)}</span></> : ''}</small></span></div>
         )}
       </div>
+      {connected && <div style={{ margin: '4px 0 12px' }}><FaucetButton /></div>}
       {connected && <Btn variant="secondary" onClick={() => { void disconnect(); onClose(); }}><Icon name="out" />Disconnect wallet</Btn>}
       {pollar?.step === 'authenticated' && <Btn variant="ghost" onClick={() => { void pollarLogout().then(() => setPollar(null)); }}>Sign out of Google</Btn>}
     </Sheet>

@@ -91,6 +91,7 @@ export function programErrorFromText(text: string): ProgramErrorName | null {
 
 export function explainError(e: unknown): FriendlyError {
   const raw = e instanceof TxError ? [e.raw, ...e.logs].join('\n') : e instanceof Error ? e.message : String(e);
+  // Solana's own client errors are stripped to a code in production builds ("Solana error #…"): keep the code visible.
   const lower = raw.toLowerCase();
 
   if (/user rejected|rejected the request|declined|cancell?ed/.test(lower) && !/custom program/.test(lower)) {
@@ -114,8 +115,9 @@ export function explainError(e: unknown): FriendlyError {
   if (/custom program error: 0x1\b/.test(lower)) {
     return { code: 'NotEnoughTokens', message: 'You do not have enough test USDC in this wallet for that.', raw };
   }
-  if (/attempt to debit an account but found no record of a prior credit|insufficient lamports|insufficientfundsforfee/.test(lower)) {
-    return { code: 'NotEnoughSol', message: 'This wallet needs a little devnet SOL to pay network fees. Get some from the Solana devnet faucet.', raw };
+  // A fee payer with no SOL: simulation says InvalidAccountForFee (or the debit/rent variants).
+  if (/nosolforfees|invalidaccountforfee|attempt to debit an account but found no record of a prior credit|insufficient lamports|insufficientfundsforfee|insufficientfundsforrent/.test(lower)) {
+    return { code: 'NotEnoughSol', message: 'Your wallet has no devnet SOL to pay the network fee. Get free test SOL below, then try again.', raw };
   }
   if (/accountnotfound|account not found/.test(lower)) {
     return { code: 'AccountMissing', message: 'A needed account does not exist yet. If this is a new wallet, it needs some devnet SOL first.', raw };

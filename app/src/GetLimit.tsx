@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { address, getAddressEncoder } from '@solana/kit';
 import { ENCLAVE_URL, LIVE_STATUS } from './config';
-import { sendTransaction } from './chain';
+import { MIN_FEE_LAMPORTS, sendTransaction } from './chain';
+import { FaucetButton } from './Faucet';
+import { PHANTOM_LINK_NAME, takeSignedMessage } from './phantom-link';
 import { useChain } from './data';
 import { useWallet } from './wallet';
 import { demoDeliver, newInbox, pollRecord, recordBytes, reportPosted, signatureBytes, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
@@ -33,7 +35,7 @@ type Live = 'idle' | 'received' | 'checking' | 'done' | 'refused';
 
 export function GetLimit() {
   const { connected, signMessage, signTransaction } = useWallet();
-  const { addrs, line, refresh, session } = useChain();
+  const { addrs, line, refresh, session, sol } = useChain();
   const { go, openSignIn, att } = useUi();
   const owner = connected?.address ?? null;
   const signed = session.signed;
@@ -101,6 +103,9 @@ export function GetLimit() {
               <Btn onClick={onPost} busy={postAct.busy} disabled={!uwKey}>Post my limit</Btn>
             )}
             {!uwKey && !posted && <p className="help warn">Waiting for the sealed computer’s public key…</p>}
+            {!posted && sol !== null && sol < MIN_FEE_LAMPORTS && !postAct.error && (
+              <div className="notice notice-warn" role="status"><strong>Posting needs a little devnet SOL</strong><span>Your wallet has none yet. It pays the network fee and the small deposit Solana keeps for a new account.</span><div style={{ marginTop: 8 }}><FaucetButton /></div></div>
+            )}
             <ActionStatus a={postAct} />
             {!posted && <Btn variant="ghost" onClick={() => { session.setSigned(null); postAct.reset(); }}>Start over with another statement</Btn>}
           </div>
@@ -127,6 +132,7 @@ function Nav({ title, onBack }: { title: string; onBack: () => void }) {
 export { Nav };
 
 function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; signMessage: (m: Uint8Array) => Promise<Uint8Array>; onResult: (r: EnclaveOk) => void; localDemo: boolean }) {
+  const { connected } = useWallet();
   const [inbox, setInbox] = useState<InboxAddress | null>(() => store.get(wallet));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -140,12 +146,26 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
 
   useEffect(() => { setInbox(store.get(wallet)); }, [wallet]);
 
+  // Back from the Phantom app with the inbox request signed: finish asking for the address.
+  useEffect(() => {
+    const prefix = `notch-inbox-v1|${wallet}|`;
+    const done = takeSignedMessage((m) => m.startsWith(prefix));
+    if (!done) return;
+    setBusy(true);
+    newInbox(wallet, { signed: { ts: Number(done.message.slice(prefix.length)), signature: done.signature } })
+      .then((ib) => { store.set(wallet, ib); setInbox(ib); setLive('idle'); setRefusal(null); })
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  }, [wallet]);
+
   const ask = async () => {
     setBusy(true);
     setErr(null);
     try {
       let proof: Parameters<typeof newInbox>[1] = { signMessage };
-      if (LIVE_STATUS) {
+      // Sign in with Solana (for live status) needs a second signature; skip it for the Phantom deeplink wallet, where
+      // every signature is a trip to the Phantom app and back. The poll below still shows the status.
+      if (LIVE_STATUS && connected?.wallet.name !== PHANTOM_LINK_NAME) {
         try { proof = { bearer: await signInWithSolana(wallet, signMessage) }; } catch { /* fall back to the wallet signature */ }
       }
       const ib = await newInbox(wallet, proof);

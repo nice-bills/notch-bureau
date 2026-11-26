@@ -158,16 +158,33 @@ export interface SendOutcome {
 export async function sendTransaction(
   feePayer: Address,
   ixs: Instruction[],
-  sign: (wire: Uint8Array) => Promise<Uint8Array>,
+  sign: (wire: Uint8Array, meta?: { lastValidBlockHeight: bigint }) => Promise<Uint8Array>,
 ): Promise<SendOutcome> {
+  await assertCanPayFees(feePayer);
   const sim = await simulate(feePayer, ixs);
   if (!sim.ok) throw new TxError(sim.err ?? 'simulation failed', sim.logs);
 
   const { tx, blockhash } = await compile(feePayer, ixs);
   const wire = new Uint8Array(getTransactionEncoder().encode(tx));
-  const signed = await sign(wire);
+  const signed = await sign(wire, { lastValidBlockHeight: blockhash.lastValidBlockHeight });
+  return submitSigned(signed, blockhash.lastValidBlockHeight);
+}
+
+/** A fee payer with no SOL fails simulation with an unhelpful "account not found"; say it in plain words first. */
+export const MIN_FEE_LAMPORTS = 1_000_000n; // 0.001 SOL: a fee plus some rent; less than that and nothing here can go through
+export class NoSolError extends Error {
+  constructor(public lamports: bigint) { super(`NoSolForFees: the wallet holds ${lamports} lamports, needs at least ${MIN_FEE_LAMPORTS}`); }
+}
+async function assertCanPayFees(feePayer: Address) {
+  const bal = await fetchSol(feePayer).catch(() => null);
+  if (bal !== null && bal < MIN_FEE_LAMPORTS) throw new NoSolError(bal);
+}
+
+/** Send already-signed wire bytes and wait for confirmation (also used after a Phantom deeplink round trip). */
+export async function submitSigned(signed: Uint8Array, lastValidBlockHeight: bigint): Promise<SendOutcome> {
   const b64 = btoa(Array.from(signed, (b) => String.fromCharCode(b)).join(''));
   const signature = await rpc.sendTransaction(b64 as never, { encoding: 'base64', skipPreflight: true }).send();
+  const blockhash = { lastValidBlockHeight };
 
   const deadline = Date.now() + 60_000;
   for (;;) {

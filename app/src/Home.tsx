@@ -8,6 +8,8 @@ import { formatDate, formatDateTime, formatUsdc, shortAddr, daysLeft } from './a
 import { envelope, foilCard, stamp, type Ink, type Motif } from './art';
 import { ActionStatus, Btn, Icon, Money, Sheet, Skel, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
+import { MIN_FEE_LAMPORTS } from './chain';
+import { NeedsTestMoney, useSticky } from './Faucet';
 
 /** Ata + idempotent create, so a wallet that never held test USDC still works. */
 export async function withAta(a: NotchAddresses, owner: ReturnType<typeof address>) {
@@ -27,8 +29,9 @@ export function lineState(line: ReturnType<typeof useChain>['line'], nowS = Math
 }
 
 export function Avatar() {
-  const { connected } = useWallet();
+  const { connected, restoring } = useWallet();
   const { openAccount, openSignIn } = useUi();
+  if (restoring) return <span className="av skel" aria-label="Reconnecting your wallet" style={{ minWidth: 48, height: 48, borderRadius: 24 }} />;
   return connected ? (
     <button type="button" className="av tap wallet-pill" onClick={openAccount} aria-label={`Your wallet ${shortAddr(connected.address)}`} title={connected.address}>
       <img src={connected.wallet.icon} alt="" />
@@ -39,7 +42,16 @@ export function Avatar() {
 }
 
 export function Home() {
-  const { connected } = useWallet();
+  const { connected, restoring } = useWallet();
+  if (restoring) {
+    return (
+      <div className="boot" aria-busy="true" aria-label="Reconnecting your wallet">
+        <span className="skel" style={{ display: 'block', width: '30%', height: 14 }} />
+        <span className="skel" style={{ display: 'block', width: '60%', height: 28, marginTop: 10 }} />
+        <span className="skel" style={{ display: 'block', width: '100%', height: 180, marginTop: 24, borderRadius: 28 }} />
+      </div>
+    );
+  }
   if (!connected) return <Welcome />;
   return <HomeConnected />;
 }
@@ -91,9 +103,11 @@ function Welcome() {
 
 function HomeConnected() {
   const { connected, signTransaction } = useWallet();
-  const { line, usdc, loading, addrs, refresh, patch } = useChain();
+  const { line, usdc, sol, loading, addrs, refresh, patch, session } = useChain();
   const { go } = useUi();
   const owner = connected!.address;
+  const ready = session.signed && !(line && line.lastNonce >= BigInt(session.signed.nonce)) ? session.signed : null;
+  const empty = useSticky(!loading && sol !== null ? (sol < MIN_FEE_LAMPORTS ? 'sol' : usdc === 0n ? 'usdc' : null) : null);
   const s = lineState(line);
   const [repayOpen, setRepayOpen] = useState(false);
   const wdAct = useAction(refresh);
@@ -130,14 +144,25 @@ function HomeConnected() {
           <b>This credit line is closed</b>
           <p>A payment was missed, so the deposit went to the lenders. This wallet can’t borrow again.</p>
         </div>
+      ) : !s.live && ready ? (
+        <>
+          <section className="card pcard ready-card" aria-label="Limit ready to post">
+            <span className="tag good" style={{ alignSelf: 'flex-start' }}>READY TO POST</span>
+            <div><span className="big" data-testid="ready-amount">{formatUsdc(BigInt(Math.round(ready.limitUsdc * 1e6)), { max: 2 })}</span> <span className="help">USDC limit</span></div>
+            <p className="help" style={{ margin: 0 }}>Signed by the sealed computer, good until {formatDate(BigInt(ready.expiry))}. Post it to Solana to start borrowing.</p>
+          </section>
+          <div className="actions"><Btn onClick={() => go('limit')}>Limit ready, post it</Btn></div>
+          {empty && <NeedsTestMoney need={empty} />}
+        </>
       ) : !s.live ? (
         <>
           <div className="card pcard empty">
             <div className="ico"><Icon name="mail" /></div>
             <b>{s.expired ? 'Your limit has expired' : 'No limit yet'}</b>
-            <p>{s.expired ? 'Send a fresh statement to get a new one.' : 'Have your mobile money provider email a statement to your own Notch inbox. MTN MoMo works today.'}</p>
+            <p>{s.expired ? 'Send a fresh statement to get a new one.' : 'Your income provider emails a statement to your own Notch inbox. A sealed computer reads it and signs a limit.'}</p>
           </div>
           <div className="actions"><Btn onClick={() => go('limit')}><Icon name="mail" />Get my limit</Btn></div>
+          {empty && <NeedsTestMoney need={empty} />}
           {s.deposit > 0n ? <DepositBack amount={s.deposit} act={wdAct} onWithdraw={onWithdraw} drawn={s.drawn} /> : wdAct.note && <div style={{ margin: "16px 24px 0" }}><ActionStatus a={wdAct} /></div>}
         </>
       ) : (
@@ -156,6 +181,7 @@ function HomeConnected() {
             <Btn onClick={() => go('borrow')} disabled={s.headroom === 0n || s.pastDue}>Borrow</Btn>
             <Btn variant="secondary" onClick={() => setRepayOpen(true)} disabled={s.drawn === 0n}><Icon name="repay" />Pay back</Btn>
           </div>
+          {empty && <NeedsTestMoney need={empty} />}
           {s.drawn > 0n && (
             <div className={cx('duec pcard', s.pastDue && 'late')}>
               <span className="q"><Icon name="clock" /></span>

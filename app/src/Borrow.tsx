@@ -9,6 +9,7 @@ import { buzz } from './glass';
 import { ActionStatus, Btn, Icon, Sheet, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Nav } from './GetLimit';
+import { FaucetButton } from './Faucet';
 import { lineState, withAta } from './Home';
 
 const UNITS = [1n, 2n, 5n, 10n, 20n, 50n, 100n, 200n, 500n, 1000n, 5000n].map((u) => u * 1_000_000n);
@@ -130,7 +131,7 @@ export function Borrow() {
         {step === 1 ? (
           <>
             <Btn onClick={onDeposit} busy={depAct.busy} disabled={!okAmount || usdc < toAdd}>Add {formatUsdc(toAdd)} USDC deposit</Btn>
-            {okAmount && usdc < toAdd && <p className="help warn" style={{ textAlign: 'center' }}>Your wallet has {formatUsdc(usdc)} test USDC. You need {formatUsdc(toAdd - usdc)} more.</p>}
+            {okAmount && usdc < toAdd && <><p className="help warn" style={{ textAlign: 'center' }}>Your wallet has {formatUsdc(usdc)} test USDC. You need {formatUsdc(toAdd - usdc)} more.</p><div style={{ display: 'flex', justifyContent: 'center' }}><FaucetButton /></div></>}
           </>
         ) : (
           <Slide label={okAmount ? `Slide to borrow ${formatUsdc(draw!)}` : 'Pick an amount'} aria={okAmount ? `Borrow ${formatUsdc(draw!)} USDC` : 'Borrow'} disabled={!okAmount || drawAct.busy} busy={drawAct.busy} onDone={onDraw} />

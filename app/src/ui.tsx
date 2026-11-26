@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type ButtonHTMLAttribu
 import { createPortal } from 'react-dom';
 import { explorerTx } from './config';
 import { explainError, type FriendlyError } from './errors';
+import { FaucetButton } from './Faucet';
 import { buildLenses, buzz } from './glass';
 
 export function cx(...parts: (string | false | null | undefined)[]) {
@@ -114,15 +115,33 @@ export function Skel({ children, loading }: { children: ReactNode; loading: bool
 export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const tid = useId();
+  const close = useRef(onClose);
+  close.current = onClose;
+  // Once per opening (not on every re-render, which would yank focus back to the first field while typing).
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     const el = ref.current;
     el?.querySelector<HTMLElement>('input, button:not(.x), a')?.focus({ preventScroll: true });
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close.current(); };
     addEventListener('keydown', onKey);
     if (el) requestAnimationFrame(() => buildLenses(el));
     return () => { removeEventListener('keydown', onKey); prev?.focus?.({ preventScroll: true }); };
-  }, [onClose]);
+  }, []);
+  // Keep the sheet above the on-screen keyboard: the visual viewport shrinks when it opens (iOS does not resize the page).
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const el = ref.current;
+    if (!vv || !el) return;
+    const fit = () => {
+      const kb = Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop));
+      el.style.setProperty('--kb', `${kb}px`);
+      el.style.maxHeight = `${Math.round(vv.height) - 24}px`;
+    };
+    fit();
+    vv.addEventListener('resize', fit);
+    vv.addEventListener('scroll', fit);
+    return () => { vv.removeEventListener('resize', fit); vv.removeEventListener('scroll', fit); };
+  }, []);
   return createPortal(
     <>
       <div className="scrim" onClick={onClose} />
@@ -184,6 +203,7 @@ export function ActionStatus({ a }: { a: ActionState }) {
     return (
       <div className="action-status bad" role="alert">
         <p>{a.error.message}</p>
+        {a.error.code === 'NotEnoughSol' && <div style={{ marginTop: 8 }}><FaucetButton /></div>}
         {a.error.code !== 'Rejected' && <RealError raw={a.error.raw} />}
       </div>
     );

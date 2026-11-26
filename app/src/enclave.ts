@@ -25,6 +25,8 @@ export interface Attestation {
   mode: string;
   extraction?: { mode: string; model?: string };
   note?: string;
+  /** The local demo server can send devnet SOL + test USDC (POST /demo/faucet). */
+  faucet?: boolean;
 }
 
 export async function getAttestation(signal?: AbortSignal): Promise<Attestation> {
@@ -119,11 +121,18 @@ export const inboxMessage = (wallet: string, ts: number) => `notch-inbox-v1|${wa
  * Ask for this wallet's statement address. Proof of the wallet is either a Supabase "Sign in with Solana" token
  * (`bearer`) or a signature over `notch-inbox-v1|wallet|ts`.
  */
-export async function newInbox(wallet: string, proof: { bearer: string } | { signMessage: (m: Uint8Array) => Promise<Uint8Array> }): Promise<InboxAddress> {
+export async function newInbox(
+  wallet: string,
+  proof: { bearer: string } | { signMessage: (m: Uint8Array) => Promise<Uint8Array> } | { signed: { ts: number; signature: Uint8Array } },
+): Promise<InboxAddress> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   const body: Record<string, unknown> = { wallet };
   if ('bearer' in proof) headers.authorization = `Bearer ${proof.bearer}`;
-  else {
+  else if ('signed' in proof) {
+    // signed earlier (a Phantom deeplink round trip reloads the page between asking and getting the signature)
+    body.ts = proof.signed.ts;
+    body.signature = toB64(proof.signed.signature);
+  } else {
     const ts = Date.now();
     body.ts = ts;
     body.signature = toB64(await proof.signMessage(new TextEncoder().encode(inboxMessage(wallet, ts))));
@@ -176,4 +185,12 @@ export async function reportPosted(signature: string): Promise<void> {
   } catch {
     /* only a convenience for the public status; the limit is already on chain */
   }
+}
+
+/** DEMO / DEVNET ONLY: ask the local demo server for a little devnet SOL and test USDC. */
+export async function requestFaucet(wallet: string): Promise<{ sol: string; usdc: string; signature: string }> {
+  const r = await call('/demo/faucet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ wallet }) });
+  const j = await readJson(r);
+  if (!r.ok || !j.ok) throw new Error(String(j.reason ?? `The test faucet answered HTTP ${r.status}.`));
+  return j as unknown as { sol: string; usdc: string; signature: string };
 }
