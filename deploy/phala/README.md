@@ -8,7 +8,7 @@ generated at boot **inside** the VM and never leaves it. The VM's TDX quote comm
 | CVM name | `notch-underwriter` (one instance, `tdx.small`: 1 vCPU, 2 GB, $0.058/h) |
 | URL | https://0015f90bd03804232678c956ce789b09384f4b1d-8787.dstack-pha1-prod9.phala.network |
 | Build | **DEMO** (`DEMO_FIXTURES=1`, visible in `/attestation` and inside the attested compose) |
-| Latest e2e | `enclave/e2e-phala.log` (33/33, devnet) |
+| Latest e2e | 36/36 on devnet (Nov 26): inbox -> demo mailer -> limit, live status in Supabase |
 
 ## What is attested
 
