@@ -16,7 +16,7 @@ const MOTIFS = ['kente', 'sun', 'horn'] as const;
 
 export function Borrow() {
   const { connected, signTransaction } = useWallet();
-  const { line, pool, usdc, addrs, refresh, loading } = useChain();
+  const { line, pool, usdc, addrs, refresh, patch, loading } = useChain();
   const { go } = useUi();
   const owner = connected?.address ?? null;
   const s = lineState(line);
@@ -60,6 +60,7 @@ export function Borrow() {
       const { ata, ensure } = await withAta(addrs, owner);
       const lineAddr = await deriveLine(addrs.program, owner);
       const { signature } = await sendTransaction(owner, [ensure, depositBorrowerIx(addrs, owner, lineAddr, ata, toAdd)], signTransaction);
+      patch({ line: { deposit: have + toAdd }, usdc: usdc - toAdd });
       return { signature, note: `Deposit added: ${formatUsdc(toAdd)} USDC.` };
     });
 
@@ -69,6 +70,7 @@ export function Borrow() {
       const { ata, ensure } = await withAta(addrs, owner);
       const lineAddr = await deriveLine(addrs.program, owner);
       const { signature } = await sendTransaction(owner, [ensure, drawIx(addrs, owner, lineAddr, ata, draw)], signTransaction);
+      patch({ line: { drawn: (line?.drawn ?? 0n) + draw, ...(line && line.drawn === 0n ? { due: dueIfNow } : {}) }, usdc: usdc + draw });
       setDone({ draw, payoff, due: dueIfNow });
       return { signature, note: `${formatUsdc(draw)} USDC sent to your wallet.` };
     });
@@ -165,15 +167,17 @@ function Slide({ label, aria, disabled, busy, onDone }: { label: string; aria: s
   const box = useRef<HTMLDivElement>(null);
   const knob = useRef<HTMLButtonElement>(null);
   const fill = useRef<HTMLDivElement>(null);
-  const st = useRef<{ x0: number; max: number; x: number } | null>(null);
+  const st = useRef<{ x0: number; max: number; x: number; w: number } | null>(null);
   const rubber = (x: number, d = 60, c = 0.55) => (x * d * c) / (d + c * Math.abs(x));
   const put = (x: number, anim: boolean) => {
     const k = knob.current, f = fill.current, b = box.current;
     if (!k || !f || !b) return;
-    k.style.transition = anim ? 'transform .5s var(--spring)' : 'none';
-    f.style.transition = anim ? 'transform .45s var(--ease-out)' : 'none';
+    // Writes only (the width is measured once on press): no forced layout while the finger moves.
+    const w = st.current?.w ?? b.offsetWidth;
+    k.style.transition = anim ? 'transform .25s var(--spring)' : 'none';
+    f.style.transition = anim ? 'transform .22s var(--ease-out)' : 'none';
     k.style.transform = x ? `translateX(${x}px)` : '';
-    f.style.transform = `scaleX(${x ? Math.max(0, (x + 60) / b.offsetWidth) : 0})`;
+    f.style.transform = `scaleX(${x ? Math.max(0, (x + 60) / w) : 0})`;
   };
   useEffect(() => { if (!busy) put(0, true); }, [busy]);
   return (
@@ -181,7 +185,7 @@ function Slide({ label, aria, disabled, busy, onDone }: { label: string; aria: s
       <div className="fillr" ref={fill} />
       <div className="lbl"><span className={disabled ? '' : 'shimmer'}>{busy ? 'Sending…' : label}</span></div>
       <button ref={knob} type="button" className="knob glass tint" aria-label={aria} disabled={disabled}
-        onPointerDown={(e) => { if (disabled) return; const b = box.current!; st.current = { x0: e.clientX, max: b.offsetWidth - 64, x: 0 }; knob.current!.setPointerCapture(e.pointerId); buzz(4); }}
+        onPointerDown={(e) => { if (disabled) return; const b = box.current!; st.current = { x0: e.clientX, max: b.offsetWidth - 64, x: 0, w: b.offsetWidth }; knob.current!.setPointerCapture(e.pointerId); buzz(4); }}
         onPointerMove={(e) => { const s = st.current; if (!s) return; const raw = e.clientX - s.x0; s.x = raw < 0 ? rubber(raw) : raw > s.max ? s.max + rubber(raw - s.max) : raw; put(s.x, false); }}
         onPointerUp={() => { const s = st.current; st.current = null; if (!s) return; if (s.x > s.max * 0.86) { put(s.max, false); buzz(24); onDone(); } else put(0, true); }}
         onPointerCancel={() => { st.current = null; put(0, true); }}

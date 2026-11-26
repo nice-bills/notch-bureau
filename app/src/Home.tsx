@@ -91,7 +91,7 @@ function Welcome() {
 
 function HomeConnected() {
   const { connected, signTransaction } = useWallet();
-  const { line, usdc, loading, addrs, refresh } = useChain();
+  const { line, usdc, loading, addrs, refresh, patch } = useChain();
   const { go } = useUi();
   const owner = connected!.address;
   const s = lineState(line);
@@ -105,7 +105,9 @@ function HomeConnected() {
       if (!addrs) throw new Error('Still reading the pool. Try again in a moment.');
       const { ata, ensure } = await withAta(addrs, owner);
       const lineAddr = await deriveLine(addrs.program, owner);
+      const back = line?.deposit ?? 0n;
       const { signature } = await sendTransaction(owner, [ensure, withdrawBorrowerIx(addrs, owner, lineAddr, ata)], signTransaction);
+      patch({ line: { deposit: 0n }, usdc: usdc + back });
       return { signature, note: 'Deposit returned to your wallet.' };
     });
 
@@ -136,7 +138,7 @@ function HomeConnected() {
             <p>{s.expired ? 'Send a fresh statement to get a new one.' : 'Have your mobile money provider email a statement to your own Notch inbox. MTN MoMo works today.'}</p>
           </div>
           <div className="actions"><Btn onClick={() => go('limit')}><Icon name="mail" />Get my limit</Btn></div>
-          {s.deposit > 0n && <DepositBack amount={s.deposit} act={wdAct} onWithdraw={onWithdraw} drawn={s.drawn} />}
+          {s.deposit > 0n ? <DepositBack amount={s.deposit} act={wdAct} onWithdraw={onWithdraw} drawn={s.drawn} /> : wdAct.note && <div style={{ margin: "16px 24px 0" }}><ActionStatus a={wdAct} /></div>}
         </>
       ) : (
         <>
@@ -164,7 +166,7 @@ function HomeConnected() {
               <Btn small onClick={() => setRepayOpen(true)}>Pay</Btn>
             </div>
           )}
-          {s.deposit > 0n && s.drawn === 0n && <DepositBack amount={s.deposit} act={wdAct} onWithdraw={onWithdraw} drawn={s.drawn} />}
+          {s.deposit > 0n && s.drawn === 0n ? <DepositBack amount={s.deposit} act={wdAct} onWithdraw={onWithdraw} drawn={s.drawn} /> : wdAct.note && <div style={{ margin: "16px 24px 0" }}><ActionStatus a={wdAct} /></div>}
         </>
       )}
 
@@ -204,7 +206,7 @@ function DepositBack({ amount, act, onWithdraw, drawn }: { amount: bigint; act: 
 
 function RepaySheet({ onClose }: { onClose: () => void }) {
   const { connected, signTransaction } = useWallet();
-  const { line, usdc, addrs, refresh } = useChain();
+  const { line, usdc, addrs, refresh, patch } = useChain();
   const owner = connected!.address;
   const drawn = line?.drawn ?? 0n;
   const payoff = payoffFor(drawn);
@@ -220,6 +222,7 @@ function RepaySheet({ onClose }: { onClose: () => void }) {
       const { ata, ensure } = await withAta(addrs, owner);
       const lineAddr = await deriveLine(addrs.program, owner);
       const { signature } = await sendTransaction(owner, [ensure, repayIx(addrs, owner, lineAddr, ata, payoff)], signTransaction);
+      patch({ line: { drawn: 0n, deposit: 0n }, usdc: usdc - payoff + back });
       setPaid({ payoff, back });
       return { signature, note: `Repaid ${formatUsdc(payoff)} USDC. Your ${formatUsdc(back)} USDC deposit came back to you.` };
     });

@@ -363,21 +363,34 @@ function Landed({ signed, onDone, postAct }: { signed: EnclaveOk; onDone: () => 
   const big = useMemo(() => stamp(256, 304, { foil: true, num: amt, cap: 'USDC', motif: 'bank', numSize: amt.length > 4 ? 16 : amt.length > 3 ? 18 : 24, rosette: true, ms: 0.5 }), [amt]);
   const bg = useMemo(() => rosette(255, 300, 300, 90, '#8E7CC8', 0.1) + rosette(255, 300, 200, 72, '#7FA4E6', 0.1), []);
   const wrap = useRef<HTMLDivElement>(null);
+  // Tilt follows the finger 1:1: the box is measured once per gesture, writes are batched per frame, and no
+  // transition is left on while tracking (the spring back runs only on release).
+  const box = useRef<DOMRect | null>(null);
+  const raf = useRef(0);
   const tilt = (e: React.PointerEvent) => {
     const w = wrap.current;
     if (!w || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const r = w.getBoundingClientRect();
+    const r = (box.current ??= w.getBoundingClientRect());
     const x = (e.clientX - r.left) / r.width - 0.5, y = (e.clientY - r.top) / r.height - 0.5;
-    w.style.transform = `rotateY(${x * 24}deg) rotateX(${-y * 24}deg)`;
-    w.style.setProperty('--sx', `${50 + x * 120}%`);
+    cancelAnimationFrame(raf.current);
+    raf.current = requestAnimationFrame(() => {
+      w.style.transition = 'none';
+      w.style.transform = `rotateY(${x * 24}deg) rotateX(${-y * 24}deg)`;
+      w.style.setProperty('--sx', `${50 + x * 120}%`);
+    });
   };
-  const reset = () => { const w = wrap.current; if (w) { w.style.transition = 'transform .7s var(--spring)'; w.style.transform = ''; w.style.setProperty('--sx', '50%'); } };
+  const reset = () => {
+    box.current = null;
+    cancelAnimationFrame(raf.current);
+    const w = wrap.current;
+    if (w) { w.style.transition = 'transform .25s var(--spring)'; w.style.transform = ''; w.style.setProperty('--sx', '50%'); }
+  };
   return (
     <section className="landed" aria-labelledby="land-h">
       <div className="rosette" aria-hidden="true"><svg viewBox="0 0 510 700" preserveAspectRatio="xMidYMid slice" dangerouslySetInnerHTML={{ __html: bg }} /></div>
       <div className="cap">Your limit came back</div>
       <h1 id="land-h"><span data-testid="landed-amount">{formatUsdc(rec.limitMicro, { max: 2 })}</span> USDC to borrow</h1>
-      <div className="stampwrap" ref={wrap} onPointerMove={tilt} onPointerLeave={reset} onPointerUp={reset} aria-hidden="true">
+      <div className="stampwrap" ref={wrap} onPointerMove={tilt} onPointerLeave={reset} onPointerUp={reset} onPointerCancel={reset} aria-hidden="true">
         <div className="stamp drop"><svg viewBox="0 0 256 304" dangerouslySetInnerHTML={{ __html: big }} /><div className="sheen" /></div>
       </div>
       <div className="landchips">

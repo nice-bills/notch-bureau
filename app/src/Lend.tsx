@@ -126,8 +126,8 @@ export function Lend() {
         <h3 id="loss-h">What if someone doesn’t pay?</h3>
         <p className="sub">Their 20% deposit goes to lenders first. Any loss left hits Risky. Safe is hurt only after Risky is gone.</p>
         <div className="stackv">
-          <div className="s">Safe · {pct('senior').toFixed(1)}%<span className="hit" style={{ width: loss ? `${Math.min(100, hit.s)}%` : 0 }} /></div>
-          <div className="k">Risky · {pct('junior').toFixed(1)}%<span className="hit" style={{ width: loss ? `${Math.min(100, hit.j)}%` : 0 }} /></div>
+          <div className="s">Safe · {pct('senior').toFixed(1)}%<span className="hit" style={{ transform: `scaleX(${loss ? Math.min(100, hit.s) / 100 : 0})` }} /></div>
+          <div className="k">Risky · {pct('junior').toFixed(1)}%<span className="hit" style={{ transform: `scaleX(${loss ? Math.min(100, hit.j) / 100 : 0})` }} /></div>
         </div>
         <button type="button" className="chip tap" style={{ marginTop: 16, width: '100%', justifyContent: 'center' }} onClick={() => setLoss((v) => !v)} aria-pressed={loss} disabled={navTotal === 0n}>
           {loss ? `A 5% loss: Risky loses ${hit.j.toFixed(1)}%, Safe ${hit.s.toFixed(1)}%` : 'Show a 5% loss'}

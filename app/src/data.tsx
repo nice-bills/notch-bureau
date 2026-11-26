@@ -33,6 +33,8 @@ interface ChainData {
   sol: bigint | null;
   error: string | null;
   refresh: () => Promise<void>;
+  /** After a confirmed transaction: show the known result at once (absolute values from before the action), then re-read. */
+  patch: (p: { line?: Partial<CreditLine>; usdc?: bigint }) => void;
   session: Session;
 }
 
@@ -54,6 +56,8 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   const [eml, setEml] = useState<Session['eml']>(null);
   const [signed, setSigned] = useState<EnclaveOk | null>(null);
   const ownerRef = useRef(owner);
+  // Bumped by patch(): a read that started before it would bring back the old numbers, so its result is dropped.
+  const gen = useRef(0);
   ownerRef.current = owner;
 
   useEffect(() => {
@@ -63,6 +67,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     if (!USDC_MINT) return;
     try {
+      const g = gen.current;
       const a = await notchAddresses();
       const who = ownerRef.current;
       const [p, l, u, sj, ss, lamports, wrj, wrs] = await Promise.all([
@@ -75,7 +80,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
         who ? fetchWithdrawRequest(who, 'junior') : Promise.resolve(null),
         who ? fetchWithdrawRequest(who, 'senior') : Promise.resolve(null),
       ]);
-      if (ownerRef.current !== who) return; // wallet changed while loading
+      if (ownerRef.current !== who || gen.current !== g) return; // wallet changed, or an optimistic patch landed, while loading
       setPool(p);
       setLine(l);
       setUsdc(u);
@@ -98,10 +103,16 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(t);
   }, [refresh, owner]);
 
+  const patch = useCallback((p: { line?: Partial<CreditLine>; usdc?: bigint }) => {
+    gen.current++;
+    if (p.line) { const upd = p.line; setLine((l) => (l ? { ...l, ...upd } : l)); }
+    if (p.usdc !== undefined) setUsdc(p.usdc < 0n ? 0n : p.usdc);
+  }, []);
+
   const session = useMemo<Session>(() => ({ eml, setEml, signed, setSigned }), [eml, signed]);
   const value = useMemo<ChainData>(
-    () => ({ addrs, configured: USDC_MINT !== null, pool, poolLoaded, line, usdc, shares, requests, loading: loadedFor !== owner, sol, error, refresh, session }),
-    [addrs, pool, poolLoaded, line, usdc, shares, requests, loadedFor, owner, sol, error, refresh, session],
+    () => ({ addrs, configured: USDC_MINT !== null, pool, poolLoaded, line, usdc, shares, requests, loading: loadedFor !== owner, sol, error, refresh, patch, session }),
+    [addrs, pool, poolLoaded, line, usdc, shares, requests, loadedFor, owner, sol, error, refresh, patch, session],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
