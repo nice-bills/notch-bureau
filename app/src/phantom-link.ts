@@ -87,6 +87,9 @@ export function signMessageInPhantom(message: Uint8Array): Promise<never> {
   return go('signMessage', { ...encryptedRequest(s, { message: b58(message), display: 'utf8' }), redirect_link: redirectLink('msg') }, { kind: 'msg', message: toB64(message) });
 }
 
+/** What this page load came back from Phantom with (screens use it to show the result, not the form). */
+export let returnedWith: Outcome['kind'] | null = null;
+
 /** On page load: read Phantom's answer from the URL (if any), store the outcome, clean the URL. */
 export function consumePhantomRedirect(): Outcome | null {
   const u = new URL(location.href);
@@ -126,6 +129,7 @@ export function consumePhantomRedirect(): Outcome | null {
     }
   }
   write(K_RESULT, out);
+  returnedWith = out.kind;
   return out;
 }
 

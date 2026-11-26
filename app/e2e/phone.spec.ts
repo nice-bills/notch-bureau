@@ -162,6 +162,7 @@ test.describe('Phone review fixes', () => {
       await page.getByRole('button', { name: 'Get started' }).click();
       const sheet = page.getByRole('dialog', { name: 'Sign in to start' });
       await expect(sheet.getByRole('menuitem', { name: /Phantom app/ })).toBeVisible();
+      await sheet.getByText('More ways to connect').click();
       await expect(sheet.getByRole('link', { name: /Open in Phantom/ })).toHaveAttribute('href', /^https:\/\/phantom\.app\/ul\/browse\//);
       await expect(sheet.getByRole('link', { name: /Open in Solflare/ })).toBeVisible();
 
@@ -220,6 +221,7 @@ test.describe('Phone review fixes', () => {
       const sheet = page.getByRole('dialog', { name: 'Sign in to start' });
       await expect(sheet.getByRole('menuitem', { name: /Wallet app on this phone/ })).toBeVisible({ timeout: 15_000 });
       await expect(sheet).toContainText('Phantom, Solflare or Seed Vault opens to approve');
+      await sheet.getByText('More ways to connect').click();
       await expect(sheet.getByRole('link', { name: /Open in Phantom/ })).toBeVisible();
     } finally {
       await context.close();

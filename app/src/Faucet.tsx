@@ -34,7 +34,7 @@ export function FaucetButton({ label = 'Get test SOL and USDC', variant = 'secon
   };
   return (
     <div className="faucet">
-      <Btn variant={variant} small onClick={() => void onTap()} busy={busy}>{label}</Btn>
+      {!msg?.ok && <Btn variant={variant} small onClick={() => void onTap()} busy={busy}>{label}</Btn>}
       {msg && (
         <p className={msg.ok ? 'help good' : 'help warn'} role={msg.ok ? 'status' : 'alert'}>
           {msg.text}{msg.sig && <> <a href={explorerTx(msg.sig)} target="_blank" rel="noreferrer">View</a></>}
@@ -48,11 +48,11 @@ export function FaucetButton({ label = 'Get test SOL and USDC', variant = 'secon
 export function NeedsTestMoney({ need }: { need: 'sol' | 'usdc' | 'both' }) {
   const { sol, usdc } = useChain();
   const filled = need === 'usdc' ? usdc > 0n : sol !== null && sol >= MIN_FEE_LAMPORTS;
-  const text = filled ? 'Test money is in your wallet.' : need === 'usdc' ? 'Your wallet has no test USDC yet.' : 'Your wallet has no devnet SOL for network fees yet.';
+  const text = need === 'usdc' ? 'Your wallet has no test USDC yet.' : 'Your wallet has no devnet SOL for network fees yet.';
   return (
     <section className="card pcard needs-money" aria-label="Test money">
-      <b>{text}</b>
-      <p className="help" style={{ margin: '4px 0 12px' }}>It’s free test money on Solana devnet, no real funds.</p>
+      {/* once it arrived, only the button's own "Sent …" line remains: one message, no second tap */}
+      {!filled && <><b>{text}</b><p className="help" style={{ margin: '4px 0 12px' }}>It’s free test money on Solana devnet, no real funds.</p></>}
       <FaucetButton variant="primary" />
     </section>
   );

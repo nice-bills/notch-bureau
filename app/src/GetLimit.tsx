@@ -3,7 +3,7 @@ import { address, getAddressEncoder } from '@solana/kit';
 import { ENCLAVE_URL, LIVE_STATUS } from './config';
 import { MIN_FEE_LAMPORTS, sendTransaction } from './chain';
 import { FaucetButton } from './Faucet';
-import { PHANTOM_LINK_NAME, takeSignedMessage } from './phantom-link';
+import { PHANTOM_LINK_NAME, takeSignedMessage, returnedWith } from './phantom-link';
 import { useChain } from './data';
 import { useWallet } from './wallet';
 import { demoDeliver, newInbox, pollRecord, recordBytes, reportPosted, signatureBytes, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
@@ -40,7 +40,8 @@ export function GetLimit() {
   const owner = connected?.address ?? null;
   const signed = session.signed;
   const posted = !!(signed && line && line.lastNonce >= BigInt(signed.nonce));
-  const [landed, setLanded] = useState(false);
+  // back from the Phantom app with the post signed: show the result, not the long form with the next step far below
+  const [landed, setLanded] = useState(() => returnedWith === 'tx');
   const fromInbox = useRef(false);
 
   const postAct = useAction(async () => { await refresh(); });

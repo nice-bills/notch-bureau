@@ -7,7 +7,7 @@ import './styles.css';
 import { App } from './App';
 import { WalletProvider } from './wallet';
 import { CHAIN_ID } from './config';
-import { isAndroid, isIOS } from './device';
+import { isAndroid, isIOS, isIOSOtherBrowser } from './device';
 import { consumePhantomRedirect, linkedAddress, registerPhantomLink } from './phantom-link';
 import { registerWalletConnect } from './walletconnect';
 
@@ -32,7 +32,8 @@ if (isIOS) {
   // and only add the deeplink wallet when no built-in Phantom showed up (or when a deeplink session already exists).
   setTimeout(() => {
     const injected = (window as unknown as { phantom?: { solana?: unknown } }).phantom?.solana;
-    if (!injected || linkedAddress()) registerPhantomLink();
+    // Not in Chrome/Firefox on iOS: Phantom would send its answer to Safari, where this tab's session does not exist.
+    if ((!injected && !isIOSOtherBrowser) || linkedAddress()) registerPhantomLink();
   }, linkedAddress() ? 0 : 350);
 }
 

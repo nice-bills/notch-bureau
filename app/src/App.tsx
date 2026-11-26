@@ -12,7 +12,7 @@ import { submitSigned } from './chain';
 import { explainError } from './errors';
 import { PHANTOM_LINK_NAME, linkedAddress, takeError, takeSignedTransaction } from './phantom-link';
 import { WC_NAME } from './walletconnect';
-import { browseLinks, isPhone } from './device';
+import { browseLinks, isIOSOtherBrowser, isPhone } from './device';
 import { FaucetButton } from './Faucet';
 // The everyday screens are in the main bundle: switching tabs must never wait for a download (on a phone through a
 // tunnel that showed as a blank screen). Only the "Try to cheat it" lab (and its crypto library) loads on demand.
@@ -142,9 +142,21 @@ function Shell() {
     // Tab to tab replaces the history entry (Back leaves the app instead of walking through every tab); opening a
     // sub-screen (limit, borrow, the lab) pushes one, so Back returns to where you were.
     const isTab = (x: Route) => TABS.some((t) => t.id === x);
+    const here = fromHash();
+    const st = history.state as { notchSub?: Route } | null;
     if (window.location.hash !== `#${r}`) {
-      if (isTab(r) && isTab(fromHash())) history.replaceState(history.state, '', `#${r}`);
-      else history.pushState(history.state, '', `#${r}`);
+      if (!isTab(here) && st?.notchSub === r) {
+        // leaving a sub-screen for the tab it was opened from: step back, so Back never lands on an old form
+        history.back();
+      } else if (isTab(r)) {
+        history.replaceState(null, '', `#${r}`);
+      } else if (isTab(here)) {
+        // a sub-screen remembers the tab it was opened from
+        history.pushState({ notchSub: here }, '', `#${r}`);
+      } else {
+        // sub-screen to sub-screen (limit -> borrow): same entry, same origin tab
+        history.replaceState({ notchSub: st?.notchSub ?? 'home' }, '', `#${r}`);
+      }
     }
     // The old screen stays painted until the new one is ready: no blank frame between them.
     startTransition(() => setRoute(r));
@@ -208,10 +220,17 @@ function PhantomReturn() {
       })
       .catch((e) => setState({ tone: 'bad', text: explainError(e).message }));
   }, [settle]);
+  // a success note floats for a few seconds; a problem stays until it is closed
+  useEffect(() => {
+    if (state?.tone !== 'good') return;
+    const t = setTimeout(() => setState(null), 8000);
+    return () => clearTimeout(t);
+  }, [state]);
   if (!state) return null;
   return (
     <div className={cx('action-status return-banner', state.tone === 'good' && 'good', state.tone === 'bad' && 'bad')} role={state.tone === 'bad' ? 'alert' : 'status'}>
       <p>{state.text}{state.sig && <> <a href={explorerTx(state.sig)} target="_blank" rel="noreferrer">View on Solana Explorer</a></>}</p>
+      <button type="button" className="x tap" aria-label="Close" onClick={() => setState(null)}><Icon name="x" /></button>
     </div>
   );
 }
@@ -310,32 +329,39 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
           </a>
         )}
       </div>
+      {isIOSOtherBrowser && (
+        <p className="note-ios" role="note">On iPhone the Phantom app answers in Safari. Open this page in Safari to use it, or use “Open in Phantom’s browser” below.</p>
+      )}
+      {/* one obvious choice above; the other ways one tap away (on a small phone the full list needed scrolling) */}
+      <details className="more" open={!wallets.length || undefined}>
+        <summary>More ways to connect</summary>
       {isPhone && (
-        <div className="stack" style={{ marginTop: 4 }} aria-label="Open in a wallet app">
-          <p className="help" style={{ margin: '8px 0 0' }}>{wallets.length ? 'Or open' : 'Open'} Notch inside your wallet’s own browser:</p>
-          {browseLinks().map((l) => (
-            <a key={l.name} className="opt-link tap" href={l.href}>
-              <Icon name="out" />
-              <span>Open in {l.name}<small>Opens Notch inside the {l.name} app’s own browser</small></span>
-            </a>
-          ))}
-        </div>
-      )}
+          <div className="stack" style={{ marginTop: 4 }} aria-label="Open in a wallet app">
+            <p className="help" style={{ margin: '4px 0 0' }}>Open Notch inside a wallet app’s own browser:</p>
+            {browseLinks().map((l) => (
+              <a key={l.name} className="opt-link tap" href={l.href}>
+                <Icon name="out" />
+                <span>Open in {l.name}’s browser<small>Notch runs inside the {l.name} app</small></span>
+              </a>
+            ))}
+          </div>
+        )}
       {POLLAR_ON ? (
-        <button type="button" className="opt tap" onClick={() => void onGoogle()} disabled={gWorking || pollar?.step === 'authenticated'}>
-          <span className="badge"><GoogleMark /></span>
-          <span className="t">
-            <b>{pollar?.step === 'authenticated' ? 'Signed in with Google' : 'Continue with Google'}</b>
-            <small>{pollar?.step === 'authenticated' ? `Pollar wallet ${pollar.solana ? shortAddr(pollar.solana) : 'is being made…'}` : 'A wallet made for you by Pollar. No seed phrase.'}</small>
-          </span>
-          {gWorking ? <span className="spinner chev" aria-hidden="true" /> : <span className="chev"><Icon name="chev" /></span>}
-        </button>
-      ) : (
-        <button type="button" className="opt" disabled aria-describedby="google-off">
-          <span className="badge"><GoogleMark /></span>
-          <span className="t"><b>Continue with Google</b><small id="google-off">Not switched on for this app yet (needs a Pollar key).</small></span>
-        </button>
-      )}
+          <button type="button" className="opt tap" onClick={() => void onGoogle()} disabled={gWorking || pollar?.step === 'authenticated'}>
+            <span className="badge"><GoogleMark /></span>
+            <span className="t">
+              <b>{pollar?.step === 'authenticated' ? 'Signed in with Google' : 'Continue with Google'}</b>
+              <small>{pollar?.step === 'authenticated' ? `Pollar wallet ${pollar.solana ? shortAddr(pollar.solana) : 'is being made…'}` : 'A wallet made for you by Pollar. No seed phrase.'}</small>
+            </span>
+            {gWorking ? <span className="spinner chev" aria-hidden="true" /> : <span className="chev"><Icon name="chev" /></span>}
+          </button>
+        ) : (
+          <button type="button" className="opt" disabled aria-describedby="google-off">
+            <span className="badge"><GoogleMark /></span>
+            <span className="t"><b>Continue with Google</b><small id="google-off">Not switched on for this app yet (needs a Pollar key).</small></span>
+          </button>
+        )}
+      </details>
       {(err || pollar?.error) && <p className="field-hint err" role="alert">{err || pollar?.error}</p>}
       {pollar?.step === 'authenticated' && (
         <p className="help">Google wallets can sign in and hold USDC today. Posting a limit, borrowing and lending still need a self-custody wallet: Pollar does not sign other programs’ transactions yet.</p>
