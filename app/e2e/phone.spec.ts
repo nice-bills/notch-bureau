@@ -145,7 +145,13 @@ test.describe('Phone review fixes', () => {
       userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1',
       baseURL: APP_URL,
     });
-    await context.route(`${new URL(RPC_URL).origin}/**`, (r) => r.continue()); // same network path as the others
+    // Same network path as the others; `drop` makes the next reads fail the way iOS Safari drops requests in flight
+    // when the user switches apps ("Load failed").
+    let drop = 0;
+    await context.route(`${new URL(RPC_URL).origin}/**`, (r) => {
+      if (drop > 0 && /getMultipleAccounts/.test(r.request().postData() ?? '')) { drop--; return r.abort('failed'); }
+      return r.continue();
+    });
     const phantom = fakePhantom(w);
     await context.route('https://phantom.app/ul/v1/**', (r) => phantom(r));
     const page = await context.newPage();
@@ -179,12 +185,16 @@ test.describe('Phone review fixes', () => {
       await page.getByRole('button', { name: 'Send a sample statement (demo)' }).click();
       await expect(page.getByRole('button', { name: 'Post my limit' })).toBeVisible({ timeout: 90_000 });
 
-      log('post: the transaction is signed in the Phantom app, sent on return');
+      log('post: the transaction is signed in the Phantom app, sent on return; the screen catches up without a reload');
+      drop = 2; // two reads fail right after the return: retried, no "Can't reach Solana" banner
       await page.getByRole('button', { name: 'Post my limit' }).click();
       await expect(page.locator('.return-banner.good')).toContainText('Done: your transaction is on Solana.', { timeout: 60_000 });
       const line = await waitFor('line posted', () => readLine(w.address), (l) => l !== null);
       expect(line!.limit).toBeGreaterThan(0n);
-      await page.goto('/#home');
+      await expect(page.getByText('Your limit is on Solana').first()).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByText('Can’t reach Solana right now')).toHaveCount(0);
+      expect(drop, 'the dropped reads happened').toBe(0);
+      await page.getByRole('button', { name: 'Start borrowing' }).click();
       await expect(page.getByTestId('available')).toBeVisible({ timeout: 30_000 });
       expect(phantom.calls).toEqual(['connect', 'connect', 'signMessage', 'signTransaction']);
       expect(errors).toEqual([]);
@@ -237,6 +247,16 @@ test.describe('Phone review fixes', () => {
       await wc.click();
       await loaded;
       log(`WalletConnect code fetched on tap (${wcCode.length} requests)`);
+      // only the tapped row spins; the others stay usable; closing the sheet clears it
+      const phantomRow = sheet.getByRole('menuitem', { name: /Phantom app/ });
+      await expect(wc).toHaveAttribute('aria-busy', 'true');
+      await expect(phantomRow).not.toHaveAttribute('aria-busy', 'true');
+      await expect(phantomRow).toBeEnabled();
+      await expect(sheet.locator('.spinner')).toHaveCount(1);
+      await page.keyboard.press('Escape');
+      await page.locator('w3m-modal').evaluate((m) => m.remove()).catch(() => {}); // AppKit's own overlay, if it opened
+      await page.getByRole('button', { name: 'Get started' }).click();
+      await expect(sheet.locator('.spinner')).toHaveCount(0);
 
       // A remembered WalletConnect session: the app reconnects on load without downloading the WalletConnect code.
       const me = '8vCHa2FTUp2Xf1Yb1pEhUUyRLrEJCGKdj77CB2uLzBE5';

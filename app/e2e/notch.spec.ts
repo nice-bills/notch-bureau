@@ -111,7 +111,8 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   const noB64 = (t: string) => t.split(String(replyJson.message)).join('').split(String(replyJson.signature)).join('');
   for (const secret of SECRETS_IN_MOMO_EMAIL) {
     for (const [where, hay] of [['visible text', pageText], ['page text', pageContent], ['page HTML', pageHtml], ['raw reply', rawText], ['network reply', networkText]] as const) {
-      expect(noB64(hay).toLowerCase().includes(secret.toLowerCase()), `"${secret}" leaked into the ${where}`).toBe(false);
+      const at = noB64(hay).toLowerCase().indexOf(secret.toLowerCase());
+      expect(at === -1, `"${secret}" leaked into the ${where}: …${noB64(hay).slice(Math.max(0, at - 80), at + 80)}…`).toBe(true);
     }
   }
   expect(await readLine(w.address)).toBeNull(); // nothing posted yet
