@@ -1,19 +1,43 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
+import { Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChainProvider, useChain } from './data';
 import { useWallet } from './wallet';
 import { getAttestation, type Attestation } from './enclave';
 import { ENCLAVE_URL, POLLAR_ON, PROGRAM_ID, explorerAddress } from './config';
 import { shortAddr } from './amount';
 import { FX_DEFS } from './art';
-import { buildLenses, startLight } from './glass';
+import { startLight, watchLenses } from './glass';
 import { Btn, GoogleMark, Icon, Sheet, cx } from './ui';
 import { googleLogin, pollarLogout, watchPollar, type PollarState } from './pollar';
 import { Home } from './Home';
-import { GetLimit } from './GetLimit';
-import { Borrow } from './Borrow';
-import { Lend } from './Lend';
-import { Pool } from './Pool';
-import { Attacks } from './Attacks';
+// Every screen but Home is its own chunk, fetched while the browser is idle after the first paint (and at the
+// latest when its tab is pressed), so the first load parses only what Home needs.
+const load = {
+  limit: () => import('./GetLimit'),
+  borrow: () => import('./Borrow'),
+  lend: () => import('./Lend'),
+  pool: () => import('./Pool'),
+  cheat: () => import('./Attacks'),
+};
+const GetLimit = lazy(() => load.limit().then((m) => ({ default: m.GetLimit })));
+const Borrow = lazy(() => load.borrow().then((m) => ({ default: m.Borrow })));
+const Lend = lazy(() => load.lend().then((m) => ({ default: m.Lend })));
+const Pool = lazy(() => load.pool().then((m) => ({ default: m.Pool })));
+const Attacks = lazy(() => load.cheat().then((m) => ({ default: m.Attacks })));
+export const prefetch = (r: string) => { if (r in load) void load[r as keyof typeof load]().catch(() => {}); };
+function prefetchAll() {
+  const go = () => Object.values(load).forEach((f) => void f().catch(() => {}));
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+  if (ric) ric(go, { timeout: 2500 }); else setTimeout(go, 1200);
+}
+function ScreenSkel() {
+  return (
+    <div aria-busy="true" style={{ padding: '24px' }}>
+      <span className="skel" style={{ display: 'block', width: '40%', height: 14 }} />
+      <span className="skel" style={{ display: 'block', width: '70%', height: 32, marginTop: 10 }} />
+      <span className="skel" style={{ display: 'block', width: '100%', height: 160, marginTop: 24, borderRadius: 28 }} />
+    </div>
+  );
+}
 
 export type Route = 'home' | 'limit' | 'borrow' | 'lend' | 'pool' | 'cheat';
 const ROUTES: Route[] = ['home', 'limit', 'borrow', 'lend', 'pool', 'cheat'];
@@ -76,7 +100,8 @@ function Shell() {
     return () => removeEventListener('hashchange', on);
   }, []);
   useEffect(() => startLight(), []);
-  useLayoutEffect(() => { requestAnimationFrame(() => buildLenses()); });
+  useEffect(() => watchLenses(), []);
+  useEffect(() => prefetchAll(), []);
   useEffect(() => { window.scrollTo({ top: 0 }); }, [route]);
 
   const loadAtt = useCallback(() => {
@@ -110,12 +135,14 @@ function Shell() {
       <a className="skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
       <div className={cx('app', !tabbed && 'no-tabs')}>
         <main id="main" tabIndex={-1} style={{ outline: 'none' }}>
-          {route === 'home' && <Home />}
-          {route === 'limit' && <GetLimit />}
-          {route === 'borrow' && <Borrow />}
-          {route === 'lend' && <Lend />}
-          {route === 'pool' && <Pool />}
-          {route === 'cheat' && <Attacks />}
+          <Suspense fallback={<ScreenSkel />}>
+            {route === 'home' && <Home />}
+            {route === 'limit' && <GetLimit />}
+            {route === 'borrow' && <Borrow />}
+            {route === 'lend' && <Lend />}
+            {route === 'pool' && <Pool />}
+            {route === 'cheat' && <Attacks />}
+          </Suspense>
         </main>
         <footer className="help" style={{ textAlign: 'center', padding: '32px 24px 0', fontSize: 12 }}>
           Solana devnet only. Test money, no real funds. Program <a className="mono" href={explorerAddress(PROGRAM_ID)} target="_blank" rel="noreferrer">{shortAddr(PROGRAM_ID, 5)}</a>
@@ -129,7 +156,10 @@ function Shell() {
 }
 
 function TabBar({ route, go }: { route: Route; go: (r: Route) => void }) {
-  const i = TABS.findIndex((t) => t.id === route);
+  const [pressed, setPressed] = useState<number | null>(null);
+  useEffect(() => setPressed(null), [route]);
+  // The pill moves on press, before the next screen has rendered: the tap answers at once.
+  const i = pressed ?? TABS.findIndex((t) => t.id === route);
   const [mini, setMini] = useState(false);
   useEffect(() => {
     let last = scrollY;
@@ -138,10 +168,12 @@ function TabBar({ route, go }: { route: Route; go: (r: Route) => void }) {
     return () => removeEventListener('scroll', on);
   }, []);
   return (
-    <nav className={cx('tabs glass lens', mini && 'mini')} aria-label="Sections" onPointerDown={() => setMini(false)}>
+    <nav className={cx('tabs glass lens', mini && 'mini')} aria-label="Sections" onPointerDown={() => setMini(false)} onPointerCancel={() => setPressed(null)}>
       <span className="lensel" style={{ transform: `translateX(${Math.max(0, i) * 100}%)` }} aria-hidden="true" />
       {TABS.map((t) => (
-        <a key={t.id} href={`#${t.id}`} aria-current={route === t.id ? 'page' : undefined} className="tap" onClick={(e) => { e.preventDefault(); go(t.id); }}>
+        <a key={t.id} href={`#${t.id}`} aria-current={route === t.id ? 'page' : undefined} className="tap"
+          onPointerDown={(e) => { if (e.button === 0) { setPressed(TABS.indexOf(t)); prefetch(t.id); } }}
+          onClick={(e) => { e.preventDefault(); go(t.id); }}>
           <Icon name={t.icon} />
           {t.label}
         </a>

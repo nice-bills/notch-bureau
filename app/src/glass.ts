@@ -2,24 +2,28 @@
 // Chromium also gets real refraction: a per-element SVG displacement map on the backdrop (`.lens` elements).
 const mq = (q: string) => typeof matchMedia !== 'undefined' && matchMedia(q).matches;
 
+// Every update rewrites three custom properties on <html>, which restyles the page and repaints every glass rim.
+// So: mouse only (a finger drag or a scroll must never pay for it), at most ~20 updates a second, and only when the
+// light actually moves a visible amount. Phone tilt is sampled the same way.
 export function startLight(): () => void {
   if (mq('(prefers-reduced-motion: reduce)')) return () => {};
   const root = document.documentElement;
-  let raf = 0, tx = 0.3, ty = 0;
-  const apply = () => {
+  let raf = 0, tx = 0.3, ty = 0, ax = -1, ay = -1, lastT = 0;
+  const apply = (t: number) => {
     raf = 0;
-    root.style.setProperty('--lx', `${(10 + tx * 80).toFixed(1)}%`);
-    root.style.setProperty('--ly', `${(-20 + ty * 60).toFixed(1)}%`);
-    root.style.setProperty('--la', `${(150 + tx * 140).toFixed(1)}deg`);
+    if (t - lastT < 50) { raf = requestAnimationFrame(apply); return; }
+    if (Math.abs(tx - ax) < 0.02 && Math.abs(ty - ay) < 0.02) return;
+    lastT = t; ax = tx; ay = ty;
+    root.style.setProperty('--lx', `${(10 + tx * 80).toFixed(0)}%`);
+    root.style.setProperty('--ly', `${(-20 + ty * 60).toFixed(0)}%`);
+    root.style.setProperty('--la', `${(150 + tx * 140).toFixed(0)}deg`);
   };
   const set = (x: number, y: number) => { tx = Math.max(0, Math.min(1, x)); ty = Math.max(0, Math.min(1, y)); if (!raf) raf = requestAnimationFrame(apply); };
-  const onMove = (e: PointerEvent) => set(e.clientX / innerWidth, e.clientY / innerHeight);
+  const onMove = (e: PointerEvent) => { if (e.pointerType === 'mouse' && !e.buttons) set(e.clientX / innerWidth, e.clientY / innerHeight); };
   const onTilt = (e: DeviceOrientationEvent) => { if (e.gamma == null || e.beta == null) return; set(0.5 + e.gamma / 60, 0.5 + (e.beta - 45) / 90); };
-  const onScroll = () => set(tx, 0.3 + (scrollY % 400) / 1000);
   addEventListener('pointermove', onMove, { passive: true });
-  addEventListener('deviceorientation', onTilt);
-  addEventListener('scroll', onScroll, { passive: true });
-  return () => { removeEventListener('pointermove', onMove); removeEventListener('deviceorientation', onTilt); removeEventListener('scroll', onScroll); };
+  addEventListener('deviceorientation', onTilt, { passive: true });
+  return () => { cancelAnimationFrame(raf); removeEventListener('pointermove', onMove); removeEventListener('deviceorientation', onTilt); };
 }
 
 const REFRACT = typeof window !== 'undefined' && !mq('(prefers-reduced-transparency: reduce)') && !mq('(prefers-contrast: more)')
@@ -49,6 +53,23 @@ export function buildLenses(scope: ParentNode = document) {
     defs.insertAdjacentHTML('beforeend', `<filter id="${id}" x="0" y="0" width="${w}" height="${h}" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceGraphic" stdDeviation="${blur}" result="b"/><feImage href="data:image/svg+xml,${encodeURIComponent(lensMap(w, h, e))}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none" result="m"/><feDisplacementMap in="b" in2="m" scale="${scale}" xChannelSelector="R" yChannelSelector="G" result="d"/><feColorMatrix in="d" type="saturate" values="1.9"/></filter>`);
     el.style.backdropFilter = `url(#${id})`;
   });
+}
+
+/** Build lenses now, then again only when a `.lens` element is added or the window is resized. */
+export function watchLenses(): () => void {
+  if (!REFRACT) return () => {};
+  let raf = 0;
+  const run = () => { raf = 0; buildLenses(); };
+  const soon = () => { if (!raf) raf = requestAnimationFrame(run); };
+  const mo = new MutationObserver((recs) => {
+    for (const r of recs) for (const n of r.addedNodes) {
+      if (n instanceof Element && (n.classList.contains('lens') || n.querySelector('.lens'))) { soon(); return; }
+    }
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+  addEventListener('resize', soon, { passive: true });
+  soon();
+  return () => { mo.disconnect(); removeEventListener('resize', soon); cancelAnimationFrame(raf); };
 }
 
 export const buzz = (ms = 8) => { try { navigator.vibrate?.(ms); } catch { /* not supported */ } };
