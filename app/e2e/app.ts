@@ -56,22 +56,27 @@ export async function openSession(browser: Browser, wallet: TestWallet, opts: { 
   return { context, page, wallet, pageErrors, close: async () => { await context.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {}); await context.close(); } };
 }
 
-export async function openTab(page: Page, tab: 'borrow' | 'lend' | 'book' | 'attack') {
-  const label = { borrow: 'Borrow', lend: 'Lend', book: 'Loan book', attack: 'Try to cheat it' }[tab];
-  await page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name: label, exact: true }).click();
-  await expect(page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name: label, exact: true })).toHaveAttribute('aria-current', 'page');
+export async function openTab(page: Page, tab: 'home' | 'lend' | 'pool') {
+  const label = { home: 'Home', lend: 'Lend', pool: 'Pool' }[tab];
+  const link = page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name: label, exact: true });
+  await link.click();
+  await expect(link).toHaveAttribute('aria-current', 'page');
 }
 
-/** Open the picker, check the test wallet is listed like Phantom would be, pick it, wait until connected. */
+/** Open the sign-in sheet, check the test wallet is listed like Phantom would be, pick it, wait until connected. */
 export async function connectWallet(page: Page, wallet: TestWallet) {
-  await page.locator('header').getByRole('button', { name: 'Connect wallet' }).click();
-  const item = page.getByRole('menuitem', { name: WALLET_NAME });
+  const open = page.getByRole('button', { name: /^(Connect wallet|Get started)$/ }).first();
+  await open.click();
+  const sheet = page.getByRole('dialog', { name: 'Sign in to start' });
+  await expect(sheet).toBeVisible();
+  const item = sheet.getByRole('menuitem', { name: new RegExp(WALLET_NAME) });
   await expect(item).toBeVisible();
   await expect(item.locator('img')).toHaveAttribute('src', /^data:image\/svg\+xml/);
   await item.click();
-  const pill = page.locator('header .wallet-pill');
+  await expect(sheet).toBeHidden();
+  const pill = page.locator('.wallet-pill');
   await expect(pill).toBeVisible();
-  await expect(pill).toContainText(`${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}`);
+  await expect(pill).toHaveAccessibleName(`Your wallet ${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}`);
 }
 
 /** The stat tile with this label, inside `scope`. */
@@ -79,8 +84,18 @@ export function stat(scope: Page | Locator, label: string) {
   return scope.locator(`.stat:has(dt:text-is(${JSON.stringify(label)}))`);
 }
 
-/** A step card (Borrow screen) by its heading. */
-export const stepCard = (page: Page, title: string | RegExp) => page.locator('section.step').filter({ has: page.getByRole('heading', { name: title }) });
+/** Drag the slide-to-borrow knob all the way, like a finger would. */
+export async function slide(page: Page, knob: Locator) {
+  await expect(knob).toBeEnabled();
+  const k = (await knob.boundingBox())!;
+  const track = (await knob.locator('xpath=..').boundingBox())!;
+  const y = k.y + k.height / 2;
+  await page.mouse.move(k.x + k.width / 2, y);
+  await page.mouse.down();
+  const end = track.x + track.width - k.width / 2;
+  for (let i = 1; i <= 12; i++) await page.mouse.move(k.x + k.width / 2 + ((end - k.x - k.width / 2) * i) / 12, y);
+  await page.mouse.up();
+}
 
 /** Plain independent money formatting: micro-USDC -> "1,234.50" (cut to 2 decimals, like the app). */
 export function usd2(micro: bigint): string {

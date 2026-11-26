@@ -1,116 +1,127 @@
 $ node scripts/e2e-devnet.mjs
 program     4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz
 mint        8w1jur5oikV5aax7Q8eTSZwfZwVvFQDTknMTREJ75NNS
-admin       BEEwhev4xcmigv7qKxczMQUTsDkz5mcY3f4gKRCijEP6  (2.07900524 SOL)
+admin       BEEwhev4xcmigv7qKxczMQUTsDkz5mcY3f4gKRCijEP6  (6.47520204 SOL)
 rpc         https://api.devnet.solana.com
-underwriter AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2  (in-process, http://127.0.0.1:43475)
-demo enclave at http://localhost:8787: same underwriter key
-borrower    6pp2B54yBVh6EHU58mvWR1t7Rn4AB1scDmCMTLRkPBM9
-lender      Du8sM3YnWSSJYDRjJEazsrnYHQ5EKF21rizgjcKkiyZw
+underwriter AhpM7kmkAJB2i9vUe9rxmi5kBC94QTcAHXMzX92pP5A2  (in-process, http://127.0.0.1:42967)
+demo enclave at http://localhost:8787: not reachable (not needed for this run)
+borrower    CmS8xbyHHorLDBb9r8EqprTjJ2GVnWrdnpcn7jBiDay1
+lender      BuMYXn8ZL4jJcMCWitm6qZu4eG5ZB6BtcuE7cokUe4h1
 
 === 1. Fund a fresh borrower (SOL + test USDC)
   tx  ok      admin -> borrower 0.05 SOL, lender 0.01 SOL
-      https://explorer.solana.com/tx/5fhrEfHvq5JJnx14LiwuUcUeCKvWZJnY7qxNEzYmFc9D62RJaSRyM5v3fJ3nN1fg8TmNKxhtM1XFz3cffL3vqGPg?cluster=devnet
+      https://explorer.solana.com/tx/4Z3phRkyuViZVUHt2WByrtuPCtEBV6UyFcqjTHKcJEKk2eWzftm1VqNRkfjtUKgx8VoK74iYZF79TWGziqxBrHH7?cluster=devnet
   tx  ok      mint test USDC to borrower (20) and lender (5)
-      https://explorer.solana.com/tx/62qfMa9ko5tSUfEhvPekpobeo6KVdBBYR2tXMrugCVZ8upeUaQXHRfEkocC1dHK1EpXyg3JVtumEq2jJn8qv1TDR?cluster=devnet
+      https://explorer.solana.com/tx/4TsvTnf1vMTF7ZipfGtiowzZYq21EyyjHn3mPctBGbmPWCmk54yzcNzoXgoAPZeYebFSGCiDHq3xFihyH7LENPLk?cluster=devnet
   PASS  borrower has ~0.05 SOL  (50000000 lamports)
   PASS  borrower has 20 test USDC
 
 === 2. Underwriter: demo .eml -> signed record
-  PASS  underwriter accepted the email (HTTP 200, ok:true)  ({"ok":true,"extraction":"rules","limitUsdc":50,"expiry":1797939132,"nonce":"1795347132084","message":"Tk9UQ0h2MQBWieYLIe)
-  PASS  record is 96 bytes and signature is 64 bytes
+  PASS  underwriter accepted the email (HTTP 200, ok:true)  ({"ok":true,"extraction":"rules","limitUsdc":50,"expiry":1798039758,"nonce":"1795447758214","message":"Tk9UQ0h2MgCu0ojXIt)
+  PASS  record is 128 bytes (NOTCHv2) and signature is 64 bytes
+  PASS  Deel email carries no identity (id_hash is all zeros)
   PASS  record limit matches reply limitUsdc  (50 USDC)
   PASS  record is for the borrower wallet and the signature verifies off-chain
 
 === 3. post_limit (before that: record attacks that must be refused)
   tx  REFUSED  ATTACK post_limit signed by a different key
-      https://explorer.solana.com/tx/3WeFNzWc7uAEPaNNWkQB7E8NRfJ1GkeyqgoGbL3wxW4VDUk9nsgELzhwPuw8sqnq52R62Kg3dcnKHsrSgo7KMFvG?cluster=devnet
+      https://explorer.solana.com/tx/2xRvCQpE8JkrmzTQEoWg3XNGNVSeEuHrqe9echLxvGDNzHvah35GsJikMCUbzCBHzmYVtpdmJYg1KvQgRUcjkQDY?cluster=devnet
   PASS  record signed by a different key -> WrongUnderwriter  (got WrongUnderwriter / code 6003, want WrongUnderwriter / 6003)
   tx  REFUSED  ATTACK post_limit with a record that was not signed
-      https://explorer.solana.com/tx/FstJegUTktLujew3RAyGxxQva1sHA4UY6yjk6TDitr2cDjAdu4sfYWuhJbFCfhKrUFKWyPgMaZVXb7bteoKJ5hb?cluster=devnet
+      https://explorer.solana.com/tx/336hocYkUhun89DqFRziPVoGF7m41Uf1s2u4w2LgmDZi3RY6wT7xNsuLodnDserSuEhTEoHZTcYKCpmLREpMyrCB?cluster=devnet
   PASS  record differs from the signed one (limit x100) -> RecordMismatch  (got RecordMismatch / code 6004, want RecordMismatch / 6004)
   PASS  failed attacks left no credit line behind
   tx  ok      post_limit (Ed25519 verify + post_limit)
-      https://explorer.solana.com/tx/5Xsoc1fd7L5NvKzLxSedyYUTrwFRfEwrkuEqjStm4Z6WRhz3te5mfgkF32h3hVUiqP6KjzETJyrmqaJV1JDTj5CB?cluster=devnet
+      https://explorer.solana.com/tx/48fHiegMF5rM4LXj2gjfQJH4jbzbRgwEXtZECNzZR42QCDZmJDvX24UGZ9GFLo1jp895j6QsmYCqKiWg4b4JRmrD?cluster=devnet
   PASS  CreditLine.wallet is the borrower
   PASS  CreditLine.limit == 50 USDC  (50)
   PASS  CreditLine.expiry == record expiry
   PASS  CreditLine.lastNonce == record nonce
   PASS  fresh line: drawn 0, deposit 0, no history
   tx  REFUSED  ATTACK post_limit replayed (same email / dedupe hash)
-      https://explorer.solana.com/tx/2qj4eSBEa23JgdRq6dazc6iS1QWvMUK3TA6mpMkzyn933qLxNF8GCesMcN9yfmZERgYz9wM64sM1WPjaJBqLkxG5?cluster=devnet
+      https://explorer.solana.com/tx/3WgXiUehQzmgmxy2qTVeHtDQB5cKkEPsCftPLgjMjvywek9V5SXfUsyhRcHuFon4Mt8XTEtGsrRzij7ZbnZ5f3wU?cluster=devnet
   PASS  reused email -> refused (dedupe account already in use)  ({"InstructionError":["1",{"Custom":"0"}]})
 
 === 4. deposit 20% -> draw -> repay -> deposit back -> withdraw_borrower
   tx  REFUSED  ATTACK draw limit + 1 micro-USDC
-      https://explorer.solana.com/tx/qpmRvLShDJsiLiQXfuw3XdnNdmTc5trUuG8pqmgknPhpqXFdrnjMhejHGBVgwRvm5hFqKXmPnhvEXUxTZk3ci4W?cluster=devnet
+      https://explorer.solana.com/tx/3Ew8GhrMJTGBZ6uoPAVcDoyv2SjejVLJ9sgGjvvK7feTxpBV6pAm2pXvSu33wj8QprNNdKYL7A45Z9JbEMoLs4s8?cluster=devnet
   PASS  draw 50 + 0.000001 USDC (over limit) -> OverLimit  (got OverLimit / code 6009, want OverLimit / 6009)
   tx  REFUSED  ATTACK draw with no deposit
-      https://explorer.solana.com/tx/2NTD9AkKceGRE1oQB21y466Dg4yAAQy7Bm9K1ED3yNGVkaVVczTnAwdnmjmm3FxMpV6i5X44mjoDmdADmi5srPLR?cluster=devnet
+      https://explorer.solana.com/tx/2NkbXb5BsoUYNDzwgdTHQGK1oHq1iHCkgVUmQC5pdmd56egZjXUKnUvKsNr76a8jH3nfcEc9oS3biQYnQ58LVunP?cluster=devnet
   PASS  draw 10 USDC with no first-loss deposit -> InsufficientDeposit  (got InsufficientDeposit / code 6014, want InsufficientDeposit / 6014)
   tx  ok      deposit_borrower 20% minus 1 micro-USDC
-      https://explorer.solana.com/tx/2qKNkpE3BEgoRK93F9HhTKkS994rFPLZAmB9GUAEisYfNXGqKrBMnd4VCJ1FM6QuUn4pgykP3FF75JJ4E3MK5sk2?cluster=devnet
+      https://explorer.solana.com/tx/4pqbJWBBhXAGQctULwSiTJPMdChmDtajucgjAKP5wWE6VwGexKaukvahKLFRasMipgq9jNnV1QZPYv4TJm3kUb3e?cluster=devnet
   tx  REFUSED  ATTACK draw with deposit 1 micro-USDC short
-      https://explorer.solana.com/tx/32gL8QHyBMfRzP2nSNEXHEweMDGNuQjphyr7LSbEehVwJrJFMULV3b6C9oXRCTgAD6Adw55DCbtiYX4XU4iojzjw?cluster=devnet
+      https://explorer.solana.com/tx/3SFKBPcFGkyJHY9hMfhcjjBjauUCSfpdbsrzBmbhQF5R1kE2t6fGme94pWseyhQV3zZpFzkneLQkv18yY2RoJ3Lh?cluster=devnet
   PASS  draw with a deposit that is 1 micro-USDC short of 20% -> InsufficientDeposit  (got InsufficientDeposit / code 6014, want InsufficientDeposit / 6014)
   tx  ok      deposit_borrower top-up to exactly 20%
-      https://explorer.solana.com/tx/4TwyiaZz4ggtWvzHLCGrbezKVdw37AFKjyQ9HyjEzDuKsVSGQ99NdYTuDRNkXrLtqnyw7iRCaaTB5iCRoMeTfQcu?cluster=devnet
+      https://explorer.solana.com/tx/4UKN8jsdMHgnGdMcJCd8mHWG7oEvnr8FugZNzyC2J3Byj6jKbNsnGh2bDeqHZ4LYvMnEYnaxjd8aPxZmABGB4Uu4?cluster=devnet
   PASS  line.deposit == 2 USDC (20% of 10)  (2)
   PASS  pool.borrowerDeposits grew by the deposit
   PASS  borrower USDC = 20 - deposit
   tx  ok      draw 10 USDC
-      https://explorer.solana.com/tx/qkyHL1PwZ9rv5JNu2HLh4NNd86RXfm5wuqDciMVESmUgTLk5Ei1CqSjKQ7N7sQsq53fVdPdgLCVYL1QVSXxsmWD?cluster=devnet
+      https://explorer.solana.com/tx/YYrskDMT3MLjMygjCdeCdVdvYQUejk9tEvn22hEbGno17FA437znPcwjX1dvuhvGHZadYPgRHA3Ei2Fib1tGzC5?cluster=devnet
   PASS  line.drawn == 10
   PASS  line.due is ~30 days out
   PASS  borrower USDC = 20 - deposit + draw
   PASS  pool.outstanding +draw, pool.idle -draw, totalLent +draw
   tx  REFUSED  ATTACK withdraw_borrower while a balance is outstanding
-      https://explorer.solana.com/tx/5jYGkpBMcHP5uczy5mGX7Wv8fAhVxTXs2uX3FERhfQPajnwTgb5uGmmoHomYkmPS7cPPHAaumCFqn3nsMAsXQscX?cluster=devnet
+      https://explorer.solana.com/tx/4DCkFrg4Y9rgNGPqM6B6ghTgyMnC5VL2Je36bLtUFpP46tUUzWhy4h25yLkapjqrNeKYwcpifaYZmovokTDZdyqn?cluster=devnet
   PASS  withdraw deposit with a balance outstanding -> BalanceOutstanding  (got BalanceOutstanding / code 6018, want BalanceOutstanding / 6018)
   tx  REFUSED  ATTACK mark_default on a loan that is not overdue
-      https://explorer.solana.com/tx/5sBPuSoy3GtnJrNmCvLgqs3nAneWzrbSXnLZ26LvyAeydBcmoA99MDFAn1TiJ138FwWPnLhtJosNvoLA6aSqDdfc?cluster=devnet
+      https://explorer.solana.com/tx/612wBCcTgFpd72LdTDayyiAdmFS1o1fQT4LXZmnHWachtRRAovzTEygwWv2ABCXVG3M9gT8ARxBCeEacA1nUL7Dt?cluster=devnet
   PASS  mark_default before the due date (called by a third wallet) -> NotPastDue  (got NotPastDue / code 6011, want NotPastDue / 6011)
   tx  REFUSED  ATTACK repay principal only (no fee)
-      https://explorer.solana.com/tx/34oQuKerKFZeo3i4maEQxcjBTUBGHFoFyf3sNMHDvq6yvEm7spQAJnt2wazCAz2wXKmE5hZ3JDQtcLGeAVt79xB?cluster=devnet
+      https://explorer.solana.com/tx/4MNnztRrSucb6wV6TDSVGPAHR7TEYAsEnuXniTb1U96F9bBcYWCwUj9zzBQuX7tZpkihpUAPfMHM16J5s5WwFZDV?cluster=devnet
   PASS  repay 10 (principal only, fee 0.2 missing) -> FeeRequired  (got FeeRequired / code 6015, want FeeRequired / 6015)
   tx  REFUSED  ATTACK repay 1 micro-USDC short of principal + fee
-      https://explorer.solana.com/tx/5vBUAJKcXHExwjRNfNio9fbPZGsbJBLQirT9fxpZPX15WVRx63QkDNNJuVXcC2URKVaHBKuto2rw9rHGHR71nG5z?cluster=devnet
+      https://explorer.solana.com/tx/2aX8AdP22kxhTqEAEdrubzuude9vXEdpLs8TCybw8T6AbSAJe2T29D6ZxJsZ1dWhvtjtwPaHrnqJeQBsRo9aQfxG?cluster=devnet
   PASS  repay 1 micro-USDC short of principal + fee -> FeeRequired  (got FeeRequired / code 6015, want FeeRequired / 6015)
   tx  ok      repay 10.2 USDC (principal + ceil 2% fee)
-      https://explorer.solana.com/tx/5Jc9rT5WwxeU4pPfodELMYzbRMhopo6waKmb196TQgjunTUojf2McK3NqQAezkoDp5R9JyLYpHgucb57oHDuoNvd?cluster=devnet
+      https://explorer.solana.com/tx/2rBo83e9mADDTu5TaqRGkmdybqAkiBwxXvArnWmtarCy6MuPZ2b1yxnSosyXhb53hx4fmMDmw6cNQNp8cC5XppGN?cluster=devnet
   PASS  line.drawn == 0 after repay
   PASS  on-time counter +1  (onTime 1, late 0)
   PASS  deposit returned in the same instruction (line.deposit == 0)
   PASS  borrower USDC change = -(payoff) + deposit returned  (28 -> 19.8)
   PASS  borrower ended at 20 - fee  (19.8)
   PASS  pool.outstanding back, fees +fee, idle +payoff, deposits -deposit
-  PASS  vault token balance == pool.idle + pool.borrowerDeposits (no stray tokens, no missing tokens)  (1000600002 vs 1000600002)
+  PASS  vault token balance == pool.idle + pool.borrowerDeposits (no stray tokens, no missing tokens)  (1046040003 vs 1046040003)
   tx  REFUSED  ATTACK withdraw_borrower with nothing deposited
-      https://explorer.solana.com/tx/2e3yxjMnWbNuG3gPV48t6EuZ9oQgdvFhfrDrnfuMSgp7Jr1ygYRLVavvoisPjpAhx2ZbCiZVin3Kkq6Q6ZqsWKFp?cluster=devnet
+      https://explorer.solana.com/tx/65F4mYq6mG8F7xZwk1KmaoKQckVj4reMdePGPV9Mz2ryDSYetSpaWJvmWS2Yx5owo2xr5AxHAM5bryMGjqPkqFC?cluster=devnet
   PASS  withdraw_borrower with an empty deposit -> InvalidAmount  (got InvalidAmount / code 6012, want InvalidAmount / 6012)
   tx  ok      deposit_borrower 1 USDC (no balance out)
-      https://explorer.solana.com/tx/2xEKxnNt2rNV3euNz7W3PJzHTYGkbvsjWeTTx9JP6eAFfMf9fWnGsTFGnN7cxq3DmBGk7vf5Up62eYtd8Dov6TcK?cluster=devnet
+      https://explorer.solana.com/tx/58uBmGP6NyMHMTPRYQ1ps2gU6utCA251AuL4Lb2mAXKGXAaVtFQr3aTR9c2kvs245eFStuDTSfrccUUBQSn2phve?cluster=devnet
   PASS  deposit is withdrawable: line.deposit == 1 USDC
   tx  ok      withdraw_borrower
-      https://explorer.solana.com/tx/4q8G5XZbHtdgKAtArXDQ64EbsgkNgmYP1y4MXNHfNZb2Uto1GN6AByHiunZtNQKmVEwEMnqRnecFh4t3agSj2uqn?cluster=devnet
+      https://explorer.solana.com/tx/4n91Q1AuMe6hyYDuKL6yvXLwwFVyRJbKMcAVV2K5C5Cyvb5qVLbdn5hnxkdAN5dg6ndHm4j4rbEm6TsknMfygfpt?cluster=devnet
   PASS  withdraw_borrower returned the 1 USDC and zeroed line.deposit
 
-=== 5. Lender: second fresh wallet deposits and withdraws (share maths vs PoolStats)
+=== 5. Lender: second fresh wallet deposits, requests a withdrawal, is refused early, cancels
   tx  ok      lender deposit 5 USDC
-      https://explorer.solana.com/tx/3dYvqNTCoehajMUzQUzzJhkm2fQiPMbxhg1oYQoAegEzDdyR2awKcfZiaWxeoyDRtarfJksL4oxhn8yGZZKt9fcB?cluster=devnet
-  PASS  shares minted == floor(amount*supply/assets) = 4997001  (expected 4997001 (supply 1000000000, assets 1000600002))
+      https://explorer.solana.com/tx/W49u877mtrtdAoNkmNaKaujjfy3fm16KHarKoxqweZVxJqDrRudCvo4D9a96Jp8ckbe5MdvSFE1YjGcRPQ95FTj?cluster=devnet
+  PASS  shares minted == floor(amount*supply/assets) = 4986159  (expected 4986159 (supply 1059897910, assets 1062840003))
   PASS  share supply grew by the minted shares
   PASS  pool.idle grew by the deposit
   PASS  lender USDC is 0 after depositing
-  PASS  vault token balance == pool.idle + pool.borrowerDeposits after the deposit  (1005600002 vs 1005600002)
-  tx  ok      lender withdraw 4997001 shares
-      https://explorer.solana.com/tx/4798o8QnTNr4HCcRaXBxDPmyS9AhiAEDeAQ6yykPPbpJzz3N5m5k465ZmrjsaBcuekrLurxTEEExuXbSpcDYezj8?cluster=devnet
-  PASS  USDC out == floor(shares*assets/supply) = 4.999999  (got 4.999999)
-  PASS  lender never gets more than deposited (floor rounding, no inflation)  (5 in, 4.999999 out)
-  PASS  share supply back to where it started
-  PASS  pool.idle shrank by the payout
-  PASS  lender share balance is 0
-  PASS  vault token balance == pool.idle + pool.borrowerDeposits after the withdraw  (1000600003 vs 1000600003)
+  PASS  vault token balance == pool.idle + pool.borrowerDeposits after the deposit  (1051040003 vs 1051040003)
+  tx  ok      lender request_withdraw 4986159 shares
+      https://explorer.solana.com/tx/2mZDBNRJLz3pEFKFtC2uobZDMpNi6SmosZTkcKecUCXZWWaDjdN4xcWRHzMojsUWsA5xw5vFb79bfzjhgan6xKfZ?cluster=devnet
+  PASS  request records the lender, the shares and an unlock time
+  PASS  unlock_ts is ~3 days out  (1795707011)
+  PASS  lender wallet holds 0 shares, escrow holds them all
+  PASS  share supply is unchanged while shares sit in escrow
+  PASS  pool accounting untouched by the request (idle, outstanding)
+  tx  REFUSED  lender claim_withdraw before the cooldown (must be refused)
+      https://explorer.solana.com/tx/4qX8ajhbC9826mzrJiZMKjkZbkqiA6WaJS6rMLA89GLYiF2GxAoeEnf2npdeDhDRChuF38tTMY3YyBaV5y15dRfg?cluster=devnet
+  PASS  claim before the cooldown -> CooldownActive  (got CooldownActive / code 6020, want CooldownActive / 6020)
+  PASS  nothing was paid by the refused claim
+  tx  ok      lender cancel_withdraw
+      https://explorer.solana.com/tx/3m9X524CWhj2HdH1LFYe57t3sMkn1AAPXkcGrx4zGNRnv8hax56faEaRy1LrR5QUdXG6CTf4vxvmr9N6YeDdyWD1?cluster=devnet
+  PASS  cancel returned every share to the lender
+  PASS  escrow and request accounts are closed
+  PASS  share supply and pool.idle are back to the post-deposit values
+  PASS  vault token balance == pool.idle + pool.borrowerDeposits after cancel  (1051040003 vs 1051040003)
+  note  the lender's 4986159 shares stay in the devnet pool (the claim needs a 3 day wait)
 
 === 7. Underwriter attacks: edited email, same email twice
   PASS  edited email (amount changed after signing) is rejected: DKIM failure  ({"ok":false,"reason":"no passing DKIM signature (deel.com:neutral)"})
@@ -122,73 +133,147 @@ lender      Du8sM3YnWSSJYDRjJEazsrnYHQ5EKF21rizgjcKkiyZw
 === 8. Underwriter reply leaks no income or source fields
   PASS  reply keys are exactly ok, extraction, limitUsdc, expiry, nonce, message, signature  (expiry,extraction,limitUsdc,message,nonce,ok,signature)
   PASS  reply text has no income / sender / amount words
-  PASS  message is the 96-byte record (nothing else rides along)
+  PASS  message is the 128-byte record (nothing else rides along)
   PASS  only the limit bucket leaks: limitUsdc is a number, extraction is "rules" or "llm"
-  PASS  same key set for a different provider email (momo)
+  PASS  same key set for a different provider email (MoMo statement)
+
+=== 9. MTN MoMo statement PDF + identity binding + Superteam Earn (real HTTP underwriter, real devnet program)
+  tx  ok      admin -> step-9 wallets 0.02 SOL each
+      https://explorer.solana.com/tx/63X3LZ4wKz28yGFYyoGPGHSiBPY4Y5vHsb9D5SEtawurLYvxXm95GRDZ1BERRmUESmfbT8SjkZBzMJzmfb9Lkst7?cluster=devnet
+  PASS  MoMo statement PDF accepted by the HTTP underwriter  ({"ok":true,"extraction":"rules","limitUsdc":26.32,"expiry":1798039824,"nonce":"1795447824129","message":"Tk9UQ0h2MgAbqUIH41dZkkTe3LXVBhc/61p)
+  PASS  limit is built from the 3 credit rows only (debits, fees, airtime, balances ignored)  (26.32)
+  PASS  record is 128 bytes and carries id_hash = sha256("notch-msisdn"|number)
+  PASS  no raw phone number in the reply or the record
+  tx  REFUSED  ATTACK post_limit with an id_hash but the identity account left out
+      https://explorer.solana.com/tx/2v4Li8K1bEbruV5JTkN44iZ7va5LxQQaoMWhwwZ1C8smd2AX7kA616dmzibaNg4X2KAPy14gUmVRjNVbWpaajeQe?cluster=devnet
+  PASS  identity account omitted for an id_hash record -> IdentityRequired  (got IdentityRequired / code 6022, want IdentityRequired / 6022)
+  tx  REFUSED  ATTACK post_limit with a different identity account
+      https://explorer.solana.com/tx/37vAC3epWBUFhBHimjuS153X1GeVNeYdyZ6M77TTSdpSHqMf6R6bD8zSkWxZYdGa7o2r8d5izL3yMPjmj1rrjLYW?cluster=devnet
+  PASS  wrong identity account -> ConstraintSeeds (2006)  ({"name":"ConstraintSeeds","code":2006})
+  tx  ok      post_limit with identity (MoMo statement)
+      https://explorer.solana.com/tx/4J6dcZiqP7KDLfy6EZNkrKgDUEEmBKZH65ca1BYG5QSEavVDpjHXw9oLyjBLxxBhcm3r3wTz7irAs6hzMCjhmsjP?cluster=devnet
+  PASS  IdentityLink account exists and stores the wallet (not the number)
+  PASS  CreditLine limit == the statement limit
+  PASS  enclave refuses the same MoMo number for a second wallet  ({"ok":false,"reason":"this mobile-money account is already linked to a different wallet"})
+  PASS  the refusal leaks no number
+  tx  REFUSED  ATTACK post_limit: same identity, second wallet (signed by the real underwriter key)
+      https://explorer.solana.com/tx/n6YmsEHkmyH9gJcKRFXYEtU3vPU18VPUyCWHgH99ALU4FHKjxHcYnJdkeo7qRRkMG4GijXLSThynckHJE26kySG?cluster=devnet
+  PASS  second wallet presents the same id_hash -> IdentityBound  (got IdentityBound / code 6021, want IdentityBound / 6021)
+  PASS  the refused post left no credit line for the second wallet
+  PASS  a newer statement for the same wallet is accepted  ({"ok":true,"extraction":"rules","limitUsdc":36.07,"expiry":1798039838,"nonce":"1795447838638","message":"Tk9UQ0h2MgAbqUIH41dZkkTe3LXVBhc/61p)
+  PASS  only the new row was added (no double count of repeated rows)  (36.07)
+  tx  ok      post_limit again for the same wallet + identity
+      https://explorer.solana.com/tx/5tQFf7pHgkHqFCqLFRucXoZkTfmV2M6ARzwEvsx9fF3YBAUks1aGed16VPHca8s5h117csfkhVAd3qx2LRei7FNo?cluster=devnet
+  PASS  CreditLine limit rose to the new limit
+  PASS  a statement with only already-counted rows is refused  ({"ok":false,"reason":"no new income in this statement: every credit in it was already counted"})
+  PASS  password-protected PDF refused with a clear reason  ({"ok":false,"reason":"the statement PDF is password-protected; request an unprotected statement (or remove the password) and send it again"})
+  PASS  injection text in memos / names is ignored: only the one real 120 GHS credit counts  ({"ok":true,"extraction":"rules","limitUsdc":0.78,"expiry":1798039841,"nonce":"1795447841134","message":"Tk9UQ0h2MgAMMkbnjHXJql63LikHH7bMW3MZ)
+  PASS  a statement with only debit rows has no income  ({"ok":false,"reason":"no income found in email"})
+  PASS  Earn email without any transfer to the wallet is refused  ({"ok":false,"reason":"no matching USDC transfer to your wallet within 7 days of this email"})
+  tx  ok      admin mints 120 test USDC to itself, then pays the earner 120 USDC (real SPL transfer)
+      https://explorer.solana.com/tx/AKEF8hxFM9wejKw35DtiR9mf1ngptUbGfhb5R8gdfuJ8tLQXbQALKtAwPGqpvgbMJGbvZjqXMjsfokv5c1Tv4TK?cluster=devnet
+  PASS  earner holds the 120 USDC on chain
+  PASS  Earn email naming 500 USDC when 120 arrived is refused  ({"ok":false,"reason":"no matching USDC transfer to your wallet within 7 days of this email"})
+  PASS  the same email from a wallet that received nothing is refused  ({"ok":false,"reason":"no matching USDC transfer to your wallet within 7 days of this email"})
+  PASS  Earn email + matching on-chain USDC transfer accepted  ({"ok":true,"extraction":"rules","limitUsdc":12,"expiry":1798039847,"nonce":"1795447847477","message":"Tk9UQ0h2MgBVq7puh9YnlS6dE4S3rN7XQd0rCk)
+  PASS  Earn record: for the earner wallet, 12 USDC limit (120 USDC / 3 months * 30%), no identity  (12)
+  tx  ok      post_limit for the Earn payout (relayed by admin, no identity account)
+      https://explorer.solana.com/tx/2M1E7dMyTaZ1uf8JiDti1tADNpM4RFB2T9B7ntRWzjSaZ7PxR3eLiDe2hyj3v6CMPJVF46dMXyt59xFSkgurt6su?cluster=devnet
+  PASS  CreditLine for the earner exists with the Earn limit
+  PASS  the same on-chain transfer cannot back a second Earn email  ({"ok":false,"reason":"no matching USDC transfer to your wallet within 7 days of this email"})
   tx  ok      sweep 0.0480104 SOL back to admin
-      https://explorer.solana.com/tx/2tCupAsLRRAaPXLWvyTgbSrhymgnssBomP8ogE7yqXAP8qjdxL8UAQynGnPJeQ2c2T13wQnnYEJuNDb2pr3mJ97a?cluster=devnet
-  tx  ok      sweep 0.00849156 SOL back to admin
-      https://explorer.solana.com/tx/4URCJXsbMJCh9TsVhFDB3PVM9hLRxQjMEYEezdxv7DoPXYQE6jAXXk9uAB62AS94t1ptT9vb4jjtkZqTMXEsKGs6?cluster=devnet
+      https://explorer.solana.com/tx/4jZDXFRwMwfsNFcTz8ZK23qvYEZ2wrKcSCBDC9Mt7ngD5SLKYi3bpEKwmkPoj4sdznLPh98wjLU1U2jY7kHSZPez?cluster=devnet
+  tx  ok      sweep 0.00848156 SOL back to admin
+      https://explorer.solana.com/tx/3KpVtxaiguBYnZq7UVrh4kc5oYZw12Mj7oYLjYMDdAEQZuKqvZ5nyMvzAgfWPJx1z1xfbsv5GayfJ1rsN3e8RkMW?cluster=devnet
+  tx  ok      sweep 0.01648536 SOL back to admin
+      https://explorer.solana.com/tx/4tsvRTVw4T9aZ4ZRkDrTDb6EqmsSMjyweqKNYJadS2DWfuM1ixzuaKnqWQYMbbJFm5raBb8Xkpc7UKG6ZJJ1zGmi?cluster=devnet
+  tx  ok      sweep 0.019985 SOL back to admin
+      https://explorer.solana.com/tx/41rkoEc28ae6hHQAQ1Wdh1bwFi5yjvqiEm1WAeqdjTKE879a2B7qc9EQS6CBMLCXcRppZvGUAeTZjEBog8DhjX5M?cluster=devnet
 
 ================ SUMMARY ================
 step 1: PASS  (2/2)
-step 2: PASS  (4/4)
+step 2: PASS  (5/5)
 step 3: PASS  (9/9)
 step 4: PASS  (24/24)
-step 5: PASS  (11/11)
+step 5: PASS  (16/16)
 step 7: PASS  (5/5)
 step 8: PASS  (5/5)
+step 9: PASS  (27/27)
 
-transactions (24):
+transactions (36):
   ok      admin -> borrower 0.05 SOL, lender 0.01 SOL
-         https://explorer.solana.com/tx/5fhrEfHvq5JJnx14LiwuUcUeCKvWZJnY7qxNEzYmFc9D62RJaSRyM5v3fJ3nN1fg8TmNKxhtM1XFz3cffL3vqGPg?cluster=devnet
+         https://explorer.solana.com/tx/4Z3phRkyuViZVUHt2WByrtuPCtEBV6UyFcqjTHKcJEKk2eWzftm1VqNRkfjtUKgx8VoK74iYZF79TWGziqxBrHH7?cluster=devnet
   ok      mint test USDC to borrower (20) and lender (5)
-         https://explorer.solana.com/tx/62qfMa9ko5tSUfEhvPekpobeo6KVdBBYR2tXMrugCVZ8upeUaQXHRfEkocC1dHK1EpXyg3JVtumEq2jJn8qv1TDR?cluster=devnet
+         https://explorer.solana.com/tx/4TsvTnf1vMTF7ZipfGtiowzZYq21EyyjHn3mPctBGbmPWCmk54yzcNzoXgoAPZeYebFSGCiDHq3xFihyH7LENPLk?cluster=devnet
   refused ATTACK post_limit signed by a different key
-         https://explorer.solana.com/tx/3WeFNzWc7uAEPaNNWkQB7E8NRfJ1GkeyqgoGbL3wxW4VDUk9nsgELzhwPuw8sqnq52R62Kg3dcnKHsrSgo7KMFvG?cluster=devnet
+         https://explorer.solana.com/tx/2xRvCQpE8JkrmzTQEoWg3XNGNVSeEuHrqe9echLxvGDNzHvah35GsJikMCUbzCBHzmYVtpdmJYg1KvQgRUcjkQDY?cluster=devnet
   refused ATTACK post_limit with a record that was not signed
-         https://explorer.solana.com/tx/FstJegUTktLujew3RAyGxxQva1sHA4UY6yjk6TDitr2cDjAdu4sfYWuhJbFCfhKrUFKWyPgMaZVXb7bteoKJ5hb?cluster=devnet
+         https://explorer.solana.com/tx/336hocYkUhun89DqFRziPVoGF7m41Uf1s2u4w2LgmDZi3RY6wT7xNsuLodnDserSuEhTEoHZTcYKCpmLREpMyrCB?cluster=devnet
   ok      post_limit (Ed25519 verify + post_limit)
-         https://explorer.solana.com/tx/5Xsoc1fd7L5NvKzLxSedyYUTrwFRfEwrkuEqjStm4Z6WRhz3te5mfgkF32h3hVUiqP6KjzETJyrmqaJV1JDTj5CB?cluster=devnet
+         https://explorer.solana.com/tx/48fHiegMF5rM4LXj2gjfQJH4jbzbRgwEXtZECNzZR42QCDZmJDvX24UGZ9GFLo1jp895j6QsmYCqKiWg4b4JRmrD?cluster=devnet
   refused ATTACK post_limit replayed (same email / dedupe hash)
-         https://explorer.solana.com/tx/2qj4eSBEa23JgdRq6dazc6iS1QWvMUK3TA6mpMkzyn933qLxNF8GCesMcN9yfmZERgYz9wM64sM1WPjaJBqLkxG5?cluster=devnet
+         https://explorer.solana.com/tx/3WgXiUehQzmgmxy2qTVeHtDQB5cKkEPsCftPLgjMjvywek9V5SXfUsyhRcHuFon4Mt8XTEtGsrRzij7ZbnZ5f3wU?cluster=devnet
   refused ATTACK draw limit + 1 micro-USDC
-         https://explorer.solana.com/tx/qpmRvLShDJsiLiQXfuw3XdnNdmTc5trUuG8pqmgknPhpqXFdrnjMhejHGBVgwRvm5hFqKXmPnhvEXUxTZk3ci4W?cluster=devnet
+         https://explorer.solana.com/tx/3Ew8GhrMJTGBZ6uoPAVcDoyv2SjejVLJ9sgGjvvK7feTxpBV6pAm2pXvSu33wj8QprNNdKYL7A45Z9JbEMoLs4s8?cluster=devnet
   refused ATTACK draw with no deposit
-         https://explorer.solana.com/tx/2NTD9AkKceGRE1oQB21y466Dg4yAAQy7Bm9K1ED3yNGVkaVVczTnAwdnmjmm3FxMpV6i5X44mjoDmdADmi5srPLR?cluster=devnet
+         https://explorer.solana.com/tx/2NkbXb5BsoUYNDzwgdTHQGK1oHq1iHCkgVUmQC5pdmd56egZjXUKnUvKsNr76a8jH3nfcEc9oS3biQYnQ58LVunP?cluster=devnet
   ok      deposit_borrower 20% minus 1 micro-USDC
-         https://explorer.solana.com/tx/2qKNkpE3BEgoRK93F9HhTKkS994rFPLZAmB9GUAEisYfNXGqKrBMnd4VCJ1FM6QuUn4pgykP3FF75JJ4E3MK5sk2?cluster=devnet
+         https://explorer.solana.com/tx/4pqbJWBBhXAGQctULwSiTJPMdChmDtajucgjAKP5wWE6VwGexKaukvahKLFRasMipgq9jNnV1QZPYv4TJm3kUb3e?cluster=devnet
   refused ATTACK draw with deposit 1 micro-USDC short
-         https://explorer.solana.com/tx/32gL8QHyBMfRzP2nSNEXHEweMDGNuQjphyr7LSbEehVwJrJFMULV3b6C9oXRCTgAD6Adw55DCbtiYX4XU4iojzjw?cluster=devnet
+         https://explorer.solana.com/tx/3SFKBPcFGkyJHY9hMfhcjjBjauUCSfpdbsrzBmbhQF5R1kE2t6fGme94pWseyhQV3zZpFzkneLQkv18yY2RoJ3Lh?cluster=devnet
   ok      deposit_borrower top-up to exactly 20%
-         https://explorer.solana.com/tx/4TwyiaZz4ggtWvzHLCGrbezKVdw37AFKjyQ9HyjEzDuKsVSGQ99NdYTuDRNkXrLtqnyw7iRCaaTB5iCRoMeTfQcu?cluster=devnet
+         https://explorer.solana.com/tx/4UKN8jsdMHgnGdMcJCd8mHWG7oEvnr8FugZNzyC2J3Byj6jKbNsnGh2bDeqHZ4LYvMnEYnaxjd8aPxZmABGB4Uu4?cluster=devnet
   ok      draw 10 USDC
-         https://explorer.solana.com/tx/qkyHL1PwZ9rv5JNu2HLh4NNd86RXfm5wuqDciMVESmUgTLk5Ei1CqSjKQ7N7sQsq53fVdPdgLCVYL1QVSXxsmWD?cluster=devnet
+         https://explorer.solana.com/tx/YYrskDMT3MLjMygjCdeCdVdvYQUejk9tEvn22hEbGno17FA437znPcwjX1dvuhvGHZadYPgRHA3Ei2Fib1tGzC5?cluster=devnet
   refused ATTACK withdraw_borrower while a balance is outstanding
-         https://explorer.solana.com/tx/5jYGkpBMcHP5uczy5mGX7Wv8fAhVxTXs2uX3FERhfQPajnwTgb5uGmmoHomYkmPS7cPPHAaumCFqn3nsMAsXQscX?cluster=devnet
+         https://explorer.solana.com/tx/4DCkFrg4Y9rgNGPqM6B6ghTgyMnC5VL2Je36bLtUFpP46tUUzWhy4h25yLkapjqrNeKYwcpifaYZmovokTDZdyqn?cluster=devnet
   refused ATTACK mark_default on a loan that is not overdue
-         https://explorer.solana.com/tx/5sBPuSoy3GtnJrNmCvLgqs3nAneWzrbSXnLZ26LvyAeydBcmoA99MDFAn1TiJ138FwWPnLhtJosNvoLA6aSqDdfc?cluster=devnet
+         https://explorer.solana.com/tx/612wBCcTgFpd72LdTDayyiAdmFS1o1fQT4LXZmnHWachtRRAovzTEygwWv2ABCXVG3M9gT8ARxBCeEacA1nUL7Dt?cluster=devnet
   refused ATTACK repay principal only (no fee)
-         https://explorer.solana.com/tx/34oQuKerKFZeo3i4maEQxcjBTUBGHFoFyf3sNMHDvq6yvEm7spQAJnt2wazCAz2wXKmE5hZ3JDQtcLGeAVt79xB?cluster=devnet
+         https://explorer.solana.com/tx/4MNnztRrSucb6wV6TDSVGPAHR7TEYAsEnuXniTb1U96F9bBcYWCwUj9zzBQuX7tZpkihpUAPfMHM16J5s5WwFZDV?cluster=devnet
   refused ATTACK repay 1 micro-USDC short of principal + fee
-         https://explorer.solana.com/tx/5vBUAJKcXHExwjRNfNio9fbPZGsbJBLQirT9fxpZPX15WVRx63QkDNNJuVXcC2URKVaHBKuto2rw9rHGHR71nG5z?cluster=devnet
+         https://explorer.solana.com/tx/2aX8AdP22kxhTqEAEdrubzuude9vXEdpLs8TCybw8T6AbSAJe2T29D6ZxJsZ1dWhvtjtwPaHrnqJeQBsRo9aQfxG?cluster=devnet
   ok      repay 10.2 USDC (principal + ceil 2% fee)
-         https://explorer.solana.com/tx/5Jc9rT5WwxeU4pPfodELMYzbRMhopo6waKmb196TQgjunTUojf2McK3NqQAezkoDp5R9JyLYpHgucb57oHDuoNvd?cluster=devnet
+         https://explorer.solana.com/tx/2rBo83e9mADDTu5TaqRGkmdybqAkiBwxXvArnWmtarCy6MuPZ2b1yxnSosyXhb53hx4fmMDmw6cNQNp8cC5XppGN?cluster=devnet
   refused ATTACK withdraw_borrower with nothing deposited
-         https://explorer.solana.com/tx/2e3yxjMnWbNuG3gPV48t6EuZ9oQgdvFhfrDrnfuMSgp7Jr1ygYRLVavvoisPjpAhx2ZbCiZVin3Kkq6Q6ZqsWKFp?cluster=devnet
+         https://explorer.solana.com/tx/65F4mYq6mG8F7xZwk1KmaoKQckVj4reMdePGPV9Mz2ryDSYetSpaWJvmWS2Yx5owo2xr5AxHAM5bryMGjqPkqFC?cluster=devnet
   ok      deposit_borrower 1 USDC (no balance out)
-         https://explorer.solana.com/tx/2xEKxnNt2rNV3euNz7W3PJzHTYGkbvsjWeTTx9JP6eAFfMf9fWnGsTFGnN7cxq3DmBGk7vf5Up62eYtd8Dov6TcK?cluster=devnet
+         https://explorer.solana.com/tx/58uBmGP6NyMHMTPRYQ1ps2gU6utCA251AuL4Lb2mAXKGXAaVtFQr3aTR9c2kvs245eFStuDTSfrccUUBQSn2phve?cluster=devnet
   ok      withdraw_borrower
-         https://explorer.solana.com/tx/4q8G5XZbHtdgKAtArXDQ64EbsgkNgmYP1y4MXNHfNZb2Uto1GN6AByHiunZtNQKmVEwEMnqRnecFh4t3agSj2uqn?cluster=devnet
+         https://explorer.solana.com/tx/4n91Q1AuMe6hyYDuKL6yvXLwwFVyRJbKMcAVV2K5C5Cyvb5qVLbdn5hnxkdAN5dg6ndHm4j4rbEm6TsknMfygfpt?cluster=devnet
   ok      lender deposit 5 USDC
-         https://explorer.solana.com/tx/3dYvqNTCoehajMUzQUzzJhkm2fQiPMbxhg1oYQoAegEzDdyR2awKcfZiaWxeoyDRtarfJksL4oxhn8yGZZKt9fcB?cluster=devnet
-  ok      lender withdraw 4997001 shares
-         https://explorer.solana.com/tx/4798o8QnTNr4HCcRaXBxDPmyS9AhiAEDeAQ6yykPPbpJzz3N5m5k465ZmrjsaBcuekrLurxTEEExuXbSpcDYezj8?cluster=devnet
+         https://explorer.solana.com/tx/W49u877mtrtdAoNkmNaKaujjfy3fm16KHarKoxqweZVxJqDrRudCvo4D9a96Jp8ckbe5MdvSFE1YjGcRPQ95FTj?cluster=devnet
+  ok      lender request_withdraw 4986159 shares
+         https://explorer.solana.com/tx/2mZDBNRJLz3pEFKFtC2uobZDMpNi6SmosZTkcKecUCXZWWaDjdN4xcWRHzMojsUWsA5xw5vFb79bfzjhgan6xKfZ?cluster=devnet
+  refused lender claim_withdraw before the cooldown (must be refused)
+         https://explorer.solana.com/tx/4qX8ajhbC9826mzrJiZMKjkZbkqiA6WaJS6rMLA89GLYiF2GxAoeEnf2npdeDhDRChuF38tTMY3YyBaV5y15dRfg?cluster=devnet
+  ok      lender cancel_withdraw
+         https://explorer.solana.com/tx/3m9X524CWhj2HdH1LFYe57t3sMkn1AAPXkcGrx4zGNRnv8hax56faEaRy1LrR5QUdXG6CTf4vxvmr9N6YeDdyWD1?cluster=devnet
+  ok      admin -> step-9 wallets 0.02 SOL each
+         https://explorer.solana.com/tx/63X3LZ4wKz28yGFYyoGPGHSiBPY4Y5vHsb9D5SEtawurLYvxXm95GRDZ1BERRmUESmfbT8SjkZBzMJzmfb9Lkst7?cluster=devnet
+  refused ATTACK post_limit with an id_hash but the identity account left out
+         https://explorer.solana.com/tx/2v4Li8K1bEbruV5JTkN44iZ7va5LxQQaoMWhwwZ1C8smd2AX7kA616dmzibaNg4X2KAPy14gUmVRjNVbWpaajeQe?cluster=devnet
+  refused ATTACK post_limit with a different identity account
+         https://explorer.solana.com/tx/37vAC3epWBUFhBHimjuS153X1GeVNeYdyZ6M77TTSdpSHqMf6R6bD8zSkWxZYdGa7o2r8d5izL3yMPjmj1rrjLYW?cluster=devnet
+  ok      post_limit with identity (MoMo statement)
+         https://explorer.solana.com/tx/4J6dcZiqP7KDLfy6EZNkrKgDUEEmBKZH65ca1BYG5QSEavVDpjHXw9oLyjBLxxBhcm3r3wTz7irAs6hzMCjhmsjP?cluster=devnet
+  refused ATTACK post_limit: same identity, second wallet (signed by the real underwriter key)
+         https://explorer.solana.com/tx/n6YmsEHkmyH9gJcKRFXYEtU3vPU18VPUyCWHgH99ALU4FHKjxHcYnJdkeo7qRRkMG4GijXLSThynckHJE26kySG?cluster=devnet
+  ok      post_limit again for the same wallet + identity
+         https://explorer.solana.com/tx/5tQFf7pHgkHqFCqLFRucXoZkTfmV2M6ARzwEvsx9fF3YBAUks1aGed16VPHca8s5h117csfkhVAd3qx2LRei7FNo?cluster=devnet
+  ok      admin mints 120 test USDC to itself, then pays the earner 120 USDC (real SPL transfer)
+         https://explorer.solana.com/tx/AKEF8hxFM9wejKw35DtiR9mf1ngptUbGfhb5R8gdfuJ8tLQXbQALKtAwPGqpvgbMJGbvZjqXMjsfokv5c1Tv4TK?cluster=devnet
+  ok      post_limit for the Earn payout (relayed by admin, no identity account)
+         https://explorer.solana.com/tx/2M1E7dMyTaZ1uf8JiDti1tADNpM4RFB2T9B7ntRWzjSaZ7PxR3eLiDe2hyj3v6CMPJVF46dMXyt59xFSkgurt6su?cluster=devnet
   ok      sweep 0.0480104 SOL back to admin
-         https://explorer.solana.com/tx/2tCupAsLRRAaPXLWvyTgbSrhymgnssBomP8ogE7yqXAP8qjdxL8UAQynGnPJeQ2c2T13wQnnYEJuNDb2pr3mJ97a?cluster=devnet
-  ok      sweep 0.00849156 SOL back to admin
-         https://explorer.solana.com/tx/4URCJXsbMJCh9TsVhFDB3PVM9hLRxQjMEYEezdxv7DoPXYQE6jAXXk9uAB62AS94t1ptT9vb4jjtkZqTMXEsKGs6?cluster=devnet
+         https://explorer.solana.com/tx/4jZDXFRwMwfsNFcTz8ZK23qvYEZ2wrKcSCBDC9Mt7ngD5SLKYi3bpEKwmkPoj4sdznLPh98wjLU1U2jY7kHSZPez?cluster=devnet
+  ok      sweep 0.00848156 SOL back to admin
+         https://explorer.solana.com/tx/3KpVtxaiguBYnZq7UVrh4kc5oYZw12Mj7oYLjYMDdAEQZuKqvZ5nyMvzAgfWPJx1z1xfbsv5GayfJ1rsN3e8RkMW?cluster=devnet
+  ok      sweep 0.01648536 SOL back to admin
+         https://explorer.solana.com/tx/4tsvRTVw4T9aZ4ZRkDrTDb6EqmsSMjyweqKNYJadS2DWfuM1ixzuaKnqWQYMbbJFm5raBb8Xkpc7UKG6ZJJ1zGmi?cluster=devnet
+  ok      sweep 0.019985 SOL back to admin
+         https://explorer.solana.com/tx/41rkoEc28ae6hHQAQ1Wdh1bwFi5yjvqiEm1WAeqdjTKE879a2B7qc9EQS6CBMLCXcRppZvGUAeTZjEBog8DhjX5M?cluster=devnet
 
-admin SOL: 2.07900524 -> 2.07252032  (net spent 0.00648492 SOL)
+admin SOL: 6.47520204 -> 6.46178944  (net spent 0.0134126 SOL)
 
-ALL GREEN  (60/60 passed)
+ALL GREEN  (93/93 passed)
