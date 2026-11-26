@@ -10,12 +10,14 @@
 //   1. checks the shared secret (the worker is the only caller),
 //   2. maps the recipient address -> code -> wallet; unknown, expired, used and locked codes are refused,
 //   3. runs the normal pipeline (DKIM from a trusted signer, PDF, income classes, limit) with the extra rule that the
-//      DKIM-SIGNED To header must name this very address,
+//      mail must be tied to this very address (underwriter.js recipientRefusal),
 //   4. signs the record and keeps it for that wallet to fetch: GET /record/<wallet> with the poll token.
 //
 // WHY AN ATTACKER CANNOT REDIRECT SOMEONE ELSE'S STATEMENT TO THEIR WALLET
-//   * a statement is DKIM-signed with its To header covered; mail addressed to Alice's code names Alice's address, so
-//     it is refused at any other code (the To check), and the enclave never trusts the envelope alone;
+//   * when the provider's DKIM signature covers To, mail addressed to Alice's code names Alice's address, so it is
+//     refused at any other code;
+//   * when it does not (MTN), To must equal the envelope address AND the SIGNED Date may not be older than the code, so an
+//     existing statement cannot be sent to a newly asked address (a copy dated after the code was issued still can);
 //   * the code is unguessable (50 bits), bound to ONE wallet at issue time, and the record can only be fetched with the
 //     poll token that was returned with that code (so asking for a code "for" someone else's wallet reveals nothing);
 //   * the wallet MUST prove it asked (since the Supabase layer, this is the default): either
@@ -217,7 +219,7 @@ export class Inbox {
       await this.status.checking(code);
       let r;
       try {
-        r = await underwriter.submit(eml, entry.wallet, { recipient: this.addressFor(code), deviceProven: entry.deviceProven === true && entry.deviceWallet === entry.wallet });
+        r = await underwriter.submit(eml, entry.wallet, { recipient: this.addressFor(code), issuedAt: entry.created, deviceProven: entry.deviceProven === true && entry.deviceWallet === entry.wallet });
       } catch (e) {
         await this.status.refused(code, 'internal error');
         throw e;

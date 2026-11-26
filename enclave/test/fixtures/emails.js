@@ -135,6 +135,8 @@ export async function momoStatementEmail({
   filename = 'MomoStatementReport.pdf',
   userPassword,
   unique = true,
+  headerList, // which headers the DKIM signature covers (default: the signer's usual list, To included)
+  messageId = `<${crypto.randomUUID()}@${domain}>`,
 } = {}) {
   const attachment = pdf ?? (await statementPdf({ rows: rows ?? syntheticRows(), msisdn, ...(name ? { holder: name } : {}), userPassword }));
   const boundary = `----=_Part_${crypto.randomUUID().replace(/-/g, '')}`;
@@ -143,7 +145,7 @@ export async function momoStatementEmail({
     `To: ${to}`,
     `Subject: ${subject}`,
     `Date: ${date.toUTCString()}`,
-    `Message-ID: <${crypto.randomUUID()}@${domain}>`,
+    `Message-ID: ${messageId}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     '',
@@ -169,10 +171,13 @@ export async function momoStatementEmail({
     '',
   ].join('\r\n');
   const { signatures } = await dkimSign(msg, {
-    signatureData: [{ signingDomain: domain, selector: 'sel', privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }) }],
+    signatureData: [{ signingDomain: domain, selector: 'sel', privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }), ...(headerList ? { headerList } : {}) }],
   });
   return Buffer.from(signatures + msg);
 }
+
+// The headers the real MTN signature covers: To is NOT among them.
+export const MTN_SIGNED_HEADERS = 'From:Date:Subject:Message-ID:Content-Type:MIME-Version';
 
 // Fresh, never-used phone number (so tests do not trip the one-number-one-wallet rule by accident).
 export const randomMsisdn = () => `024${String(crypto.randomInt(0, 10_000_000)).padStart(7, '0')}`;

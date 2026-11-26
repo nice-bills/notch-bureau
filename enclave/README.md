@@ -130,8 +130,18 @@ Email Worker forwards the **raw** message to `POST /inbound` (headers `x-notch-i
 enclave maps the address to the wallet, runs the normal pipeline, signs the record and keeps it; the wallet fetches it
 with `GET /record/<wallet>` + header `x-notch-token` (`waiting | ready | refused | locked`).
 - Unknown/expired/used/locked addresses are refused (404/410/429). A refused message does not spend a code; five lock it.
-- **No redirect**: the DKIM-signed `To` header must name the very address the mail arrived at, so a statement meant for
-  one inbox cannot be delivered into another wallet's. Asking for a code "for" someone else's wallet gives you only a
+- **No redirect (security)**: `recipientRefusal` in `src/underwriter.js` ties each mail to the address it arrived at.
+  - Provider signs `To`: the signed `To` must name that very address.
+  - Provider does not sign `To` (MTN signs From, Date, Subject, Message-ID, Content-Type, MIME-Version): the signer must be
+    trusted, the one `To` address must equal the envelope recipient (this code's address), the **signed** `Date` must be no
+    earlier than the code's issue time and no later than now (2 minutes of clock skew each way), and the signed
+    `Message-ID` and body hash are single use, as the code is.
+  - Header facts are read from what the DKIM verifier hashed, never from a second parser, and a repeated From, To, Date,
+    Message-ID or Content-Type header is refused (both closed real bypasses of the `To` check).
+  - **Not covered, for an unsigned `To`**: someone holding a copy of another person's statement dated *after* their own
+    code was issued (codes live 14 days) can rewrite `To` and claim it if they send it first. See "Statement ownership".
+  - These refusals show their own message in the app, never "signature does not check out"; public status says `wrong_inbox`.
+- Asking for a code "for" someone else's wallet gives you only a
   token that opens your own results. The wallet proof is REQUIRED (since the Supabase layer): an Ed25519 signature over
   `notch-inbox-v1|<wallet>|<ts>`, or a Supabase "Sign in with Solana" token as `Authorization: Bearer`. Only tests can skip it
   (`insecureAllowUnsignedForTests`). Public status rows (received, checking, limit posted, refused) and the hash of each
@@ -144,7 +154,7 @@ with `GET /record/<wallet>` + header `x-notch-token` (`waiting | ready | refused
 No domain needed. Set `NOTCH_INBOX_ADDRESS=notch-inbox@agentmail.to` and each wallet's address becomes
 `notch-inbox+<code>@agentmail.to` (without it, `<code>@NOTCH_INBOX_DOMAIN` as above). With `AGENTMAIL_API_KEY` also set,
 the demo server and the CVM server poll the mailbox every 10 s, download the raw message and run it through the same
-`receive` path as `/inbound`. The signed `To` header must still name that exact plus address.
+`receive` path as `/inbound`. The same recipient rules apply (see "No redirect").
 ```
 set -a; . ~/.config/notch/agentmail.env; set +a          # AGENTMAIL_API_KEY, never printed or committed
 NOTCH_INBOX_ADDRESS=notch-inbox@agentmail.to NOTCH_LLM=off pnpm --dir app demo:enclave
@@ -159,10 +169,11 @@ node enclave/scripts/e2e-agentmail.mjs                   # live check: real send
 Honest limits:
 - **AgentMail receives and keeps the statement** (so can whoever holds the API key). "Only the sealed computer reads it" is not true on this route.
 - With the AI reader on, pseudonymised statement rows go to `NOTCH_LLM_URL`. Leave it off for real statements unless that endpoint is trusted.
-- **Not verified with real MTN mail**: the trusted signer is `mtn.com` (see SOURCES), the signature must cover `To`, and MTN's
-  form must accept a `+` in an email address.
+- **Real MTN mail (one sample, 2026-11-26)**: DKIM passes as `mtn.com`, `To` is not signed, the `+` address arrived. Its PDF
+  has a **different layout** (30 days, `MSISDN`, `FROM NO.`/`TO NO.`, `BAL BEFORE`/`BAL AFTER`) that `src/statement.js`
+  cannot read yet, so it is still refused.
 - The app treats the mailbox as a real mail domain, so the "Send a sample statement" button shows only on the local demo server.
-- Forwarding a statement from your own mail does not work: the signed `To` is then yours, not the inbox address.
+- Forwarding a statement from your own mail does not work: `To` then names you, not the inbox address.
 
 ### The secret pepper in `id_hash` (required)
 There are only about 10^9 phone numbers, so a plain `sha256("notch-msisdn"|number)` on chain (the public PDA `["identity", id_hash]`) can be

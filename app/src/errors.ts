@@ -132,6 +132,12 @@ export function explainError(e: unknown): FriendlyError {
 export function explainEnclaveReason(reason: string): string {
   const r = reason.toLowerCase();
   if (r.includes('email already used')) return 'The sealed computer has already used this email. Each email counts once.';
+  // The mail does not belong to this inbox request. These come before the signature message: the signature was fine.
+  if (r.includes('sent before you asked')) return 'This statement was sent before you asked for this address. Ask MTN for a new statement and send it here.';
+  if (r.includes('dated in the future')) return 'This statement is dated in the future, so it was refused. Ask MTN for a new one.';
+  if (r.includes('tied to your request')) return 'The sealed computer cannot tell that this statement was sent for your request, so it was refused.';
+  if (r.includes('not addressed to this inbox')) return 'This statement was sent to a different address. Ask MTN to send it to the address shown here.';
+  if (/several (from|to|date|message-id|content-type) headers/.test(r)) return 'This email has repeated header lines, which can hide changes, so it was refused. Send the original email.';
   if (r.includes('no passing dkim') || r.includes('dkim')) {
     return 'The email’s digital signature does not check out. It was edited after the sender signed it, or it did not come from a provider we accept.';
   }

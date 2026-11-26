@@ -1,6 +1,6 @@
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
-import { toAddresses, verifyEmail } from './dkim.js';
+import { verifyEmail } from './dkim.js';
 import { extractIncomeAuto, extractStatementAuto, llmConfigFromEnv } from './llm-extract.js';
 import { computeLimit } from './underwrite.js';
 import { NO_IDENTITY, signRecord } from './record.js';
@@ -16,6 +16,31 @@ import { USDC_MINT_MAINNET, findUsdcReceipt, makeRpc, signatureIn } from './chai
 
 export const DEFAULT_TRUSTED = DEFAULT_TRUSTED_LIST;
 const RECORD_TTL_S = 30 * 86400;
+// Clock difference tolerated between the provider's mail server and us, when the signed Date is what ties a mail to a request.
+export const DATE_SKEW_MS = 2 * 60_000;
+
+// May this DKIM-verified mail (from a trusted signer) count for the inbox address `recipient`? -> null, or why not.
+//
+// Signed To (the strict rule): the signed To header must name the address.
+//
+// Unsigned To (MTN signs From, Date, Subject, Message-ID, Content-Type, MIME-Version, but not To): anyone holding the mail
+// can rewrite To, so To proves nothing about who asked. It must still be exactly the one envelope recipient, and the mail
+// is tied to the request by what IS signed: its Date may not be older than the inbox code (`issuedAt`), so a statement
+// that existed before the address was asked for cannot be sent to it. Its signed Message-ID and body hash are single use.
+// NOT covered: someone who gets a copy of a statement dated AFTER they asked for their own address, and sends it first.
+export function recipientRefusal(v, recipient, { issuedAt, now }) {
+  const address = String(recipient).toLowerCase();
+  const notAddressed = 'the statement was not addressed to this inbox';
+  if (v.signedHeaders.includes('to')) return v.to.includes(address) ? null : notAddressed;
+  if (v.to.length !== 1 || v.to[0] !== address) return notAddressed;
+  if (!v.signedDate || !v.messageDedupe || !Number.isFinite(issuedAt)) {
+    return 'the email provider did not sign a readable date and message ID, so this statement cannot be tied to your request';
+  }
+  const sent = v.signedDate.getTime();
+  if (sent < issuedAt - DATE_SKEW_MS) return 'the statement was sent before you asked for this address; request a new statement';
+  if (sent > now.getTime() + DATE_SKEW_MS) return 'the statement is dated in the future, so it cannot be accepted';
+  return null;
+}
 
 // A reason that is safe to show the borrower (it never contains the email, an amount, or a phone number).
 class Refusal extends Error {}
@@ -82,8 +107,8 @@ export class Underwriter {
     return bs58.encode(this.keys.publicKey);
   }
 
-  // `recipient` (statement inbox): the address the mail was delivered to. The DKIM-signed To header must name it, so a
-  // statement mailed to somebody else's inbox address cannot be redirected to this wallet.
+  // `recipient` (statement inbox): the envelope address the mail was delivered to, and `issuedAt` (ms) when that address
+  // was given out. See recipientRefusal: it stops somebody else's statement being redirected to this wallet.
   //
   // `device` (optional): { nonce, signature, signedMessage } = the wallet's Sign-in-with-Solana proof on a challenge from
   // deviceChallenge(). If it verifies AND the wallet holds a Seeker Genesis Token on mainnet, the record carries
@@ -93,14 +118,13 @@ export class Underwriter {
   // address was issued, so only the token read is left.
   // `dkim` ({ trusted, resolver? }) replaces this underwriter's DKIM settings for this one message. Only the in-process mail
   // bridge passes it (real mail is checked against real DNS even on a demo underwriter); no HTTP route does.
-  async submit(eml, wallet, { recipient, device, deviceProven = false, dkim } = {}) {
+  async submit(eml, wallet, { recipient, issuedAt, device, deviceProven = false, dkim } = {}) {
     bs58.decode(wallet); // throws on a bad address
     const v = await verifyEmail(eml, dkim ?? { trusted: this.trusted, resolver: this.resolver });
     if (!v.ok) return { ok: false, reason: v.reason };
     if (recipient) {
-      const to = toAddresses(eml);
-      if (!v.signedHeaders.includes('to')) return { ok: false, reason: 'DKIM signature does not cover the To header, so the recipient cannot be trusted' };
-      if (!to.ok || !to.addresses.includes(String(recipient).toLowerCase())) return { ok: false, reason: 'the statement was not addressed to this inbox' };
+      const why = recipientRefusal(v, recipient, { issuedAt, now: this.now() });
+      if (why) return { ok: false, reason: why };
     }
     // Identity-bearing sources (a mobile-money statement binds a phone number to the wallet) are accepted ONLY through the
     // statement inbox, where the DKIM-signed To header was just checked against THIS wallet's own address. Without that, anyone
@@ -111,7 +135,8 @@ export class Underwriter {
       return { ok: false, reason: 'a mobile-money statement is accepted only through your own Notch inbox address: ask MTN to mail it to the address you were given (it cannot be uploaded directly)' };
     }
     const key = v.dedupe.toString('hex');
-    if (this.used.has(key)) return { ok: false, reason: 'email already used' };
+    const midKey = v.messageDedupe?.toString('hex');
+    if (this.used.has(key) || (midKey && this.used.has(midKey))) return { ok: false, reason: 'email already used' };
 
     const now = this.now();
     let got;
@@ -177,6 +202,7 @@ export class Underwriter {
     const { limitUsdc } = computeLimit(nextEvents, { now, ...history, signals: got.signals, seeker: !!seeker });
 
     this.used.add(key);
+    if (midKey) this.used.add(midKey);
     this.used.add(dedupe.toString('hex'));
     if (idHex) { this.identities.set(idHex, wallet); this.walletIds.set(wallet, idHex); }
     if (seeker) this.devices.set(seeker.hex, wallet);

@@ -6,28 +6,41 @@ import { dkimVerify } from 'mailauth';
 export async function verifyEmail(eml, { trusted, resolver } = {}) {
   const res = await dkimVerify(eml, resolver ? { resolver } : {});
   const passing = (res.results || []).filter((r) => r.status?.result === 'pass');
-  const hit = passing.find((r) => isTrusted(r.signingDomain, trusted));
+  // With several trusted signatures, take one that covers To: the strict recipient rule applies whenever To IS signed.
+  const ours = passing.filter((r) => isTrusted(r.signingDomain, trusted));
+  const hit = ours.find((r) => signedNames(r).includes('to')) ?? ours[0];
   if (!hit) {
     const seen = (res.results || []).map((r) => `${r.signingDomain}:${r.status?.result}`).join(', ');
     return { ok: false, reason: passing.length ? `untrusted signer (${seen})` : `no passing DKIM signature (${seen || 'none'})` };
   }
+  // Everything below is read from what the VERIFIER saw: its split of the header block (res.headers) and the list of
+  // header lines it actually hashed for THIS signature (hit.signingHeaders). Never re-parse those by hand: a second
+  // parser can be made to disagree ("To : x" is a To header to DKIM, and a fake DKIM-Signature header carrying the same
+  // b= can claim any h= list).
   // l= means only a prefix of the body is signed, so anyone could append text (e.g. a fake
   // "received USD 50,000" line) after it. Refuse those signatures outright.
-  const tags = signatureTags(eml, hit.signature);
-  if (!tags) return { ok: false, reason: 'could not locate the passing DKIM signature' };
-  if ('l' in tags) return { ok: false, reason: 'DKIM signature covers only part of the body (l= tag)' };
+  if (hit.canonBodyLengthLimited !== false) return { ok: false, reason: 'DKIM signature covers only part of the body (l= tag)' };
   if (!hit.bodyHash) return { ok: false, reason: 'DKIM body hash missing' };
+  if (!res.headers?.parsed || typeof hit.signingHeaders?.keys !== 'string') return { ok: false, reason: 'could not read the signed headers of the DKIM signature' };
+  // One of each, so the line we read is the line that was signed (a signature takes the bottom-most one; a second one
+  // added on top could show a different sender, recipient, date or MIME layout).
+  const fields = {};
+  for (const [name, label] of SINGLE_HEADERS) {
+    const values = headerValues(res.headers.parsed, name);
+    if (values.length > 1) return { ok: false, reason: `message has several ${label} headers` };
+    fields[name] = values[0] ?? null;
+  }
   // The signature must cover the From header (RFC 6376 requires it) and, when the message declares a
   // MIME structure, the Content-Type that says where each part starts. bh= covers every byte of the
   // body, attachments included, so a signed multipart message cannot have its PDF swapped or edited.
-  const signed = (tags.h || '').toLowerCase().split(':').map((x) => x.trim());
+  const signed = signedNames(hit);
   if (!signed.includes('from')) return { ok: false, reason: 'DKIM signature does not cover the From header' };
-  if (hasHeader(eml, 'content-type') && !signed.includes('content-type')) {
+  if (fields['content-type'] !== null && !signed.includes('content-type')) {
     return { ok: false, reason: 'DKIM signature does not cover the Content-Type header' };
   }
   // Alignment: the signing domain must be the From domain (or a parent of it). Otherwise anyone who
   // owns any domain could sign mail that merely *claims* to be from the provider.
-  const from = fromDomain(eml);
+  const from = fromDomain(fields.from);
   if (!from.ok) return { ok: false, reason: from.reason };
   const d = hit.signingDomain.toLowerCase();
   if (from.domain !== d && !from.domain.endsWith(`.${d}`)) {
@@ -37,8 +50,21 @@ export async function verifyEmail(eml, { trusted, resolver } = {}) {
   // (new selector or timestamp) yields a new b= but the same body, so it stays a duplicate.
   const domain = d;
   const dedupe = crypto.createHash('sha256').update(`${domain}|${hit.bodyHash}`).digest();
-  return { ok: true, domain, selector: hit.selector, dedupe, signedHeaders: signed };
+  // A signed Message-ID is a second, independent "seen it" key.
+  const messageId = signed.includes('message-id') && fields['message-id'] ? fields['message-id'] : null;
+  return {
+    ok: true,
+    domain,
+    selector: hit.selector,
+    dedupe,
+    messageDedupe: messageId ? crypto.createHash('sha256').update(`notch-mid-v1|${domain}|${messageId}`).digest() : null,
+    signedHeaders: signed,
+    to: fields.to === null ? [] : addressesIn(fields.to), // trust it only when signedHeaders has 'to'
+    signedDate: signed.includes('date') && fields.date ? parseMailDate(fields.date) : null,
+  };
 }
+
+const SINGLE_HEADERS = [['from', 'From'], ['to', 'To'], ['date', 'Date'], ['message-id', 'Message-ID'], ['content-type', 'Content-Type']];
 
 function isTrusted(domain, trusted) {
   if (!domain) return false;
@@ -46,50 +72,38 @@ function isTrusted(domain, trusted) {
   return (trusted || []).some((t) => d === t.toLowerCase());
 }
 
-// Tags of the DKIM-Signature header whose b= equals the verified signature.
-function signatureTags(eml, signature) {
-  const raw = eml.toString();
-  const end = raw.search(/\r?\n\r?\n/);
-  const head = (end >= 0 ? raw.slice(0, end) : raw).replace(/\r?\n[ \t]+/g, ' ');
-  const want = String(signature || '').replace(/\s+/g, '');
-  for (const line of head.split(/\r?\n/)) {
-    const m = line.match(/^DKIM-Signature:\s*(.*)$/i);
-    if (!m) continue;
-    const tags = {};
-    for (const part of m[1].split(';')) {
-      const i = part.indexOf('=');
-      if (i > 0) tags[part.slice(0, i).trim().toLowerCase()] = part.slice(i + 1).replace(/\s+/g, '');
-    }
-    if (tags.b === want) return tags;
-  }
-  return null;
+// Names of the header lines the verifier hashed for this signature (only headers that exist in the message).
+const signedNames = (result) => String(result.signingHeaders?.keys || '').split(':').map((x) => x.trim().toLowerCase()).filter(Boolean);
+
+// The unfolded values of every header called `name`, as the verifier split the header block.
+function headerValues(parsed, name) {
+  return parsed.filter((h) => h.key === name).map((h) => {
+    const line = h.line.toString('utf8');
+    return line.slice(line.indexOf(':') + 1).replace(/\r?\n/g, '').trim();
+  });
 }
 
-function headBlock(eml) {
-  const raw = eml.toString('latin1');
-  const end = raw.search(/\r?\n\r?\n/);
-  return (end >= 0 ? raw.slice(0, end) : raw).replace(/\r?\n[ \t]+/g, ' ');
-}
-
-function hasHeader(eml, name) {
-  return headBlock(eml).split(/\r?\n/).some((l) => l.toLowerCase().startsWith(`${name}:`));
-}
-
-// The one From header's domain. Zero or several From headers are refused: a second one added in
-// front of the signed one is the classic way to show a different sender.
-function fromDomain(eml) {
-  const froms = headBlock(eml).split(/\r?\n/).filter((l) => /^from:/i.test(l));
-  if (froms.length !== 1) return { ok: false, reason: froms.length ? 'message has several From headers' : 'message has no From header' };
-  const value = froms[0].replace(/^from:/i, '').trim();
+// Zero or several From headers are refused: a second one added in front of the signed one is the
+// classic way to show a different sender.
+function fromDomain(value) {
+  if (value === null) return { ok: false, reason: 'message has no From header' };
   const m = value.match(/<\s*[^<>@\s]+@([^<>@\s]+)\s*>\s*$/) || value.match(/^[^<>@\s"]+@([^<>@\s]+)$/);
   if (!m) return { ok: false, reason: 'could not read the From address' };
   return { ok: true, domain: m[1].toLowerCase() };
 }
 
-// The addresses on the (single) To header, lower-cased. Several To headers are refused: like From, a second one
-// added in front of the signed one could show a different recipient.
-export function toAddresses(eml) {
-  const tos = headBlock(eml).split(/\r?\n/).filter((l) => /^to:/i.test(l));
-  if (tos.length !== 1) return { ok: false, reason: tos.length ? 'message has several To headers' : 'message has no To header' };
-  return { ok: true, addresses: [...tos[0].replace(/^to:/i, '').matchAll(/[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)].map((m) => m[0].toLowerCase()) };
+// The addresses on a To value, lower-cased.
+const addressesIn = (value) => [...value.matchAll(/[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)].map((m) => m[0].toLowerCase());
+
+// RFC 5322 date with an explicit zone -> Date, or null. Strict: a date without a zone would be read in local time.
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+export function parseMailDate(value) {
+  const m = /^(?:[A-Za-z]{3},\s*)?(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?\s+(?:([+-])(\d{2})(\d{2})|GMT|UTC|UT)(?:\s*\([^()]*\))?$/.exec(String(value || '').trim());
+  if (!m) return null;
+  const [, day, mon, year, h, mi, s = '0', sign, zh = '0', zm = '0'] = m;
+  const month = MONTHS.indexOf(mon.toLowerCase());
+  if (month < 0 || +h > 23 || +mi > 59 || +s > 60 || +zh > 14 || +zm > 59) return null;
+  const local = Date.UTC(+year, month, +day, +h, +mi, +s);
+  if (new Date(Date.UTC(+year, month, +day)).getUTCDate() !== +day) return null;
+  return new Date(local - (sign === '-' ? -1 : 1) * (+zh * 60 + +zm) * 60_000);
 }
