@@ -223,6 +223,18 @@ export function ActionStatus({ a }: { a: ActionState }) {
   return null;
 }
 
+/** The one success view for every money action: the amount, one line saying what happened, the receipt link, Done. */
+export function DoneView({ amount, text, signature, onDone }: { amount: string; text: ReactNode; signature?: string | null; onDone: () => void }) {
+  return (
+    <div className="done-view" role="status">
+      <div className="done-amt">{amount}</div>
+      <p className="sh-p">{text}</p>
+      {signature && <p className="help"><a href={explorerTx(signature)} target="_blank" rel="noreferrer">View on Solana Explorer</a></p>}
+      <Btn onClick={onDone}>Done</Btn>
+    </div>
+  );
+}
+
 /** "1,234.5" -> big number with faint cents. */
 export function Money({ v }: { v: string }) {
   const [w, c] = v.split('.');

@@ -12,9 +12,11 @@ export function parseUsdc(input: string): bigint | null {
 }
 
 /** 1234567n -> "1.23" (min 2 decimals, up to 6 kept when needed). */
-export function formatUsdc(micro: bigint, opts: { max?: number } = {}): string {
+export function formatUsdc(micro: bigint, opts: { max?: number; round?: boolean } = {}): string {
   const neg = micro < 0n;
-  const v = neg ? -micro : micro;
+  let v = neg ? -micro : micro;
+  // round: to the nearest shown digit (for what you HOLD: 9.999999 reads 10.00). Default cuts, so a limit never reads high.
+  if (opts.round && opts.max !== undefined && opts.max < USDC_DECIMALS) { const q = 10n ** BigInt(USDC_DECIMALS - opts.max); v = ((v + q / 2n) / q) * q; }
   const whole = v / SCALE;
   let frac = (v % SCALE).toString().padStart(USDC_DECIMALS, '0').replace(/0+$/, '');
   const max = opts.max ?? USDC_DECIMALS;

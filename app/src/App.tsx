@@ -1,4 +1,4 @@
-import { Component, Suspense, createContext, lazy, useCallback, useContext, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, Suspense, createContext, lazy, startTransition, useCallback, useContext, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
 import { ChainProvider, useChain } from './data';
 import { useWallet } from './wallet';
 import { getAttestation, type Attestation } from './enclave';
@@ -11,7 +11,7 @@ import { googleLogin, pollarLogout, watchPollar, type PollarState } from './poll
 import { submitSigned } from './chain';
 import { explainError } from './errors';
 import { PHANTOM_LINK_NAME, takeError, takeSignedTransaction } from './phantom-link';
-import { browseLinks, isIOS, isPhone } from './device';
+import { browseLinks, isPhone } from './device';
 import { FaucetButton } from './Faucet';
 // The everyday screens are in the main bundle: switching tabs must never wait for a download (on a phone through a
 // tunnel that showed as a blank screen). Only the "Try to cheat it" lab (and its crypto library) loads on demand.
@@ -138,8 +138,15 @@ function Shell() {
   }, []);
 
   const go = useCallback((r: Route) => {
-    if (window.location.hash !== `#${r}`) window.location.hash = r;
-    setRoute(r);
+    // Tab to tab replaces the history entry (Back leaves the app instead of walking through every tab); opening a
+    // sub-screen (limit, borrow, the lab) pushes one, so Back returns to where you were.
+    const isTab = (x: Route) => TABS.some((t) => t.id === x);
+    if (window.location.hash !== `#${r}`) {
+      if (isTab(r) && isTab(fromHash())) history.replaceState(history.state, '', `#${r}`);
+      else history.pushState(history.state, '', `#${r}`);
+    }
+    // The old screen stays painted until the new one is ready: no blank frame between them.
+    startTransition(() => setRoute(r));
   }, []);
   const ui = useMemo<Ui>(() => ({ route, go, openSignIn: () => setSheet('signin'), openAccount: () => setSheet('account'), att, pollar }), [route, go, att, pollar]);
   const { connected, restoring } = useWallet();
@@ -301,7 +308,7 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
           {browseLinks().map((l) => (
             <a key={l.name} className="opt-link tap" href={l.href}>
               <Icon name="out" />
-              <span>Open in {l.name}<small>{isIOS ? 'Best on iPhone if you use another wallet' : 'Works with any Android wallet app'}</small></span>
+              <span>Open in {l.name}<small>Opens Notch inside the {l.name} app’s own browser</small></span>
             </a>
           ))}
         </div>

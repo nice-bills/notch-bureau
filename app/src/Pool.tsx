@@ -9,7 +9,7 @@ import { formatDateTime, formatUsdc, shortAddr } from './amount';
 import { ActionStatus, Btn, Field, Icon, Notice, Stat, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Avatar } from './Home';
-import { NAME, sharePrice } from './Lend';
+import { NAME, shareMove, sharePrice } from './Lend';
 
 export function Pool() {
   const { pool, poolLoaded, addrs } = useChain();
@@ -55,13 +55,14 @@ export function Pool() {
               <Stat label="Missed payments" value={String(s.defaults)} hint={`${formatUsdc(s.defaultAmount, { max: 2 })} USDC lost`} tone={s.defaults > 0n ? 'bad' : undefined} />
               <Stat label="Borrower deposits" value={formatUsdc(s.borrowerDeposits, { max: 2 })} unit="USDC" hint="Held aside, covers losses first" />
             </dl>
+            {s.defaults > 0n && <p className="help">This is a devnet test pool: the automated test runs miss payments on purpose, to check that losses land where the rules say.</p>}
           </section>
 
           <section className="card pcard" aria-labelledby="hl-h" data-testid="health">
             <h3 id="hl-h">Health</h3>
             <dl className="stats">
-              <Stat label={`${NAME.senior} share price`} value={sharePrice(pool, 'senior')} unit="USDC" />
-              <Stat label={`${NAME.junior} share price`} value={sharePrice(pool, 'junior')} unit="USDC" hint="Above 1 means fees beat losses" />
+              <Stat label={`${NAME.senior} share price`} value={sharePrice(pool, 'senior')} unit="USDC" hint={shareMove(pool, 'senior').text} />
+              <Stat label={`${NAME.junior} share price`} value={sharePrice(pool, 'junior')} unit="USDC" hint={shareMove(pool, 'junior').text} />
               <Stat label="Share of pool on loan" value={util.toFixed(1)} unit="%" />
               <Stat label="Lost to missed payments" value={lossRate.toFixed(1)} unit="% of all lending" tone={lossRate > 0 ? 'bad' : undefined} />
               <Stat label={`${NAME.senior} shares`} value={formatUsdc(pool.seniorSupply, { max: 2 })} />

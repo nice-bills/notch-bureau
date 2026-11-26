@@ -117,6 +117,32 @@ async function call(path: string, init?: RequestInit): Promise<Response> {
 /** What the wallet signs to ask for an inbox address: same text the underwriter checks. */
 export const inboxMessage = (wallet: string, ts: number) => `notch-inbox-v1|${wallet}|${ts}`;
 
+/** Resolves once the page is on screen (Android Chrome coming back from the wallet app is briefly hidden/offline). */
+function whenVisible(maxMs = 4000): Promise<void> {
+  if (typeof document === 'undefined' || document.visibilityState === 'visible') return Promise.resolve();
+  return new Promise((ok) => {
+    const done = () => { document.removeEventListener('visibilitychange', on); clearTimeout(t); ok(); };
+    const on = () => { if (document.visibilityState === 'visible') done(); };
+    const t = setTimeout(done, maxMs);
+    document.addEventListener('visibilitychange', on);
+  });
+}
+/**
+ * `call`, retried on a network failure only (never on an HTTP answer): right after the wallet app hands control back,
+ * the first fetch can fail before the network is back. Waits for the page to be visible, then backs off 0.5/1.2/2.5 s.
+ */
+export async function callWithRetry(path: string, init?: RequestInit, waits = [500, 1200, 2500]): Promise<Response> {
+  for (let i = 0; ; i++) {
+    await whenVisible();
+    try {
+      return await call(path, init);
+    } catch (e) {
+      if (i >= waits.length) throw e;
+      await new Promise((r) => setTimeout(r, waits[i]));
+    }
+  }
+}
+
 /**
  * Ask for this wallet's statement address. Proof of the wallet is either a Supabase "Sign in with Solana" token
  * (`bearer`) or a signature over `notch-inbox-v1|wallet|ts`.
@@ -137,7 +163,7 @@ export async function newInbox(
     body.ts = ts;
     body.signature = toB64(await proof.signMessage(new TextEncoder().encode(inboxMessage(wallet, ts))));
   }
-  const r = await call('/inbox/new', { method: 'POST', headers, body: JSON.stringify(body) });
+  const r = await callWithRetry('/inbox/new', { method: 'POST', headers, body: JSON.stringify(body) });
   const j = await readJson(r);
   if (r.status === 404) throw new Error('This sealed computer has no statement inbox. Restart it with the latest "pnpm demo:enclave".');
   if (!r.ok || !j.ok) throw new Error(explainEnclaveReason(String(j.reason ?? `HTTP ${r.status}`)));

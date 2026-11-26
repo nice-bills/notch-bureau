@@ -23,7 +23,7 @@ import {
   type WithdrawRequest,
 } from './notch';
 import { formatDateTime, formatUsdc, parseUsdc, toInput } from './amount';
-import { ActionStatus, Btn, Field, Icon, Money, Sheet, Skel, cx, useAction } from './ui';
+import { ActionStatus, Btn, DoneView, Field, Icon, Money, Sheet, Skel, cx, useAction, type ActionState } from './ui';
 import { Banners, useUi } from './App';
 import { Avatar } from './Home';
 import { NeedsTestMoney, useSticky } from './Faucet';
@@ -57,6 +57,14 @@ export function sharePrice(p: PoolView, t: Tranche): string {
   const scaled = (nav * 1_000_000n) / supply;
   return `${scaled / 1_000_000n}.${(scaled % 1_000_000n).toString().padStart(6, '0')}`;
 }
+/** How a share's price moved since the first deposit, in plain words: "Up 0.34% from fees" / "Down 9.1% after a missed payment". */
+export function shareMove(p: PoolView, t: Tranche): { text: string; down: boolean } {
+  const nav = trancheNav(p.stats, t), supply = supplyOf(p, t);
+  if (supply === 0n || nav === 0n) return { text: 'No money in it yet', down: false };
+  const bp = Number(((nav - supply) * 100_000n) / supply) / 1000; // percent, 3 decimals
+  if (Math.abs(bp) < 0.005) return { text: 'Price unchanged so far', down: false };
+  return bp > 0 ? { text: `Up ${bp.toFixed(2)}% from fees`, down: false } : { text: `Down ${(-bp).toFixed(1)}% after missed payments`, down: true };
+}
 /** What a pending request pays at claim: the lower of the request-time and claim-time price (the program's rule). */
 export function claimValue(p: PoolView, t: Tranche, r: WithdrawRequest): bigint {
   const now = usdcForShares(r.shares, supplyOf(p, t), trancheNav(p.stats, t));
@@ -74,6 +82,8 @@ export function Lend() {
   const [sel, setSel] = useState<Tranche>('senior');
   const [sheet, setSheet] = useState<'deposit' | 'withdraw' | null>(null);
   const [loss, setLoss] = useState(false);
+  // A claim or cancel closes the request, and its card with it: the result is shown here instead.
+  const [closed, setClosed] = useState<{ t: Tranche; a: ActionState } | null>(null);
 
   const value = (t: Tranche) => {
     if (!pool) return 0n;
@@ -102,7 +112,7 @@ export function Lend() {
       <Banners />
       <div className="balcard pcard">
         <small>{owner ? 'You have lent' : 'Cash ready to lend in the pool'}</small>
-        <div className="amt" data-testid="lent-total"><Skel loading={busyRead}><Money v={formatUsdc(owner ? total : s?.idle ?? 0n, { max: 2 })} /></Skel><span className="u">USDC</span></div>
+        <div className="amt" data-testid="lent-total"><Skel loading={busyRead}><Money v={formatUsdc(owner ? total : s?.idle ?? 0n, { max: 2, round: true })} /></Skel><span className="u">USDC</span></div>
         {!owner && <p className="help">Connect a wallet to lend. Every borrower puts down 20% first, and pays a flat 2% fee.</p>}
       </div>
       {moneyCard && <NeedsTestMoney need="usdc" />}
@@ -112,8 +122,8 @@ export function Lend() {
           <button key={t} type="button" role="radio" aria-checked={sel === t} className={cx('trc tap', t === 'senior' ? 'safe' : 'risky', sel === t && 'sel')} onClick={() => setSel(t)}>
             <b className="n">{NAME[t]}</b>
             <span className="rate">{t === 'senior' ? 'Paid first, smaller fee share' : 'Hurt first, bigger fee share'}</span>
-            <span className="rate">1 share = {pool ? sharePrice(pool, t) : '…'}</span>
-            <span className="yours"><small>{owner ? 'Yours' : 'In this share'}</small><b data-testid={`yours-${t}`}><Skel loading={busyRead}>{formatUsdc(owner ? value(t) : s ? trancheNav(s, t) : 0n, { max: 2 })}</Skel></b></span>
+            <span className={cx('rate share-move', pool && shareMove(pool, t).down && 'down')}>{pool ? shareMove(pool, t).text : '…'}</span>
+            <span className="yours"><small>{owner ? 'Yours' : 'In this share'}</small><b data-testid={`yours-${t}`}><Skel loading={busyRead}>{formatUsdc(owner ? value(t) : s ? trancheNav(s, t) : 0n, { max: 2, round: true })}</Skel></b></span>
           </button>
         ))}
       </div>
@@ -122,7 +132,8 @@ export function Lend() {
         <Btn onClick={() => (owner ? setSheet('deposit') : openSignIn())}><Icon name="plus" />Add to {NAME[sel]}</Btn>
         <Btn variant="secondary" onClick={() => (owner ? setSheet('withdraw') : openSignIn())}>Withdraw</Btn>
       </div>
-      {owner && (['senior', 'junior'] as Tranche[]).map((t) => requests[t] && pool && <Pending key={t} t={t} r={requests[t]!} pool={pool} now={now} />)}
+      {owner && (['senior', 'junior'] as Tranche[]).map((t) => requests[t] && pool && <Pending key={t} t={t} r={requests[t]!} pool={pool} now={now} onSuccess={(a) => setClosed({ t, a })} />)}
+      {closed && !requests[closed.t] && <div className="pad"><ActionStatus a={closed.a} /></div>}
 
       <section className="card pcard" aria-labelledby="loss-h">
         <h3 id="loss-h">What if someone doesn’t pay?</h3>
@@ -132,8 +143,9 @@ export function Lend() {
           <div className="k">Risky · {pct('junior').toFixed(1)}%<span className="hit" style={{ transform: `scaleX(${loss ? Math.min(100, hit.j) / 100 : 0})` }} /></div>
         </div>
         <button type="button" className="chip tap" style={{ marginTop: 16, width: '100%', justifyContent: 'center' }} onClick={() => setLoss((v) => !v)} aria-pressed={loss} disabled={navTotal === 0n}>
-          {loss ? `A 5% loss: Risky loses ${hit.j.toFixed(1)}%, Safe ${hit.s.toFixed(1)}%` : 'Show a 5% loss'}
+          {loss ? 'Hide the 5% loss' : 'Show a 5% loss'}
         </button>
+        {loss && <p className="help" role="status" style={{ textAlign: 'center' }}>If 5% of the pool were lost: Risky would lose {hit.j.toFixed(1)}% of its value, Safe {hit.s.toFixed(1)}%. The striped part of each bar is the loss.</p>}
       </section>
 
       {sheet === 'deposit' && <DepositSheet t={sel} onClose={() => setSheet(null)} />}
@@ -148,6 +160,7 @@ function DepositSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
   const owner = connected!.address;
   const [str, setStr] = useState('');
   const dep = parseUsdc(str);
+  const [doneAmt, setDoneAmt] = useState(0n);
   const act = useAction(async () => { await refresh(); });
   const supply = pool ? supplyOf(pool, t) : 0n;
   const nav = pool ? trancheNav(pool.stats, t) : 0n;
@@ -171,14 +184,20 @@ function DepositSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
         depositIx(addrs, owner, usdcAta, shareAta, dep, t),
       ], signTransaction);
       setStr('');
+      setDoneAmt(dep);
       return { signature, note: `Deposited ${formatUsdc(dep)} USDC into ${NAME[t]} for ${formatUsdc(sharesOut)} shares.` };
     });
 
+  if (act.signature) return (
+    <Sheet title={`Added to ${NAME[t]}`} onClose={onClose}>
+      <DoneView amount={`${formatUsdc(doneAmt, { max: 2 })} USDC`} text={act.note} signature={act.signature} onDone={onClose} />
+    </Sheet>
+  );
   return (
     <Sheet title={`Add to ${NAME[t]}`} onClose={onClose}>
       <p className="sh-p">{t === 'senior' ? 'Safe is paid back first and takes a loss only after Risky is used up.' : 'Risky earns a bigger part of the fees and takes losses first.'}</p>
       <Field label="Amount" suffix="USDC" value={str} onChange={setStr} action={{ label: 'Max', onClick: () => setStr(toInput(room !== null && room < usdc ? room : usdc)) }}
-        error={err} hint={dep ? `You get about ${formatUsdc(sharesOut)} shares at 1 share = ${pool ? sharePrice(pool, t) : '…'} USDC.` : `Your wallet: ${formatUsdc(usdc)} test USDC.`} />
+        error={err} hint={dep ? `It grows with the fees ${NAME[t]} earns and shrinks if a loss reaches ${NAME[t]}.` : `Your wallet: ${formatUsdc(usdc)} test USDC.`} />
       <Btn onClick={onDeposit} busy={act.busy} disabled={!dep || dep <= 0n || !!err || sharesOut === 0n}>Deposit {dep ? `${formatUsdc(dep)} USDC` : 'USDC'}</Btn>
       <ActionStatus a={act} />
     </Sheet>
@@ -190,34 +209,48 @@ function WithdrawSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
   const { addrs, pool, shares, requests, refresh } = useChain();
   const owner = connected!.address;
   const [str, setStr] = useState('');
-  const wd = parseUsdc(str); // shares use the same 6 decimals as USDC
+  const [all, setAll] = useState(false);
   const act = useAction(async () => { await refresh(); });
+  const [doneAmt, setDoneAmt] = useState(0n);
   const held = shares[t];
-  const worth = wd && pool ? usdcForShares(wd, supplyOf(pool, t), trancheNav(pool.stats, t)) : 0n;
+  const supply = pool ? supplyOf(pool, t) : 0n;
+  const nav = pool ? trancheNav(pool.stats, t) : 0n;
+  const heldWorth = pool ? usdcForShares(held, supply, nav) : 0n;
+  // Asked in USDC; the program takes shares. "All" (or the full amount) sends every share, so no dust is left behind.
+  const amt = parseUsdc(str);
+  const wd = !amt || !pool || nav === 0n ? null : all || amt >= heldWorth ? held : (amt * supply) / nav;
+  const worth = wd && pool ? usdcForShares(wd, supply, nav) : 0n;
   const existing = requests[t];
   const nowS = Math.floor(Date.now() / 1000);
   const unlock = nowS + Number(WITHDRAW_COOLDOWN_SECONDS);
   const claimBy = unlock + Number(CLAIM_WINDOW_SECONDS);
-  const err = str && wd === null ? 'Enter a number of shares' : wd && wd > held ? `You only hold ${formatUsdc(held)} ${NAME[t]} shares.` : null;
+  const err = str && amt === null ? 'Enter an amount like 5 or 2.5' : amt && amt > heldWorth && !all ? `You have ${formatUsdc(heldWorth, { max: 2, round: true })} USDC in ${NAME[t]}.` : amt && wd === 0n ? 'That is less than one share. Enter a bigger amount.' : null;
   const day = (s: number) => new Date(s * 1000);
 
   const onRequest = () =>
     act.run(async () => {
-      if (!addrs || !wd) throw new Error('Enter a number of shares.');
+      if (!addrs || !wd) throw new Error('Enter an amount.');
       const shareAta = await deriveAta(owner, trancheMint(addrs, t));
       const [escrow, request] = await Promise.all([deriveEscrow(addrs.program, owner, t), deriveWithdrawRequest(addrs.program, owner, t)]);
       const { signature } = await sendTransaction(owner, [requestWithdrawIx(addrs, owner, shareAta, escrow, request, wd, t)], signTransaction);
       setStr('');
+      setAll(false);
+      setDoneAmt(worth);
       return { signature, note: `Requested ${formatUsdc(wd)} ${NAME[t]} shares. You can claim in 3 days, within 2 days after that.` };
     });
 
+  if (act.signature) return (
+    <Sheet title="Withdrawal requested" onClose={onClose}>
+      <DoneView amount={`About ${formatUsdc(doneAmt, { max: 2, round: true })} USDC`} text={act.note} signature={act.signature} onDone={onClose} />
+    </Sheet>
+  );
   return (
     <Sheet title="Withdraw takes 3 days" onClose={onClose}>
-      <p className="sh-p">The wait stops a rush out just before a missed payment is counted. Your price is locked when you ask.</p>
+      <p className="sh-p">The wait stops a rush out just before a missed payment is counted. You get today’s price at most, or less if a loss lands before you claim.</p>
       <ul className="wd">
         {[
-          { at: nowS, title: 'Ask today', sub: 'Your price is locked now' },
-          { at: unlock, title: 'Wait 3 days', sub: 'Earns nothing meanwhile' },
+          { at: nowS, title: 'Ask today', sub: 'Today’s price is the most you can get' },
+          { at: unlock, title: 'Wait 3 days', sub: 'No fees earned meanwhile; losses still count' },
           { at: claimBy, title: 'Claim by this day', sub: 'After that: cancel and ask again' },
         ].map((r) => (
           <li key={r.title}>
@@ -230,8 +263,8 @@ function WithdrawSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
         <p className="help warn">You already have a {NAME[t]} withdrawal waiting. Claim or cancel it first.</p>
       ) : (
         <>
-          <Field label={`${NAME[t]} shares to cash in`} value={str} onChange={setStr} action={{ label: 'All', onClick: () => setStr(toInput(held)) }} error={err}
-            hint={wd ? `Worth about ${formatUsdc(worth)} USDC today. You get the lower of today’s and claim-day price.` : `You hold ${formatUsdc(held)} ${NAME[t]} shares.`} />
+          <Field label={`USDC to take out of ${NAME[t]}`} suffix="USDC" value={str} onChange={(v) => { setStr(v); setAll(false); }} action={{ label: 'All', onClick: () => { setStr(toInput(heldWorth)); setAll(true); } }} error={err}
+            hint={wd ? `About ${formatUsdc(worth, { max: 2, round: true })} USDC at today’s price.` : `You have ${formatUsdc(heldWorth, { max: 2, round: true })} USDC in ${NAME[t]}.`} />
           <Btn onClick={onRequest} busy={act.busy} disabled={!wd || wd <= 0n || !!err}>Request withdrawal</Btn>
         </>
       )}
@@ -240,12 +273,14 @@ function WithdrawSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
   );
 }
 
-function Pending({ t, r, pool, now }: { t: Tranche; r: WithdrawRequest; pool: PoolView; now: number }) {
+function Pending({ t, r, pool, now, onSuccess }: { t: Tranche; r: WithdrawRequest; pool: PoolView; now: number; onSuccess: (a: ActionState) => void }) {
   const { connected, signTransaction } = useWallet();
   const { addrs, refresh } = useChain();
   const owner = connected!.address;
   const claimAct = useAction(async () => { await refresh(); });
   const cancelAct = useAction(async () => { await refresh(); });
+  useEffect(() => { if (claimAct.signature) onSuccess(claimAct); }, [claimAct.signature]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (cancelAct.signature) onSuccess(cancelAct); }, [cancelAct.signature]); // eslint-disable-line react-hooks/exhaustive-deps
   const unlock = Number(r.unlockTs), closes = unlock + Number(CLAIM_WINDOW_SECONDS);
   const phase = now < unlock ? 'waiting' : now <= closes ? 'open' : 'lapsed';
   const pay = claimValue(pool, t, r);
@@ -275,7 +310,7 @@ function Pending({ t, r, pool, now }: { t: Tranche; r: WithdrawRequest; pool: Po
         <h3 style={{ margin: 0, fontSize: 17, fontWeight: 650 }}>{NAME[t]} withdrawal</h3>
         <span className={cx('tag', phase === 'open' && 'good', phase === 'lapsed' && 'bad')}>{phase === 'waiting' ? 'WAITING' : phase === 'open' ? 'READY TO CLAIM' : 'WINDOW CLOSED'}</span>
       </div>
-      <p className="help">{formatUsdc(r.shares)} shares · about <b style={{ color: 'var(--ink)' }}>{formatUsdc(pay)} USDC</b></p>
+      <p className="help">About <b style={{ color: 'var(--ink)' }}>{formatUsdc(pay, { max: 2, round: true })} USDC</b> waiting</p>
       <div style={{ marginTop: 12 }}>
         <small className="help" style={{ margin: 0 }}>{phase === 'waiting' ? 'Unlocks in' : phase === 'open' ? 'Claim window closes in' : 'Closed on'}</small>
         <div className="count" data-testid="countdown">{phase === 'waiting' ? formatCountdown(unlock - now) : phase === 'open' ? formatCountdown(closes - now) : formatDateTime(closes)}</div>
@@ -286,7 +321,7 @@ function Pending({ t, r, pool, now }: { t: Tranche; r: WithdrawRequest; pool: Po
       </ul>
       {phase === 'lapsed' && <p className="help warn">The 2-day claim window has closed. Cancel to get your shares back, then ask again.</p>}
       {partial && <p className="help warn">The pool has {formatUsdc(idle)} USDC free right now; the rest is out on loan. A claim pays that part now and keeps the rest waiting at the same price.</p>}
-      {phase === 'waiting' && <p className="help">You get the lower of the price when you asked and the price when you claim, so a missed payment while you wait is already counted.</p>}
+      {phase === 'waiting' && <p className="help">You get the price from the day you asked, or less if a missed payment lands before you claim. Fees that arrive meanwhile go to the lenders who stay.</p>}
       <div className="stack" style={{ marginTop: 16 }}>
         <Btn onClick={onClaim} busy={claimAct.busy} disabled={phase !== 'open' || idle === 0n}>Claim USDC</Btn>
         <ActionStatus a={claimAct} />

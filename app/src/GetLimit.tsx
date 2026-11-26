@@ -265,11 +265,11 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
     <section aria-labelledby="ib-h">
       <div className="h">
         <h1 id="ib-h">{live === 'idle' ? 'Waiting for your statement' : live === 'refused' ? 'The statement was refused' : live === 'done' ? 'Your stamp is ready' : 'Checking your statement'}</h1>
-        <p>Have your mobile money provider email your statement here, for example MTN MoMo.</p>
+        <p>Have your mobile money provider email your statement to this address.</p>
       </div>
       <div className="env pcard">
         <div className="row1">
-          <div style={{ minWidth: 0 }}><div className="to">To</div><code data-testid="inbox-address" translate="no">{inbox.address}</code></div>
+          <div style={{ minWidth: 0 }}><div className="to">To</div><code data-testid="inbox-address" translate="no">{inbox.address.split('@')[0]}@<wbr />{inbox.address.split('@').slice(1).join('@')}</code></div>
           <div className="slot" aria-hidden="true"><Icon name="lock" /></div>
         </div>
         <div className="foot2">
@@ -293,7 +293,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
           return (
             <li key={s.title} className={state}>
               <span className="ck">{state === 'bad' ? <Icon name="x" /> : <Icon name="check" />}</span>
-              <span><b>{s.title}</b><small>{i === 0 && live === 'idle' ? 'Waiting for the email' : s.sub}</small></span>
+              <span><b>{i === 0 && live === 'idle' ? 'Waiting for the email' : s.title}</b><small>{i === 0 && live === 'idle' ? 'The sender’s signature is checked when it lands' : s.sub}</small></span>
             </li>
           );
         })}
@@ -408,7 +408,7 @@ function Landed({ signed, onDone, postAct }: { signed: EnclaveOk; onDone: () => 
   return (
     <section className="landed" aria-labelledby="land-h">
       <div className="rosette" aria-hidden="true"><svg viewBox="0 0 510 700" preserveAspectRatio="xMidYMid slice" dangerouslySetInnerHTML={{ __html: bg }} /></div>
-      <div className="cap">Your limit came back</div>
+      <div className="cap">Your limit is on Solana</div>
       <h1 id="land-h"><span data-testid="landed-amount">{formatUsdc(rec.limitMicro, { max: 2 })}</span> USDC to borrow</h1>
       <div className="stampwrap" ref={wrap} onPointerMove={tilt} onPointerLeave={reset} onPointerUp={reset} onPointerCancel={reset} aria-hidden="true">
         <div className="stamp drop"><svg viewBox="0 0 256 304" dangerouslySetInnerHTML={{ __html: big }} /><div className="sheen" /></div>

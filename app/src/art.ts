@@ -61,7 +61,7 @@ export function foilCard(amt: string, line1: string): string {
     <rect x="${m + 6}" y="${m + 6}" width="${W - 2 * m - 12}" height="${H - 2 * m - 12}" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width=".8"/>
     <text x="32" y="52" font-family="Inter Variable, Inter" font-weight="650" font-size="26" letter-spacing="-1" fill="#fff">notch</text>
     <text x="${W - 32}" y="46" text-anchor="end" font-family="Inter Variable, Inter" font-weight="600" font-size="9" letter-spacing="1.8" fill="#fff" opacity=".85">LIMIT STAMP</text>
-    <text x="32" y="${H - 56}" font-family="Inter Variable, Inter" font-weight="600" font-size="9" letter-spacing="1.8" fill="#fff" opacity=".85">${line1}</text>
+    <text x="32" y="${H - 78}" font-family="Inter Variable, Inter" font-weight="600" font-size="9" letter-spacing="1.8" fill="#fff" opacity=".85">${line1}</text>
     <text x="32" y="${H - 30}" font-family="Instrument Serif" font-size="34" fill="#fff">${amt} <tspan font-family="Inter Variable, Inter" font-weight="600" font-size="12" letter-spacing="1.5">USDC</tspan></text>
     <text x="${W - 32}" y="${H - 30}" text-anchor="end" font-family="Inter Variable, Inter" font-weight="650" font-size="20" letter-spacing="-.5" fill="#fff" opacity=".95">credit</text>`;
   return perf(W, H, 4.2, 15, body);

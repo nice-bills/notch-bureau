@@ -10,7 +10,7 @@ This is a local prototype. The underwriter currently runs as a normal Node.js pr
 
 - DKIM verification for trusted sender domains and income extraction from sample emails.
 - Wallet-bound, signed credit records with email deduplication and per-wallet replay protection.
-- An Anchor program for limit posting, a lender pool with share mint (deposit, then a two-step withdraw: request, 3 day cooldown, claim at the price of that moment), borrower first-loss deposits, draws, repayments with a 2% fee, and default marking.
+- An Anchor program for limit posting, a lender pool with share mint (deposit, then a two-step withdraw: request, 3 day cooldown, claim at the request-day price, or the claim-day price if a loss made it lower), borrower first-loss deposits, draws, repayments with a 2% fee, and default marking.
 - LiteSVM transaction tests, including forged-signature, changed-record, replay, duplicate-email, wrong-wallet, over-limit, and default cases.
 - Exact DKIM signer-domain allowlisting; subdomains need their own explicit entry.
 

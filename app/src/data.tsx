@@ -2,7 +2,7 @@
 // and refreshes right after any transaction.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { USDC_MINT } from './config';
-import { fetchLine, fetchPool, fetchSol, fetchTokenBalance, fetchWithdrawRequest, notchAddresses, type PoolView } from './chain';
+import { fetchEverything, type PoolView } from './chain';
 import { deriveAddresses, type CreditLine, type NotchAddresses, type Tranche, type WithdrawRequest } from './notch';
 import { PROGRAM_ID } from './config';
 import { useWallet } from './wallet';
@@ -86,18 +86,9 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     if (!USDC_MINT) return;
     try {
       const g = gen.current;
-      const a = await notchAddresses();
       const who = ownerRef.current;
-      const [p, l, u, sj, ss, lamports, wrj, wrs] = await Promise.all([
-        fetchPool(),
-        who ? fetchLine(who) : Promise.resolve(null),
-        who ? fetchTokenBalance(who, USDC_MINT) : Promise.resolve(0n),
-        who ? fetchTokenBalance(who, a.juniorMint) : Promise.resolve(0n),
-        who ? fetchTokenBalance(who, a.seniorMint) : Promise.resolve(0n),
-        who ? fetchSol(who) : Promise.resolve(null),
-        who ? fetchWithdrawRequest(who, 'junior') : Promise.resolve(null),
-        who ? fetchWithdrawRequest(who, 'senior') : Promise.resolve(null),
-      ]);
+      const e = await fetchEverything(who);
+      const [p, l, u, sj, ss, lamports, wrj, wrs] = [e.pool, e.line, e.usdc, e.shares.junior, e.shares.senior, e.sol, e.requests.junior, e.requests.senior];
       if (ownerRef.current !== who || gen.current !== g) return; // wallet changed, or an optimistic patch landed, while loading
       setPool(p);
       setLine(l);
@@ -123,8 +114,11 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     setLoadedFor(snap ? owner : undefined);
     setSignedState(owner ? liveSigned(load<EnclaveOk>(signedKey(owner))) : null);
     void refresh();
-    const t = setInterval(() => void refresh(), 12_000);
-    return () => clearInterval(t);
+    // Poll only while the page is on screen; catch up at once when it comes back (e.g. from the wallet app).
+    const t = setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 12_000);
+    const onVis = () => { if (document.visibilityState === 'visible') void refresh(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVis); };
   }, [refresh, owner]);
 
   useEffect(() => {

@@ -431,7 +431,7 @@ details.raw pre,details.real-error pre{margin:8px 0 0;padding:12px;background:va
 .help.good{color:var(--green)}
 .ready-card{margin:16px 24px 0;padding:16px;display:flex;flex-direction:column;gap:8px}
 .ready-card .big{font-family:'Instrument Serif',serif;font-size:40px;line-height:1;letter-spacing:-.01em}
-.screen-in{animation:fade .18s var(--ease-out)}
+/* screens swap in place: no fade from empty (it read as blank frames on a phone) */
 .boot{padding:24px}
 .crash{margin:24px;padding:20px}
 .sheet .opt-link{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:18px;background:rgba(255,255,255,.7);text-decoration:none;color:var(--ink);font-weight:600}
@@ -452,3 +452,36 @@ a,button,input,label,summary{touch-action:manipulation}
   .tabs a:hover{color:var(--ink)}
   .btn,.opt,.chip{transition:transform .2s var(--spring),filter .15s,background-color .15s}
 }
+
+/* ---------- emulator QA fixes (Nov 26) ---------- */
+/* sticky sub-screen header: a solid glass backing, so text never scrolls under the title */
+.nav{background:rgba(241,241,244,.82);-webkit-backdrop-filter:blur(16px) saturate(160%);backdrop-filter:blur(16px) saturate(160%);
+  padding:12px 16px;margin-bottom:8px;box-shadow:0 .5px 0 rgba(14,15,19,.08)}
+@media (prefers-reduced-transparency:reduce){.nav{background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none}}
+/* the floating tab bar (64px + 16px gap) never covers the last line */
+.app{padding-bottom:calc(128px + env(safe-area-inset-bottom,0px))}
+footer a.mono{white-space:nowrap}
+/* sheets sit over the tab bar completely */
+body:has(.sheet) .tabs{visibility:hidden}
+/* wallet button: icon + short address, so it reads as "your wallet" */
+.wallet-pill{width:auto;min-width:48px;padding:0 14px 0 8px;border-radius:24px;gap:8px;display:inline-flex;align-items:center;font-size:14px;font-weight:600;color:#fff}
+.wallet-pill img{flex:none}
+/* landscape phones: a smaller, lower tab bar */
+@media (orientation:landscape) and (max-height:480px){
+  .tabs{height:48px;bottom:calc(6px + env(safe-area-inset-bottom,0px))}
+  .tabs a{flex-direction:row;gap:6px}
+  .tabs .ic{width:20px;height:20px}
+  .app{padding-bottom:calc(72px + env(safe-area-inset-bottom,0px))}
+}
+.sgrid{row-gap:6px}
+.sgrid button.pick{transform:translateY(-4px) rotate(-2deg)}
+.sgrid button.pick:nth-child(even){transform:translateY(-4px) rotate(2deg)}
+.sgrid button.pick svg{filter:drop-shadow(0 8px 8px rgba(17,26,51,.25)) saturate(1.15)}
+.sgrid button.left svg{opacity:.55}
+.share-move{font-variant-numeric:tabular-nums}
+.share-move.down{color:#FFD9CF}
+.done-view{text-align:center;padding-top:8px}
+.done-view .help{margin:4px 0 0}
+/* the posted screen's pattern fades out instead of ending in a hard line */
+.rosette{-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
+/* first visit: a mark while the app downloads (index.html), replaced when React mounts */

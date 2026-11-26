@@ -6,7 +6,7 @@ import { LOAN_TERM_SECONDS, depositBorrowerIx, depositNeededFor, deriveLine, dra
 import { formatDate, formatUsdc, parseUsdc, toInput } from './amount';
 import { stamp } from './art';
 import { buzz } from './glass';
-import { ActionStatus, Btn, Icon, Sheet, cx, useAction } from './ui';
+import { ActionStatus, Btn, DoneView, Icon, Sheet, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Nav } from './GetLimit';
 import { FaucetButton } from './Faucet';
@@ -23,16 +23,10 @@ export function Borrow() {
   const s = lineState(line);
   const idle = pool?.stats.idle ?? 0n;
   const cap = s.headroom < idle ? s.headroom : idle;
-  const [amtStr, setAmtStr] = useState('');
+  // null = not touched yet: the first paint already shows the 20 USDC preset (no "Pay back 0.00" frame first).
+  const [typed, setAmtStr] = useState<string | null>(null);
+  const amtStr = typed ?? (s.live && pool ? toInput(cap > 20_000_000n ? 20_000_000n : cap) : '');
   const [done, setDone] = useState<{ draw: bigint; payoff: bigint; due: bigint } | null>(null);
-
-  const seeded = useRef(false);
-  useEffect(() => {
-    if (seeded.current || !s.live || !pool) return;
-    seeded.current = true;
-    const start = cap > 20_000_000n ? 20_000_000n : cap;
-    setAmtStr(toInput(start));
-  }, [s.live, pool, cap]);
 
   const draw = parseUsdc(amtStr);
   const totalAfter = s.drawn + (draw ?? 0n);
@@ -49,7 +43,12 @@ export function Borrow() {
   const count = Number((s.limit + unit - 1n) / unit);
   const usedN = Number((s.drawn + unit - 1n) / unit);
   const pickN = draw ? Number((draw + unit - 1n) / unit) : 0;
-  const stampSvgs = useMemo(() => MOTIFS.map((m) => stamp(88, 104, { ink: 'verm', motif: m, num: formatUsdc(unit).replace(/\.00$/, ''), cap: 'USDC', numSize: 34, top: 'NOTCH' })), [unit]);
+  const lastVal = s.limit - unit * BigInt(Math.max(0, count - 1));
+  const stampSvgs = useMemo(() => Array.from({ length: count }, (_, i) => {
+    const v = i === count - 1 ? lastVal : unit;
+    const num = formatUsdc(v, { max: 2 }).replace(/\.00$/, '');
+    return stamp(88, 104, { ink: 'verm', motif: MOTIFS[i % 3], num, cap: 'USDC', numSize: num.length > 3 ? 24 : 34, top: 'NOTCH' });
+  }), [unit, count, lastVal]);
 
   const depAct = useAction(refresh);
   const drawAct = useAction(refresh);
@@ -78,9 +77,20 @@ export function Borrow() {
 
   const head = <><Nav title="Borrow" onBack={() => go('home')} /><Banners /></>;
   if (!owner) return <>{head}<Empty icon="wallet" title="Connect a wallet first" text="Borrowing uses your wallet’s limit." /></>;
-  if (loading) return <>{head}<div className="bamt"><label>Reading your line…</label><div className="v"><span className="skel" style={{ fontSize: 64 }}>00.00</span></div></div></>;
+  if (loading || (owner && !pool)) return <>{head}<div className="bamt"><label>Reading your line…</label><div className="v"><span className="skel" style={{ fontSize: 64 }}>00.00</span></div></div></>;
   if (!s.live) return <>{head}<Empty icon="mail" title={line?.defaulted ? 'This line is closed' : 'No limit yet'} text={line?.defaulted ? 'A payment was missed, so this wallet can’t borrow again.' : 'Get your limit first: it takes one statement.'} action={line?.defaulted ? undefined : { label: 'Get my limit', on: () => go('limit') }} /></>;
   if (s.pastDue) return <>{head}<Empty icon="clock" title="Your loan is overdue" text="Pay it back first. Then you can borrow again." action={{ label: 'Go to pay back', on: () => go('home') }} /></>;
+
+  // After a borrow, only the receipt: the form behind it must not re-arm a second borrow.
+  if (done) return (
+    <>
+      {head}
+      <Sheet title="Sent" onClose={() => { setDone(null); go('home'); }}>
+        <DoneView amount={`${formatUsdc(done.draw, { max: 2 })} USDC`} signature={drawAct.signature} onDone={() => { setDone(null); go('home'); }}
+          text={<>is in your wallet. Pay back <b style={{ color: 'var(--ink)' }}>{formatUsdc(done.payoff, { max: 2 })}</b> by {formatDate(line?.due && line.due > 0n ? line.due : done.due)}.</>} />
+      </Sheet>
+    </>
+  );
 
   const step = toAdd > 0n ? 1 : 2;
   return (
@@ -103,12 +113,12 @@ export function Borrow() {
       </div>
 
       <div className="sheetwrap" aria-hidden="true">
-        <div className="selv"><span>Notch · {formatUsdc(unit).replace(/\.00$/, '')} USDC each</span><span>{Math.min(pickN, count - usedN)} of {count - usedN} left</span></div>
+        <div className="selv"><span>Notch · {formatUsdc(unit).replace(/\.00$/, '')} USDC each</span><span>{formatUsdc(draw && draw > 0n ? draw : 0n, { max: 2 })} of {formatUsdc(s.headroom, { max: 2 })} free</span></div>
         <div className="sgrid">
           {Array.from({ length: count }, (_, i) => (
             <button key={i} type="button" tabIndex={-1} className={cx(i < usedN && 'gone', i >= usedN && i < usedN + pickN && 'pick')} disabled={i < usedN}
-              onClick={() => { const a = BigInt(i - usedN + 1) * unit; setAmtStr(toInput(a < cap ? a : cap)); buzz(4); }}>
-              <svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: stampSvgs[i % 3] }} />
+              onClick={() => { const a = i === count - 1 ? s.headroom : BigInt(i - usedN + 1) * unit; setAmtStr(toInput(a < cap ? a : cap)); buzz(4); }}>
+              <svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: stampSvgs[i] }} />
             </button>
           ))}
         </div>
@@ -139,15 +149,6 @@ export function Borrow() {
       </div>
       <div className="pad"><ActionStatus a={depAct} /><ActionStatus a={drawAct} /></div>
 
-      {done && (
-        <Sheet title="Sent" onClose={() => { setDone(null); go('home'); }}>
-          <div style={{ textAlign: 'center', paddingTop: 8 }}>
-            <div className="done-amt">{formatUsdc(done.draw, { max: 2 })} USDC</div>
-            <p className="sh-p">is in your wallet. Pay back <b style={{ color: 'var(--ink)' }}>{formatUsdc(done.payoff, { max: 2 })}</b> by {formatDate(line?.due && line.due > 0n ? line.due : done.due)}.</p>
-          </div>
-          <Btn onClick={() => { setDone(null); go('home'); }}>Done</Btn>
-        </Sheet>
-      )}
     </div>
   );
 }

@@ -4,9 +4,9 @@ import { sendTransaction } from './chain';
 import { useChain } from './data';
 import { useWallet } from './wallet';
 import { createAtaIdempotentIx, deriveAta, deriveLine, feeFor, payoffFor, repayIx, withdrawBorrowerIx, type NotchAddresses } from './notch';
-import { formatDate, formatDateTime, formatUsdc, shortAddr, daysLeft } from './amount';
+import { formatDate, formatUsdc, shortAddr, daysLeft } from './amount';
 import { envelope, foilCard, stamp, type Ink, type Motif } from './art';
-import { ActionStatus, Btn, Icon, Money, Sheet, Skel, cx, useAction } from './ui';
+import { ActionStatus, Btn, DoneView, Icon, Money, Sheet, Skel, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { MIN_FEE_LAMPORTS } from './chain';
 import { NeedsTestMoney, useSticky } from './Faucet';
@@ -35,6 +35,7 @@ export function Avatar() {
   return connected ? (
     <button type="button" className="av tap wallet-pill" onClick={openAccount} aria-label={`Your wallet ${shortAddr(connected.address)}`} title={connected.address}>
       <img src={connected.wallet.icon} alt="" width={28} height={28} />
+      <span translate="no">{shortAddr(connected.address, 3)}</span>
     </button>
   ) : (
     <Btn small onClick={openSignIn}>Connect wallet</Btn>
@@ -49,6 +50,7 @@ export function Home() {
         <span className="skel" style={{ display: 'block', width: '30%', height: 14 }} />
         <span className="skel" style={{ display: 'block', width: '60%', height: 28, marginTop: 10 }} />
         <span className="skel" style={{ display: 'block', width: '100%', height: 180, marginTop: 24, borderRadius: 28 }} />
+        <p className="help" style={{ textAlign: 'center', marginTop: 16 }}>Reconnecting your wallet…</p>
       </div>
     );
   }
@@ -187,9 +189,8 @@ function HomeConnected() {
               <span className="q"><Icon name="clock" /></span>
               <span className="t">
                 <b>Pay {formatUsdc(payoffFor(s.drawn))} USDC</b>
-                <small>{s.pastDue ? `Was due ${formatDate(line!.due)}. Pay now before it is marked as missed.` : `By ${formatDateTime(line!.due)} · ${daysLeft(line!.due)} days left`}</small>
+                <small>{s.pastDue ? `Was due ${formatDate(line!.due)}. Pay now before it is marked as missed.` : `By ${formatDate(line!.due)} · ${daysLeft(line!.due)} days left`}</small>
               </span>
-              <Btn small onClick={() => setRepayOpen(true)}>Pay</Btn>
             </div>
           )}
           {s.deposit > 0n && s.drawn === 0n ? <DepositBack amount={s.deposit} act={wdAct} onWithdraw={onWithdraw} drawn={s.drawn} /> : wdAct.note && <div style={{ margin: "16px 24px 0" }}><ActionStatus a={wdAct} /></div>}
@@ -201,7 +202,7 @@ function HomeConnected() {
           <div className="sect"><h2>Your line</h2></div>
           <ul className="list pcard">
             <li className="item"><span className="ico"><Icon name="shield" /></span><span className="t"><b>Deposit held</b><small>20% of what you owe, comes back when you pay</small></span><span className="v" data-testid="deposit">{formatUsdc(line.deposit, { max: 2 })}</span></li>
-            <li className="item"><span className="ico"><Icon name="check" /></span><span className="t"><b>Repaid on time</b><small>{line.repaidLate ? `${line.repaidLate} late` : 'Each one raises your next limit'}</small></span><span className="v" data-testid="on-time">{line.repaidOnTime}</span></li>
+            <li className="item"><span className="ico"><Icon name="check" /></span><span className="t"><b>Repaid on time</b><small>{line.repaidLate ? `${line.repaidLate} late · ` : ''}Loans of 5+ USDC kept 7+ days count</small></span><span className="v" data-testid="on-time">{line.repaidOnTime}</span></li>
             <li className="item"><span className="ico"><Icon name="wallet" /></span><span className="t"><b>In your wallet</b><small>Test USDC on devnet</small></span><span className="v" data-testid="wallet-usdc">{formatUsdc(usdc, { max: 2 })}</span></li>
             {s.live && <li><button type="button" className="item tap" onClick={() => go('limit')}><span className="ico"><Icon name="mail" /></span><span className="t"><b>Send a new statement</b><small>Get a fresh stamp any time</small></span><span className="chev"><Icon name="chev" /></span></button></li>}
           </ul>
@@ -239,7 +240,7 @@ function RepaySheet({ onClose }: { onClose: () => void }) {
   const fee = feeFor(drawn);
   const back = line?.deposit ?? 0n;
   const act = useAction(refresh);
-  const [paid, setPaid] = useState<{ payoff: bigint; back: bigint } | null>(null);
+  const [paid, setPaid] = useState<{ payoff: bigint; back: bigint; countedBefore: number } | null>(null);
   const short = usdc < payoff;
 
   const onRepay = () =>
@@ -249,7 +250,7 @@ function RepaySheet({ onClose }: { onClose: () => void }) {
       const lineAddr = await deriveLine(addrs.program, owner);
       const { signature } = await sendTransaction(owner, [ensure, repayIx(addrs, owner, lineAddr, ata, payoff)], signTransaction);
       patch({ line: { drawn: 0n, deposit: 0n }, usdc: usdc - payoff + back });
-      setPaid({ payoff, back });
+      setPaid({ payoff, back, countedBefore: line?.repaidOnTime ?? 0 });
       return { signature, note: `Repaid ${formatUsdc(payoff)} USDC. Your ${formatUsdc(back)} USDC deposit came back to you.` };
     });
 
@@ -268,13 +269,12 @@ function RepaySheet({ onClose }: { onClose: () => void }) {
           <Btn onClick={onRepay} busy={act.busy} disabled={short || drawn === 0n}>Repay {formatUsdc(payoff)} USDC</Btn>
         </>
       ) : (
-        <div style={{ textAlign: 'center', paddingTop: 8 }}>
-          <div className="done-amt">{formatUsdc(paid.payoff, { max: 2 })} USDC</div>
-          <p className="sh-p">paid. Your {formatUsdc(paid.back, { max: 2 })} USDC deposit is back in your wallet.</p>
-          <Btn onClick={onClose}>Done</Btn>
-        </div>
+        <DoneView amount={`${formatUsdc(paid.payoff, { max: 2 })} USDC`} signature={act.signature} onDone={onClose}
+          text={<>paid. Your {formatUsdc(paid.back, { max: 2 })} USDC deposit is back in your wallet. {(line?.repaidOnTime ?? 0) > paid.countedBefore
+            ? 'It counts toward your on-time record.'
+            : 'This loan was too short to count toward your record: loans of 5 USDC or more, kept 7 days or more, count.'}</>} />
       )}
-      <ActionStatus a={act} />
+      {!paid && <ActionStatus a={act} />}
     </Sheet>
   );
 }

@@ -6,6 +6,7 @@ import { useUi } from './App';
 import { requestFaucet } from './enclave';
 import { explorerTx } from './config';
 import { Btn } from './ui';
+import { MIN_FEE_LAMPORTS } from './chain';
 
 export function FaucetButton({ label = 'Get test SOL and USDC', variant = 'secondary' }: { label?: string; variant?: 'primary' | 'secondary' }) {
   const { connected } = useWallet();
@@ -45,7 +46,9 @@ export function FaucetButton({ label = 'Get test SOL and USDC', variant = 'secon
 
 /** A small card shown when the wallet is empty: no SOL for fees, or no test USDC to try with. */
 export function NeedsTestMoney({ need }: { need: 'sol' | 'usdc' | 'both' }) {
-  const text = need === 'usdc' ? 'Your wallet has no test USDC yet.' : 'Your wallet has no devnet SOL for network fees yet.';
+  const { sol, usdc } = useChain();
+  const filled = need === 'usdc' ? usdc > 0n : sol !== null && sol >= MIN_FEE_LAMPORTS;
+  const text = filled ? 'Test money is in your wallet.' : need === 'usdc' ? 'Your wallet has no test USDC yet.' : 'Your wallet has no devnet SOL for network fees yet.';
   return (
     <section className="card pcard needs-money" aria-label="Test money">
       <b>{text}</b>

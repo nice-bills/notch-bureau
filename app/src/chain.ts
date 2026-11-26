@@ -48,6 +48,12 @@ async function accountBytes(addr: Address): Promise<Uint8Array | null> {
   return base64ToBytes(res.value.data[0] as string);
 }
 
+/** Many accounts in ONE RPC call (the public devnet RPC rate-limits bursts of parallel requests). */
+async function accountsBytes(addrs: Address[]): Promise<(Uint8Array | null)[]> {
+  const res = await rpc.getMultipleAccounts(addrs, { encoding: 'base64', commitment: 'confirmed' }).send();
+  return res.value.map((v) => (v ? base64ToBytes(v.data[0] as string) : null));
+}
+
 export interface PoolView {
   stats: PoolStats;
   /** Supply of the share token the single-tranche UI uses (JUNIOR). */
@@ -62,13 +68,10 @@ export interface PoolView {
 /** Read pool accounting, share supply and config. Returns null if the program has not been initialised. */
 export async function fetchPool(): Promise<PoolView | null> {
   const a = await notchAddresses();
-  const [pool, shareMint, seniorMint, vault, config] = await Promise.all([
-    accountBytes(a.pool),
-    accountBytes(a.shareMint),
-    accountBytes(a.seniorMint),
-    accountBytes(a.vault),
-    accountBytes(a.config),
-  ]);
+  return decodePoolView(await accountsBytes([a.pool, a.shareMint, a.seniorMint, a.vault, a.config]));
+}
+
+function decodePoolView([pool, shareMint, seniorMint, vault, config]: (Uint8Array | null)[]): PoolView | null {
   if (!pool || !shareMint || !seniorMint) return null;
   let underwriter: Address | null = null;
   let underwriterExpiry: bigint | null = null;
@@ -84,6 +87,35 @@ export async function fetchPool(): Promise<PoolView | null> {
     vaultBalance: vault ? decodeTokenAmount(vault) : 0n,
     underwriter,
     underwriterExpiry,
+  };
+}
+
+export interface Everything {
+  pool: PoolView | null;
+  line: CreditLine | null;
+  usdc: bigint;
+  shares: Record<Tranche, bigint>;
+  requests: Record<Tranche, WithdrawRequest | null>;
+  sol: bigint | null;
+}
+/** Everything the screens show, in two RPC calls: one getMultipleAccounts and (with a wallet) one getBalance. */
+export async function fetchEverything(who: Address | null): Promise<Everything> {
+  const a = await notchAddresses();
+  const base = [a.pool, a.shareMint, a.seniorMint, a.vault, a.config];
+  if (!who) return { pool: decodePoolView(await accountsBytes(base)), line: null, usdc: 0n, shares: { senior: 0n, junior: 0n }, requests: { senior: null, junior: null }, sol: null };
+  const mine = await Promise.all([
+    deriveLine(a.program, who), deriveAta(who, USDC_MINT!), deriveAta(who, a.juniorMint), deriveAta(who, a.seniorMint),
+    deriveWithdrawRequest(a.program, who, 'junior'), deriveWithdrawRequest(a.program, who, 'senior'),
+  ]);
+  const [bytes, sol] = await Promise.all([accountsBytes([...base, ...mine]), fetchSol(who)]);
+  const [l, u, sj, ss, wrj, wrs] = bytes.slice(base.length);
+  return {
+    pool: decodePoolView(bytes.slice(0, base.length)),
+    line: l ? decodeLine(l) : null,
+    usdc: u ? decodeTokenAmount(u) : 0n,
+    shares: { junior: sj ? decodeTokenAmount(sj) : 0n, senior: ss ? decodeTokenAmount(ss) : 0n },
+    requests: { junior: wrj ? decodeWithdrawRequest(wrj) : null, senior: wrs ? decodeWithdrawRequest(wrs) : null },
+    sol,
   };
 }
 
