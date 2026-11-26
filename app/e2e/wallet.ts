@@ -32,7 +32,7 @@ const ICON =
   ).toString('base64');
 
 /** Sign a wire transaction with the wallet key. Returns the signed wire bytes. */
-function signWire(w: TestWallet, wire: Uint8Array): Uint8Array {
+export function signWire(w: TestWallet, wire: Uint8Array): Uint8Array {
   const tx = getTransactionDecoder().decode(wire);
   if (!(w.address in tx.signatures)) throw new Error(`test wallet ${w.address} is not a required signer of this transaction`);
   const sig = nacl.sign.detached(new Uint8Array(tx.messageBytes), w.secretKey);
@@ -92,8 +92,15 @@ function walletScript({ addr, name, icon }: { addr: string; name: string; icon: 
     chains: ['solana:devnet', 'solana:mainnet', 'solana:testnet'],
     get accounts() { return connected ? [account] : []; },
     features: {
-      'standard:connect': { version: '1.0.0', connect: async () => { connected = true; emit(); return { accounts: [account] }; } },
-      'standard:disconnect': { version: '1.0.0', disconnect: async () => { connected = false; emit(); } },
+      // Like Phantom: a silent connect succeeds only once the user has approved this site (remembered across reloads).
+      'standard:connect': {
+        version: '1.0.0',
+        connect: async (input?: { silent?: boolean }) => {
+          if (input?.silent && localStorage.getItem('__e2e_trusted') !== '1') return { accounts: [] };
+          connected = true; localStorage.setItem('__e2e_trusted', '1'); emit(); return { accounts: [account] };
+        },
+      },
+      'standard:disconnect': { version: '1.0.0', disconnect: async () => { connected = false; localStorage.removeItem('__e2e_trusted'); emit(); } },
       'standard:events': {
         version: '1.0.0',
         on: (_e: string, l: (p: unknown) => void) => { listeners.add(l); return () => listeners.delete(l); },
