@@ -135,6 +135,9 @@ try {
     VITE_PROGRAM_ID: PROGRAM_ID,
     VITE_USDC_MINT: mint,
     E2E_ADMIN_KEYPAIR: adminFile,
+    // A fixed, fake WalletConnect id: the option shows, its code loads on tap, nothing reaches WalletConnect's servers
+    // (the tests block them). Never the real id from .env.local.
+    VITE_WC_PROJECT_ID: 'e2e-walletconnect',
     // Own servers on own ports: never reuse a demo server left running for phone testing (it may point at devnet).
     E2E_FRESH: '1',
     E2E_ENCLAVE_PORT: process.env.E2E_ENCLAVE_PORT || '18787',

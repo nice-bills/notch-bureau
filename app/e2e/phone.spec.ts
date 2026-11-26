@@ -215,6 +215,42 @@ test.describe('Phone review fixes', () => {
       await context.close();
     }
   });
+
+  test('11. iPhone Safari: WalletConnect is listed, its code loads only on tap, and a remembered session reconnects silently', async ({ browser }) => {
+    const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1';
+    const context = await browser.newContext({ ...PHONE, userAgent: IPHONE, baseURL: APP_URL });
+    // Nothing leaves for WalletConnect's servers (the e2e build uses a fake project id).
+    await context.route(/walletconnect\.(com|org)|reown\.com|web3modal\.(com|org)/, (r) => r.abort());
+    const wcCode: string[] = [];
+    context.on('request', (r) => { if (/wc-session|@reown|universal-provider/.test(r.url())) wcCode.push(r.url()); });
+    const page = await context.newPage();
+    try {
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Get started' }).click();
+      const sheet = page.getByRole('dialog', { name: 'Sign in to start' });
+      const wc = sheet.getByRole('menuitem', { name: /Other wallet apps/ });
+      await expect(wc).toBeVisible({ timeout: 15_000 });
+      await expect(sheet).toContainText('Pick yours from a list');
+      await expect(sheet.getByRole('menuitem', { name: /Phantom app/ })).toBeVisible(); // the Phantom deeplink stays
+      expect(wcCode, 'no WalletConnect code before the tap').toEqual([]);
+      const loaded = page.waitForRequest((r) => /wc-session/.test(r.url()), { timeout: 15_000 });
+      await wc.click();
+      await loaded;
+      log(`WalletConnect code fetched on tap (${wcCode.length} requests)`);
+
+      // A remembered WalletConnect session: the app reconnects on load without downloading the WalletConnect code.
+      const me = '8vCHa2FTUp2Xf1Yb1pEhUUyRLrEJCGKdj77CB2uLzBE5';
+      const page2 = await context.newPage();
+      await page2.addInitScript((a) => { localStorage.setItem('notch.wallet', 'WalletConnect'); localStorage.setItem('notch.wc.address', a); }, me);
+      wcCode.length = 0;
+      await page2.goto('/');
+      await expect(page2.getByText('Hello, 8vCH')).toBeVisible({ timeout: 15_000 });
+      await expect(page2.getByRole('button', { name: /Your wallet 8vCH/ })).toBeVisible();
+      expect(wcCode.filter((u) => /wc-session/.test(u)), 'silent reconnect needs no WalletConnect code').toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
 });
 
 /**
