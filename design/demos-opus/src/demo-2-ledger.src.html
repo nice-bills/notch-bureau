@@ -1,0 +1,842 @@
+<title>Notch Ledger</title>
+<meta charset="utf-8">
+<meta name="description" content="Notch demo 2: a calm money app where the only loud moment is the sealed box handing you a limit.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500&display=swap">
+<style>
+/* Layout: one phone, calm grey canvas, white surfaces, black pills. One loud moment: the sealed box. */
+:root{
+  --page:#DADCE0; --side-ink:#0F1012; --side-muted:#4F535A; --side-line:#BFC2C8; --side-hover:rgba(15,16,18,.06);
+  --bg:#F0F1F3; --card:#FFFFFF; --well:#F6F7F8; --ink:#0F1012; --muted:#5B6068; --faint:#8A8F97; --line:#E2E4E8;
+  --green:#0A8754; --green-soft:#E3F4EC; --amber:#C9581A; --amber-soft:#FBEDE3; --sheet:#FFFFFF;
+  --font-display:'Geist',ui-sans-serif,system-ui,sans-serif; --font-body:'Geist',ui-sans-serif,system-ui,sans-serif; --font-mono:'Geist Mono',ui-monospace,monospace;
+  color-scheme:light;
+}
+/*@CORE_CSS*/
+body{font-family:var(--font-body)}
+.cents{color:var(--faint)}
+h2.title{margin:0;font-size:32px;line-height:1.08;letter-spacing:-.03em;font-weight:600;text-wrap:balance}
+p.lede{margin:8px 0 0;color:var(--muted);font-size:16px;line-height:1.45;max-width:32ch;text-wrap:pretty}
+
+/* top bar inside onboarding */
+.obar{display:flex;align-items:center;gap:16px;height:48px}
+.iconbtn{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--card);box-shadow:0 0 0 1px var(--line)}
+.prog{flex:1;display:flex;gap:4px}
+.prog i{flex:1;height:4px;border-radius:2px;background:#DCDEE2;overflow:hidden;position:relative}
+.prog i::after{content:"";position:absolute;inset:0;background:var(--ink);transform:scaleX(0);transform-origin:left;transition:transform .5s var(--ease-out)}
+.prog i.on::after{transform:none}
+
+.btn{height:56px;border-radius:99px;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:600;font-size:16px;width:100%}
+.btn.dark{background:var(--ink);color:#fff}
+.btn.dark:disabled{opacity:.35}
+.btn.light{background:var(--card);box-shadow:0 0 0 1px var(--line)}
+.btn.ghost{height:48px;color:var(--muted);font-weight:500}
+.btn .ic{width:20px;height:20px}
+
+/* welcome */
+.wel{flex:1;display:flex;flex-direction:column;padding:calc(var(--sb-h) + 16px) 24px 0}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:20px;letter-spacing:-.03em}
+.brand svg{width:24px;height:24px}
+.wel-art{flex:1;display:grid;place-items:center;min-height:0}
+.wel-art svg{width:min(260px,72%);height:auto;overflow:visible}
+.wel h2{font-size:40px;letter-spacing:-.035em;line-height:1.02}
+
+/* options */
+.opts{display:flex;flex-direction:column;gap:8px;margin-top:32px}
+.opt{display:flex;align-items:center;gap:16px;padding:16px;border-radius:24px;background:var(--card);box-shadow:0 0 0 1px var(--line);text-align:left;position:relative}
+.opt .badge{width:48px;height:48px;border-radius:16px;background:var(--well);display:grid;place-items:center;flex:none}
+.opt b{display:block;font-weight:600;font-size:16px}
+.opt small{display:block;color:var(--muted);font-size:14px;margin-top:4px}
+.opt .tick{margin-left:auto;width:24px;height:24px;border-radius:50%;box-shadow:inset 0 0 0 1.5px #C9CCD2;display:grid;place-items:center;flex:none;transition:background-color .2s,box-shadow .2s}
+.opt .tick svg{width:16px;height:16px;stroke:#fff;stroke-width:3;opacity:0;transform:scale(.6);transition:opacity .2s,transform .3s var(--ease-out)}
+.opt.sel{box-shadow:0 0 0 2px var(--ink)}
+.opt.sel .tick{background:var(--ink);box-shadow:none}
+.opt.sel .tick svg{opacity:1;transform:none}
+
+/* seeker art */
+.seek-art{display:grid;place-items:center;margin:32px 0 0;height:200px}
+.seek-art svg{height:200px;overflow:visible}
+
+/* inbox */
+.addr{margin-top:24px;background:var(--card);border-radius:24px;padding:16px 16px 16px;box-shadow:0 0 0 1px var(--line)}
+.addr label{font-size:14px;color:var(--muted)}
+.addr .row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.addr code{font-family:var(--font-mono);font-size:16px;letter-spacing:-.02em;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.copy{height:40px;padding:0 16px;flex:none;border-radius:99px;background:var(--ink);color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+.copy .ic{width:16px;height:16px}
+.addr .note{margin-top:16px;padding-top:16px;border-top:1px dashed var(--line);font-size:14px;color:var(--muted);display:flex;gap:8px;align-items:flex-start}
+.addr .note .ic{width:16px;height:16px;margin-top:4px}
+.steps{margin:24px 0 0;padding:0;list-style:none;display:flex;flex-direction:column}
+.steps li{display:flex;gap:16px;align-items:flex-start;padding:16px 0;border-bottom:1px solid var(--line)}
+.steps li:last-child{border:0}
+.steps .n{width:24px;height:24px;border-radius:50%;background:var(--card);box-shadow:0 0 0 1px var(--line);display:grid;place-items:center;font-size:14px;font-weight:600;flex:none}
+.steps b{font-weight:600}
+.steps small{display:block;color:var(--muted);font-size:14px;margin-top:4px}
+
+/* status timeline */
+.tl{margin-top:32px;display:flex;flex-direction:column}
+.tl .st{display:grid;grid-template-columns:28px 1fr;gap:16px;position:relative;padding-bottom:24px}
+.tl .st:last-child{padding-bottom:0}
+.tl .st::before{content:"";position:absolute;left:13px;top:30px;bottom:2px;width:2px;background:var(--line);border-radius:1px}
+.tl .st:last-child::before{display:none}
+.tl .st::after{content:"";position:absolute;left:13px;top:30px;width:2px;height:0;background:var(--ink);border-radius:1px;transition:height .6s var(--ease-out)}
+.tl .st.done::after{height:calc(100% - 32px)}
+.tl .st:last-child::after{display:none}
+.dot{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--card);box-shadow:inset 0 0 0 1.5px #CDD0D6;transition:background-color .25s,box-shadow .25s}
+.dot svg{width:16px;height:16px;stroke:#fff;stroke-width:3;opacity:0;transform:scale(.4) rotate(-20deg);transition:opacity .2s,transform .45s cubic-bezier(.34,1.56,.64,1)}
+.st.live .dot{box-shadow:inset 0 0 0 2px var(--ink)}
+.st.live .dot::before{content:"";width:12px;height:12px;border-radius:50%;border:2px solid var(--ink);border-right-color:transparent;animation:spin .7s linear infinite;position:absolute}
+.st.done .dot{background:var(--ink);box-shadow:none}
+.st.done .dot::before{display:none}
+.st.done .dot svg{opacity:1;transform:none}
+.st b{display:block;font-weight:600;font-size:16px;padding-top:4px;transition:color .2s}
+.st small{display:block;color:var(--muted);font-size:14px;margin-top:4px}
+.st.wait b{color:var(--faint)}
+.st.wait small{color:#A2A6AD}
+.meter{margin-top:8px;height:4px;border-radius:2px;background:#E3E5E9;overflow:hidden;opacity:0;transition:opacity .3s}
+.st.live .meter{opacity:1}
+.meter i{display:block;height:100%;width:100%;background:var(--ink);transform:scaleX(0);transform-origin:left;border-radius:3px}
+.keep{margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.keep div{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 0 0 1px var(--line)}
+.keep small{color:var(--muted);font-size:12px}
+.keep b{display:block;margin-top:4px;font-weight:600;font-size:16px}
+.keep .gone b{position:relative;display:inline-block;transition:color .3s}
+.keep .gone b::after{content:"";position:absolute;left:-2px;right:-2px;top:52%;height:2px;border-radius:1px;background:var(--amber);transform:scaleX(0);transform-origin:left;transition:transform .5s var(--ease-out)}
+.keep .gone.on b{color:var(--muted)}
+.keep .gone.on b::after{transform:none}
+.cta-wrap{transform:translateY(16px);opacity:0;pointer-events:none;transition:transform .5s var(--ease-drawer),opacity .3s}
+.cta-wrap.on{transform:none;opacity:1;pointer-events:auto}
+
+/* landed: the one loud moment */
+.landed{--screen-bg:#F0F1F3}
+.land-art{position:relative;height:300px;display:grid;place-items:end center}
+.land-art svg.box{width:250px;height:auto;overflow:visible}
+.confetti{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.confetti i{position:absolute;left:50%;top:46%;width:8px;height:16px;border-radius:2px;opacity:0}
+.land-copy{text-align:center;padding:8px 24px 0}
+.land-copy small{color:var(--muted);font-size:16px}
+.big{font-size:72px;font-weight:600;letter-spacing:-.045em;line-height:1;margin-top:8px;font-variant-numeric:tabular-nums}
+.big .unit{font-size:24px;letter-spacing:-.01em;color:var(--muted);font-weight:500;margin-left:8px}
+.land-copy .sub{margin-top:8px;color:var(--muted);font-size:16px}
+.chip{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 16px;border-radius:99px;font-size:14px;font-weight:600;background:var(--green-soft);color:var(--green)}
+.chip .ic{width:16px;height:16px}
+.land-copy .chip{margin-top:16px}
+
+/* home */
+.head{display:flex;align-items:center;justify-content:space-between;padding:calc(var(--sb-h) + 8px) 24px 8px}
+.head h3{margin:0;font-size:32px;letter-spacing:-.03em;font-weight:600}
+.head small{color:var(--muted);font-size:14px}
+.avatar{width:40px;height:40px;border-radius:50%;background:#1C1D20;color:#fff;display:grid;place-items:center;font-weight:600;font-size:16px}
+.card{background:var(--card);border-radius:32px;padding:16px;box-shadow:0 1px 0 rgba(15,16,18,.03)}
+.hero{margin:16px 16px 0}
+.hero small{color:var(--muted);font-size:14px}
+.hero .amt{font-size:40px;letter-spacing:-.04em;font-weight:600;line-height:1.05;margin-top:8px}
+.hero .amt .u{font-size:16px;color:var(--muted);font-weight:500;letter-spacing:0;margin-left:4px}
+.usebar{margin-top:16px;height:8px;border-radius:4px;background:var(--well);overflow:hidden;display:flex}
+.usebar i{height:100%;background:var(--ink);border-radius:4px;width:0;transition:width .9s var(--ease-out)}
+.legend{display:flex;gap:16px;margin-top:8px;font-size:14px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:8px}
+.legend span::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ink)}
+.legend span.free::before{background:#D7D9DE}
+.legend b{color:var(--ink);font-weight:600}
+.qa{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:16px 16px 0}
+.qa button{display:flex;flex-direction:column;align-items:center;gap:8px;font-size:12px;color:var(--muted);font-weight:500}
+.qa .q{width:56px;height:56px;border-radius:50%;background:var(--card);display:grid;place-items:center;color:var(--ink);box-shadow:0 1px 0 rgba(15,16,18,.04)}
+.due{margin:16px 16px 0;display:flex;align-items:center;gap:16px}
+.due .flag{width:40px;height:40px;border-radius:16px;background:var(--amber-soft);color:var(--amber);display:grid;place-items:center;flex:none}
+.due b{font-weight:600;display:block}
+.due small{color:var(--muted);font-size:14px}
+.due small em{font-style:normal;color:var(--amber);font-weight:600}
+.pill{height:40px;padding:0 16px;border-radius:99px;background:var(--ink);color:#fff;font-weight:600;font-size:14px;margin-left:auto;flex:none}
+.sect{display:flex;align-items:center;justify-content:space-between;margin:24px 24px 8px}
+.sect h4{margin:0;font-size:16px;font-weight:600;letter-spacing:-.01em}
+.chips{display:flex;gap:8px;margin:0 16px 8px;position:relative}
+.chips button{height:32px;padding:0 16px;border-radius:99px;font-size:14px;font-weight:500;color:var(--muted);position:relative;z-index:1;transition:color .2s}
+.chips button.on{color:var(--ink)}
+.chips .ind{position:absolute;top:0;left:0;height:32px;border-radius:99px;background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.06);transition:transform .35s var(--ease-drawer),width .35s var(--ease-drawer)}
+.list{margin:0 16px;background:var(--card);border-radius:24px;padding:4px 0}
+.item{display:flex;align-items:center;gap:16px;padding:16px 16px;width:100%;text-align:left}
+.item+.item{border-top:1px solid var(--line)}
+.item .ico{width:40px;height:40px;border-radius:12px;background:var(--well);display:grid;place-items:center;flex:none}
+.item .ico .ic{width:20px;height:20px}
+.item .t{flex:1;min-width:0}
+.item b{display:block;font-weight:500;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item small{display:block;color:var(--muted);font-size:14px;margin-top:4px}
+.item .v{font-weight:600;font-variant-numeric:tabular-nums;font-size:16px}
+.item .v.pos{color:var(--green)}
+.item.hide{display:none}
+.spacer{height:110px}
+
+/* tab bar */
+.tabs{position:absolute;left:16px;right:16px;bottom:calc(22px + env(safe-area-inset-bottom,0px));z-index:30;height:64px;border-radius:99px;display:flex;padding:8px;
+  background:rgba(255,255,255,.82);backdrop-filter:blur(18px) saturate(170%);-webkit-backdrop-filter:blur(18px) saturate(170%);box-shadow:0 0 0 1px rgba(15,16,18,.06),0 12px 30px -14px rgba(15,16,18,.25)}
+.tabs button{flex:1;border-radius:99px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:12px;font-weight:500;color:var(--faint)}
+.tabs button.on{color:var(--ink);background:rgba(15,16,18,.06)}
+.tabs .ic{width:20px;height:20px}
+@media (max-width:720px){.tabs{bottom:calc(12px + env(safe-area-inset-bottom,0px))}}
+
+/* borrow / keypad */
+.bhead{display:flex;align-items:center;justify-content:space-between;padding:calc(var(--sb-h) + 4px) 16px 0}
+.bhead h5{margin:0;font-size:16px;font-weight:600}
+.amtbox{text-align:center;padding:16px 24px 0}
+.amtbox .val{font-size:56px;font-weight:600;letter-spacing:-.045em;line-height:1.05;font-variant-numeric:tabular-nums;display:inline-flex;align-items:baseline;justify-content:center;min-height:64px}
+.amtbox .val .u{font-size:20px;color:var(--muted);font-weight:500;letter-spacing:0;margin-left:8px}
+.amtbox .val span.d{display:inline-block}
+.amtbox .val.empty .num-digits{color:#C4C7CD}
+.amtbox .hint{margin-top:8px;font-size:14px;color:var(--muted);transition:color .2s}
+.amtbox .hint.over{color:var(--amber)}
+.quick{display:flex;justify-content:center;gap:8px;margin-top:16px}
+.quick button{height:32px;padding:0 16px;border-radius:99px;background:var(--card);font-size:14px;font-weight:600;box-shadow:0 0 0 1px var(--line)}
+.break{margin:16px 16px 0;padding:8px 16px}
+.break .r{display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;font-size:14px}
+.break .r+.r{border-top:1px solid var(--line)}
+.break .r span{color:var(--muted)}
+.break .r span small{display:block;font-size:12px;color:var(--faint);margin-top:4px}
+.break .r b{font-weight:600;font-variant-numeric:tabular-nums}
+.pad-keys{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:8px 16px 0}
+.pad-keys button{height:56px;border-radius:16px;font-size:24px;font-weight:500;display:grid;place-items:center}
+.pad-keys button:active,.pad-keys button.down{background:rgba(15,16,18,.06)}
+.hold{position:relative;overflow:hidden;isolation:isolate}
+.hold::before{content:"";position:absolute;inset:0;background:var(--green);z-index:-1;clip-path:inset(0 100% 0 0);transition:clip-path .2s var(--ease-out)}
+.hold.holding::before{clip-path:inset(0 0 0 0);transition:clip-path .9s linear}
+.hold.held::before{clip-path:inset(0 0 0 0)}
+
+/* sheets content */
+.sh-h{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.sh-h h4{margin:0;font-size:24px;font-weight:600;letter-spacing:-.02em;text-wrap:balance}
+.sh-h .x{width:32px;height:32px;border-radius:50%;background:var(--well);display:grid;place-items:center;flex:none}
+.sh-h .x .ic{width:16px;height:16px}
+.sh-p{color:var(--muted);margin:8px 0 0;font-size:16px;line-height:1.45}
+.facts{margin:16px 0 0;display:flex;flex-direction:column;gap:4px}
+.fact{display:flex;gap:16px;align-items:flex-start;padding:16px;border-radius:16px;background:var(--well)}
+.fact .ic{width:20px;height:20px;margin-top:4px}
+.fact b{display:block;font-weight:600;font-size:16px}
+.fact small{display:block;color:var(--muted);font-size:14px;margin-top:4px}
+.sheet .btn{margin-top:16px}
+.okmark{width:76px;height:76px;border-radius:50%;background:var(--green);display:grid;place-items:center;margin:16px auto 0;transform:scale(.6);opacity:0}
+.okmark svg{width:40px;height:40px;stroke:#fff;stroke-width:2.6;fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:30;stroke-dashoffset:30}
+.sheet.on .okmark{animation:pop .5s cubic-bezier(.34,1.56,.64,1) .08s forwards}
+.sheet.on .okmark svg{animation:draw .45s var(--ease-out) .32s forwards}
+@keyframes pop{to{transform:none;opacity:1}}
+@keyframes draw{to{stroke-dashoffset:0}}
+.center{text-align:center}
+
+/* lend */
+.seg{position:relative;display:grid;grid-template-columns:1fr 1fr;background:#E4E6EA;border-radius:99px;padding:4px;margin:16px 16px 0}
+.seg button{height:40px;border-radius:99px;font-weight:600;font-size:14px;position:relative;z-index:1;color:var(--muted);transition:color .2s}
+.seg button.on{color:var(--ink)}
+.seg .ind{position:absolute;top:4px;left:4px;width:calc(50% - 4px);height:40px;border-radius:99px;background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.08);transition:transform .38s var(--ease-drawer)}
+.seg.r .ind{transform:translateX(100%)}
+.lcard{margin:16px 16px 0}
+.lcard .top{display:flex;justify-content:space-between;align-items:flex-start}
+.lcard small{color:var(--muted);font-size:14px}
+.lcard .amt{font-size:40px;font-weight:600;letter-spacing:-.04em;margin-top:4px;line-height:1.05}
+.rate{display:inline-flex;align-items:center;gap:4px;height:32px;padding:0 8px;border-radius:99px;background:var(--green-soft);color:var(--green);font-weight:600;font-size:14px;white-space:nowrap}
+.spark{display:block;width:100%;height:96px;margin-top:8px;overflow:visible}
+.spark path.l{fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.lcard .acts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
+.lcard .acts .btn{height:48px;font-size:16px}
+.explain{margin:16px 16px 0;display:flex;gap:16px;align-items:flex-start}
+.explain .stack{flex:none;width:48px;display:flex;flex-direction:column;gap:4px;padding-top:4px}
+.explain .stack i{display:block;height:16px;border-radius:4px;background:#D7D9DE}
+.explain .stack i.hl{background:var(--ink)}
+.explain b{font-weight:600;display:block}
+.explain small{color:var(--muted);font-size:14px;display:block;margin-top:4px}
+.stats{margin:16px 16px 0;display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stats div{background:var(--card);border-radius:24px;padding:16px 16px}
+.stats small{color:var(--muted);font-size:12px;display:block}
+.stats b{font-size:20px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.wd{margin-top:16px;display:flex;flex-direction:column;gap:0}
+.wd .w{display:grid;grid-template-columns:28px 1fr auto;gap:16px;align-items:center;padding:8px 0}
+.wd .w .dot{width:32px;height:32px}
+.wd .w b{font-weight:600;display:block}
+.wd .w small{color:var(--muted);font-size:14px}
+.wd .w .when{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+
+/* checks */
+.check-hero{margin:16px 16px 0;display:flex;gap:16px;align-items:center}
+.check-hero .ico{width:48px;height:48px;border-radius:16px;background:var(--well);display:grid;place-items:center;flex:none}
+.bands{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:16px}
+.bands div{height:56px;border-radius:12px;background:var(--well);display:flex;flex-direction:column;justify-content:flex-end;padding:8px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.bands div.on{background:var(--ink);color:#fff}
+.bands div b{font-size:14px;font-weight:600}
+</style>
+
+<!--@ICONS-->
+<div class="stage">
+  <aside class="side">
+    <span class="tag">Notch · Direction 2 of 3</span>
+    <h1>Ledger</h1>
+    <p>A calm money app. Grey canvas, white cards, black buttons. Everything stays quiet so the one loud moment lands: the sealed box hands you your limit.</p>
+    <nav class="jump" aria-label="Jump to screen">
+      <button data-go="welcome"><span>1</span>Welcome</button>
+      <button data-go="signin"><span>2</span>Sign in</button>
+      <button data-go="seeker"><span>3</span>Seeker phone</button>
+      <button data-go="inbox"><span>4</span>Your Notch inbox</button>
+      <button data-go="status"><span>5</span>Live check</button>
+      <button data-go="landed"><span>6</span>Limit lands</button>
+      <button data-go="home"><span>7</span>Home</button>
+      <button data-go="borrow"><span>8</span>Borrow</button>
+      <button data-go="lend"><span>9</span>Lend</button>
+      <button data-go="checks"><span>10</span>App checks</button>
+    </nav>
+    <small>All numbers are fake. Tap everything.</small>
+  </aside>
+
+  <main class="device" data-sb="dark">
+    <!--@CHROME-->
+
+    <!-- 1 welcome -->
+    <section class="screen" data-screen="welcome">
+      <div class="wel">
+        <div class="brand"><svg viewBox="0 0 26 26"><rect x="1" y="1" width="24" height="24" rx="8" fill="#0F1012"/><path d="M8 18V8l10 10V8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>notch</div>
+        <div class="wel-art" aria-hidden="true">
+          <svg viewBox="0 0 240 230" id="welBox"></svg>
+        </div>
+        <h2 class="title">Credit from your money history.</h2>
+        <p class="lede">Your statement goes into a locked box. Only a number comes out. Nobody reads it, not even us.</p>
+      </div>
+      <div class="foot">
+        <button class="btn dark tap" data-go="signin">Get started</button>
+        <button class="btn ghost tap" onclick="jumpTo('lend')">I want to lend instead</button>
+      </div>
+    </section>
+
+    <!-- 2 sign in -->
+    <section class="screen" data-screen="signin">
+      <div class="pad scroll">
+        <div class="obar"><button class="iconbtn tap" data-back aria-label="Back"><svg class="ic"><use href="#i-back"/></svg></button><div class="prog"><i class="on"></i><i></i><i></i><i></i></div></div>
+        <h2 class="title" style="margin-top:24px">How do you want to sign in?</h2>
+        <p class="lede">Either way, you get a wallet that holds your limit.</p>
+        <div class="opts" id="signOpts">
+          <button class="opt tap soft" data-v="google"><span class="badge"><svg class="ic"><use href="#i-google"/></svg></span><span><b>Continue with Google</b><small>We make the wallet for you. No seed phrase.</small></span><span class="tick"><svg><use href="#i-check"/></svg></span></button>
+          <button class="opt tap soft" data-v="wallet"><span class="badge"><svg class="ic"><use href="#i-wallet"/></svg></span><span><b>Use my wallet</b><small>Phantom, Solflare or Seed Vault</small></span><span class="tick"><svg><use href="#i-check"/></svg></span></button>
+        </div>
+      </div>
+      <div class="foot"><button class="btn dark tap" id="signNext" disabled>Continue</button></div>
+    </section>
+
+    <!-- 3 seeker -->
+    <section class="screen" data-screen="seeker">
+      <div class="pad scroll">
+        <div class="obar"><button class="iconbtn tap" data-back aria-label="Back"><svg class="ic"><use href="#i-back"/></svg></button><div class="prog"><i class="on"></i><i class="on"></i><i></i><i></i></div></div>
+        <h2 class="title" style="margin-top:24px">On a Seeker phone?</h2>
+        <p class="lede">One Seeker backs one borrower. If this is one, your limit grows by half.</p>
+        <div class="seek-art" aria-hidden="true">
+          <svg viewBox="0 0 160 200" id="seekSvg">
+            <rect x="35" y="10" width="90" height="176" rx="20" fill="#fff" stroke="#0F1012" stroke-width="2"/>
+            <rect x="44" y="22" width="72" height="150" rx="12" fill="#F0F1F3"/>
+            <rect x="66" y="15" width="28" height="4" rx="2" fill="#0F1012"/>
+            <g id="seekMult" style="transform-origin:80px 95px;transition:transform .5s cubic-bezier(.34,1.56,.64,1),opacity .3s;opacity:.25">
+              <text x="80" y="104" text-anchor="middle" font-family="Geist" font-weight="700" font-size="30" fill="#0F1012" letter-spacing="-1">1.5×</text>
+            </g>
+            <g id="seekRays" stroke="#0A8754" stroke-width="2.4" stroke-linecap="round" opacity="0" style="transition:opacity .3s">
+              <path d="M18 60l-10-6M14 95H2M18 130l-10 6M142 60l10-6M146 95h12M142 130l10 6"/>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <div class="foot">
+        <button class="btn dark tap" id="seekBtn">Check this phone</button>
+        <button class="btn ghost tap" id="seekSkip">Skip, I'm not on a Seeker</button>
+      </div>
+    </section>
+
+    <!-- 4 inbox -->
+    <section class="screen" data-screen="inbox">
+      <div class="pad scroll">
+        <div class="obar"><button class="iconbtn tap" data-back aria-label="Back"><svg class="ic"><use href="#i-back"/></svg></button><div class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div></div>
+        <h2 class="title" style="margin-top:24px">Send us your statement</h2>
+        <p class="lede">This inbox is yours alone. Have your mobile money provider email your statement here, for example MTN MoMo.</p>
+        <div class="addr">
+          <label>Your Notch inbox</label>
+          <div class="row"><code id="addrTxt">ama.k7q2@in.notch.cash</code><button class="copy tap" onclick="copyText($('#addrTxt').textContent)"><svg class="ic"><use href="#i-copy"/></svg>Copy</button></div>
+          <div class="note"><svg class="ic"><use href="#i-shield"/></svg><span>Only an email signed by your provider counts. The address works once.</span></div>
+        </div>
+        <ol class="steps">
+          <li><span class="n">1</span><span><b>Open your money app</b><small>Go to Statements.</small></span></li>
+          <li><span class="n">2</span><span><b>Pick the last 3 months</b><small>More months can mean a better limit.</small></span></li>
+          <li><span class="n">3</span><span><b>Paste the address, send</b><small>We'll take it from there.</small></span></li>
+        </ol>
+      </div>
+      <div class="foot">
+        <button class="btn dark tap" data-go="status">I've sent it</button>
+        <button class="btn ghost tap" data-sheet-open="why">Who can see my statement?</button>
+      </div>
+    </section>
+
+    <!-- 5 status -->
+    <section class="screen" data-screen="status">
+      <div class="pad scroll">
+        <div class="obar"><button class="iconbtn tap" data-back aria-label="Back"><svg class="ic"><use href="#i-back"/></svg></button><div class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div></div>
+        <h2 class="title" style="margin-top:24px" id="stTitle">Waiting for your statement</h2>
+        <p class="lede" id="stLede">Keep this open, or leave. We'll tell you when it's done.</p>
+        <div class="tl" id="tl">
+          <div class="st live" data-k="0"><span class="dot"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" fill="none"/></svg></span><span><b>Statement received</b><small id="s0">Waiting for the email…</small></span></div>
+          <div class="st wait" data-k="1"><span class="dot"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" fill="none"/></svg></span><span><b>Read in a locked computer</b><small id="s1">Nobody can look inside it.</small><div class="meter"><i id="meterI"></i></div></span></div>
+          <div class="st wait" data-k="2"><span class="dot"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" fill="none"/></svg></span><span><b>Limit posted</b><small id="s2">Saved to your wallet on Solana.</small></span></div>
+        </div>
+        <div class="keep">
+          <div><small>We keep</small><b>Your limit</b></div>
+          <div class="gone"><small>We delete</small><b>The statement</b></div>
+        </div>
+      </div>
+      <div class="foot cta-wrap" id="stCta"><button class="btn dark tap" data-go="landed">See my limit</button></div>
+    </section>
+
+    <!-- 6 landed -->
+    <section class="screen rise landed" data-screen="landed">
+      <div style="flex:1"></div>
+      <div class="land-art">
+        <svg viewBox="0 0 240 230" class="box" id="landBox" aria-hidden="true"></svg>
+        <div class="confetti" id="confetti" aria-hidden="true"></div>
+      </div>
+      <div class="land-copy">
+        <small>You can borrow up to</small>
+        <div class="big"><span id="landAmt" class="num">0.00</span><span class="unit">USDC</span></div>
+        <div class="sub" id="landGhs">About GHS 0</div>
+        <div id="landChip"></div>
+      </div>
+      <div style="flex:1"></div>
+      <div class="foot"><button class="btn dark tap" onclick="go('home',{reset:true})">Start borrowing</button></div>
+    </section>
+
+    <!-- 7 home -->
+    <section class="screen" data-screen="home">
+      <div class="scroll">
+        <div class="head"><div><small>Tuesday, 25 Nov</small><h3>Hi Ama</h3></div><button class="avatar tap" data-sheet-open="me" aria-label="Account">A</button></div>
+        <div class="card hero">
+          <small>Available to borrow</small>
+          <div class="amt num"><span id="hAvail">45<span class="cents">.00</span></span><span class="u">USDC</span></div>
+          <div class="usebar"><i id="hBar"></i></div>
+          <div class="legend"><span>Used <b id="hUsed">0.00</b></span><span class="free">Limit <b id="hLimit">45.00</b></span></div>
+        </div>
+        <div class="qa">
+          <button class="tap" data-go="borrow"><span class="q"><svg class="ic"><use href="#i-down"/></svg></span>Borrow</button>
+          <button class="tap" onclick="S.used? openSheet('repay') : toast('Nothing to repay yet')"><span class="q"><svg class="ic"><use href="#i-repay"/></svg></span>Repay</button>
+          <button class="tap" data-go="checks" data-tab><span class="q"><svg class="ic"><use href="#i-apps"/></svg></span>Checks</button>
+          <button class="tap" data-sheet-open="why"><span class="q"><svg class="ic"><use href="#i-lock"/></svg></span>Privacy</button>
+        </div>
+        <div class="card due" id="dueCard" hidden>
+          <span class="flag"><svg class="ic"><use href="#i-clock"/></svg></span>
+          <span><b>Pay <span id="dueAmt">40.80</span> USDC</b><small>Due <em id="dueDate">25 Dec</em></small></span>
+          <button class="pill tap" data-sheet-open="repay">Repay</button>
+        </div>
+        <div class="sect"><h4>Activity</h4></div>
+        <div class="chips" id="chips"><span class="ind"></span><button class="on" data-f="all">All</button><button data-f="loan">Loans</button><button data-f="check">Checks</button><button data-f="limit">Limit</button></div>
+        <div class="list" id="acts">
+          <div class="item" data-k="check"><span class="ico"><svg class="ic"><use href="#i-bed"/></svg></span><span class="t"><b>Kente Hostel checked you</b><small>Today · saw "25 to 100", not your limit</small></span><span class="v">Pass</span></div>
+          <div class="item" data-k="limit"><span class="ico"><svg class="ic"><use href="#i-shield"/></svg></span><span class="t"><b>Limit posted</b><small>Today · from your statement</small></span><span class="v pos" id="actLimit">+45.00</span></div>
+          <div class="item" data-k="limit"><span class="ico"><svg class="ic"><use href="#i-mail"/></svg></span><span class="t"><b>Statement deleted</b><small>Today · after reading</small></span><span class="v">Gone</span></div>
+        </div>
+        <div class="spacer"></div>
+      </div>
+      <nav class="tabs"><button class="tap on" data-go="home" data-tab><svg class="ic"><use href="#i-home"/></svg>Home</button><button class="tap" data-go="lend" data-tab><svg class="ic"><use href="#i-lend"/></svg>Lend</button><button class="tap" data-go="checks" data-tab><svg class="ic"><use href="#i-apps"/></svg>Checks</button></nav>
+    </section>
+
+    <!-- 8 borrow -->
+    <section class="screen" data-screen="borrow">
+      <div class="bhead"><button class="iconbtn tap" data-back aria-label="Back"><svg class="ic"><use href="#i-back"/></svg></button><h5>Borrow</h5><span style="width:40px"></span></div>
+      <div class="amtbox">
+        <div class="val" id="bVal"><span class="num-digits" id="bDigits">0</span><span class="u">USDC</span></div>
+        <div class="hint" id="bHint">of 45.00 available</div>
+        <div class="quick"><button class="tap" data-q="10">10</button><button class="tap" data-q="25">25</button><button class="tap" data-q="max">Max</button></div>
+      </div>
+      <div class="card break">
+        <div class="r"><span>Deposit now, 20%<small>Back when you repay</small></span><b id="bDep">0.00</b></div>
+        <div class="r"><span>Fee, 2%</span><b id="bFee">0.00</b></div>
+        <div class="r"><span>Pay back by <span id="bDue">25 Dec</span></span><b id="bBack">0.00</b></div>
+      </div>
+      <div style="flex:1"></div>
+      <div class="pad-keys" id="keys">
+        <button class="tap">1</button><button class="tap">2</button><button class="tap">3</button>
+        <button class="tap">4</button><button class="tap">5</button><button class="tap">6</button>
+        <button class="tap">7</button><button class="tap">8</button><button class="tap">9</button>
+        <button class="tap">.</button><button class="tap">0</button><button class="tap" data-del aria-label="Delete"><svg class="ic"><use href="#i-back-key"/></svg></button>
+      </div>
+      <div class="foot" style="padding-top:8px"><button class="btn dark hold" id="bGo" disabled>Hold to borrow</button></div>
+    </section>
+
+    <!-- 9 lend -->
+    <section class="screen" data-screen="lend">
+      <div class="scroll">
+        <div class="head"><div><small>Lend USDC to everyday earners</small><h3>Lend</h3></div><button class="avatar tap" data-sheet-open="me" aria-label="Account">A</button></div>
+        <div class="seg" id="seg"><span class="ind"></span><button class="on" data-t="safe">Safe share</button><button data-t="risky">Risky share</button></div>
+        <div class="card lcard">
+          <div class="top"><div><small id="lLabel">Your Safe share</small><div class="amt num" id="lAmt">250<span class="cents">.00</span></div></div><span class="rate" id="lRate">About 7% a year</span></div>
+          <svg class="spark" id="spark" viewBox="0 0 320 96" preserveAspectRatio="none"></svg>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px"><span>Value of 1 share, last 90 days</span><b id="lGain" style="color:var(--green);font-weight:600">+1.72%</b></div>
+          <div class="acts"><button class="btn dark tap" data-sheet-open="deposit">Deposit</button><button class="btn light tap" data-sheet-open="withdraw">Withdraw</button></div>
+        </div>
+        <div class="card explain" id="lExplain">
+          <span class="stack"><i></i><i></i><i class="hl"></i></span>
+          <span><b>Paid first, hurt last</b><small>If a borrower doesn't pay, the Risky share takes the loss first.</small></span>
+        </div>
+        <div class="stats">
+          <div><small>Lent out</small><b>61%</b></div>
+          <div><small>Borrowers</small><b>1,204</b></div>
+          <div><small>Late now</small><b>1.8%</b></div>
+        </div>
+        <div class="spacer"></div>
+      </div>
+      <nav class="tabs"><button class="tap" data-go="home" data-tab><svg class="ic"><use href="#i-home"/></svg>Home</button><button class="tap on" data-go="lend" data-tab><svg class="ic"><use href="#i-lend"/></svg>Lend</button><button class="tap" data-go="checks" data-tab><svg class="ic"><use href="#i-apps"/></svg>Checks</button></nav>
+    </section>
+
+    <!-- 10 checks -->
+    <section class="screen" data-screen="checks">
+      <div class="scroll">
+        <div class="head"><div><small>Apps that asked about you</small><h3>Checks</h3></div><button class="avatar tap" data-sheet-open="me" aria-label="Account">A</button></div>
+        <div class="card" style="margin:16px 16px 0">
+          <small style="color:var(--muted);font-size:14px">What apps see</small>
+          <div style="font-weight:600;font-size:20px;margin-top:4px;letter-spacing:-.01em">A band, never your limit</div>
+          <div class="bands"><div><b>0–25</b></div><div class="on"><b>25–100</b></div><div><b>100–500</b></div><div><b>500+</b></div></div>
+        </div>
+        <div class="sect"><h4>Recent</h4></div>
+        <div class="list">
+          <button class="item tap soft" data-sheet-open="check"><span class="ico"><svg class="ic"><use href="#i-bed"/></svg></span><span class="t"><b>Kente Hostel, Osu</b><small>Today, 10:14 · room deposit</small></span><span class="v">Pass</span></button>
+          <button class="item tap soft" data-sheet-open="check"><span class="ico"><svg class="ic"><use href="#i-phone"/></svg></span><span class="t"><b>Adom Phones</b><small>Mon · pay in 3 for a handset</small></span><span class="v">Pass</span></button>
+          <button class="item tap soft" data-sheet-open="check"><span class="ico"><svg class="ic"><use href="#i-apps"/></svg></span><span class="t"><b>Tro Tro Pass</b><small>12 Nov · monthly bus pass</small></span><span class="v">Pass</span></button>
+        </div>
+        <div class="spacer"></div>
+      </div>
+      <nav class="tabs"><button class="tap" data-go="home" data-tab><svg class="ic"><use href="#i-home"/></svg>Home</button><button class="tap" data-go="lend" data-tab><svg class="ic"><use href="#i-lend"/></svg>Lend</button><button class="tap on" data-go="checks" data-tab><svg class="ic"><use href="#i-apps"/></svg>Checks</button></nav>
+    </section>
+
+    <div class="scrim"></div>
+
+    <div class="sheet" data-sheet="why">
+      <div class="grab"></div>
+      <div class="sh-h"><h4>Who can see my statement?</h4><button class="x tap" data-sheet-close aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button></div>
+      <p class="sh-p">Nobody. It is read inside a sealed computer that even we can't open.</p>
+      <div class="facts">
+        <div class="fact"><svg class="ic"><use href="#i-lock"/></svg><span><b>Sealed by Intel chips</b><small>Runs on Phala. Anyone can check the code it runs.</small></span></div>
+        <div class="fact"><svg class="ic"><use href="#i-shield"/></svg><span><b>Only the provider's real email</b><small>A forged statement fails the signature check.</small></span></div>
+        <div class="fact"><svg class="ic"><use href="#i-x"/></svg><span><b>Deleted after reading</b><small>Only your limit leaves the box.</small></span></div>
+      </div>
+      <button class="btn dark tap" data-sheet-close>Got it</button>
+    </div>
+
+    <div class="sheet" data-sheet="done">
+      <div class="grab"></div>
+      <div class="okmark"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7"/></svg></div>
+      <div class="center" style="margin-top:16px"><div style="font-size:24px;font-weight:600;letter-spacing:-.02em"><span id="dAmt">40.00</span> USDC sent</div><p class="sh-p" style="margin:8px auto 0;max-width:28ch">It's in your wallet. Pay back <b id="dBack" style="color:var(--ink)">40.80</b> by <span id="dDue" style="white-space:nowrap">25 Dec</span>.</p></div>
+      <button class="btn dark tap" onclick="closeSheet();go('home',{reset:true})">Done</button>
+    </div>
+
+    <div class="sheet" data-sheet="repay">
+      <div class="grab"></div>
+      <div class="sh-h"><h4>Pay back your loan</h4><button class="x tap" data-sheet-close aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button></div>
+      <div class="card break" style="margin:16px 0 0;background:var(--well)">
+        <div class="r"><span>Borrowed</span><b id="rUsed">40.00</b></div>
+        <div class="r"><span>Fee, 2%</span><b id="rFee">0.80</b></div>
+        <div class="r"><span>You pay now</span><b id="rTot">40.80</b></div>
+        <div class="r"><span>Deposit back to you</span><b id="rDep" style="color:var(--green)">+8.00</b></div>
+      </div>
+      <button class="btn dark hold" id="rGo">Hold to pay 40.80</button>
+    </div>
+
+    <div class="sheet" data-sheet="deposit">
+      <div class="grab"></div>
+      <div class="sh-h"><h4>Add to your <span class="tname">Safe share</span></h4><button class="x tap" data-sheet-close aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button></div>
+      <p class="sh-p" id="depNote">Paid back first. Lower, steadier return.</p>
+      <div class="quick" style="justify-content:flex-start;margin-top:16px" id="depQ"><button class="tap" data-a="50">50</button><button class="tap" data-a="100">100</button><button class="tap" data-a="250">250</button><button class="tap" data-a="500">500</button></div>
+      <div class="card break" style="margin:16px 0 0;background:var(--well)">
+        <div class="r"><span>Deposit</span><b><span id="depA">100.00</span> USDC</b></div>
+        <div class="r"><span>Estimated a year</span><b id="depY" style="color:var(--green)">+7.20</b></div>
+      </div>
+      <button class="btn dark tap" id="depGo">Deposit 100.00 USDC</button>
+    </div>
+
+    <div class="sheet" data-sheet="withdraw">
+      <div class="grab"></div>
+      <div class="sh-h"><h4>Withdraw takes 3 days</h4><button class="x tap" data-sheet-close aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button></div>
+      <p class="sh-p">The wait stops anyone running out just before a missed payment is counted.</p>
+      <div class="wd">
+        <div class="w st done"><span class="dot"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" fill="none"/></svg></span><span><b>Ask today</b><small>Price is locked now</small></span><span class="when">25 Nov</span></div>
+        <div class="w st wait"><span class="dot"></span><span><b>Wait 3 days</b><small>Your share earns nothing meanwhile</small></span><span class="when">28 Nov</span></div>
+        <div class="w st wait"><span class="dot"></span><span><b>Claim within 2 days</b><small>Or it goes back into the pool</small></span><span class="when">30 Nov</span></div>
+      </div>
+      <button class="btn dark tap" id="wdGo">Ask to withdraw 250.00</button>
+    </div>
+
+    <div class="sheet" data-sheet="check">
+      <div class="grab"></div>
+      <div class="sh-h"><h4>Kente Hostel checked you</h4><button class="x tap" data-sheet-close aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button></div>
+      <p class="sh-p">They asked: can Ama cover a 30 USDC room deposit?</p>
+      <div class="facts">
+        <div class="fact"><svg class="ic"><use href="#i-check"/></svg><span><b>They saw</b><small>Yes, band 25 to 100 USDC. Not late, never defaulted.</small></span></div>
+        <div class="fact"><svg class="ic"><use href="#i-lock"/></svg><span><b>They didn't see</b><small>Your exact limit, your statement, your name or your number.</small></span></div>
+      </div>
+      <button class="btn dark tap" data-sheet-close>OK</button>
+    </div>
+
+    <div class="sheet" data-sheet="me">
+      <div class="grab"></div>
+      <div class="sh-h"><h4>Ama K.</h4><button class="x tap" data-sheet-close aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button></div>
+      <p class="sh-p">Signed in with Google · wallet 7qF2…9kAm</p>
+      <div class="facts">
+        <div class="fact"><svg class="ic"><use href="#i-mail"/></svg><span><b>Refresh my limit</b><small>Send a new statement any time.</small></span></div>
+        <div class="fact"><svg class="ic"><use href="#i-phone"/></svg><span><b>Seeker boost</b><small id="meSeek">Off</small></span></div>
+      </div>
+      <button class="btn light tap" onclick="closeSheet();jumpTo('welcome')">Restart demo</button>
+    </div>
+
+    <div class="toast"><svg class="ic" style="stroke:#4ADE80"><use href="#i-check"/></svg><span>Copied</span></div>
+  </main>
+</div>
+
+<script>
+//@CORE_JS
+
+/* ---------- sealed box illustration (isometric, ink line) ---------- */
+function boxSVG(el, mode) {
+  const ink = '#0F1012';
+  el.innerHTML = `
+  <defs>
+    <clipPath id="above-${mode}"><polygon points="0,-300 240,-300 240,145 0,25"/></clipPath>
+    <linearGradient id="shine-${mode}" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".9"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  </defs>
+  <ellipse cx="120" cy="214" rx="96" ry="12" fill="${ink}" opacity=".08"/>
+  <polygon points="30,85 120,130 120,212 30,167" fill="#E6E8EC" stroke="${ink}" stroke-width="1.6" stroke-linejoin="round"/>
+  <polygon points="120,130 210,85 210,167 120,212" fill="#C9CDD4" stroke="${ink}" stroke-width="1.6" stroke-linejoin="round"/>
+  <polygon points="120,40 210,85 120,130 30,85" fill="#FFFFFF" stroke="${ink}" stroke-width="1.6" stroke-linejoin="round"/>
+  <!-- lock emblem on left face -->
+  <g transform="matrix(1 .5 0 1 0 0)">
+    <rect x="62" y="102" width="28" height="22" rx="4" fill="${ink}"/>
+    <path d="M68 102v-5a8 8 0 0 1 16 0v5" fill="none" stroke="${ink}" stroke-width="3"/>
+    <circle cx="76" cy="112" r="2.6" fill="#fff"/>
+  </g>
+  <!-- slot -->
+  <polygon points="93,71.5 147,98.5 141,101.5 87,74.5" fill="${ink}"/>
+  <g clip-path="url(#above-${mode})">
+    <g class="tk" style="transform:translateY(${mode === 'land' ? 90 : 0}px)">
+      <g transform="matrix(1 .5 0 1 0 0)">
+        <path d="M94 26 V-52 l4 -4 4 4 4 -4 4 4 4 -4 4 4 4 -4 4 4 4 -4 4 4 4 -4 4 4 4 -4 V26 Z" fill="#fff" stroke="${ink}" stroke-width="1.6" stroke-linejoin="round"/>
+        ${mode === 'land'
+          ? `<rect x="101" y="-36" width="24" height="5" rx="2.5" fill="${ink}" opacity=".18"/><rect x="101" y="-24" width="36" height="12" rx="3" fill="#0A8754"/><rect x="101" y="-4" width="30" height="4" rx="2" fill="${ink}" opacity=".18"/><rect x="101" y="6" width="20" height="4" rx="2" fill="${ink}" opacity=".18"/>`
+          : `<rect x="101" y="-38" width="34" height="4" rx="2" fill="${ink}" opacity=".2"/><rect x="101" y="-28" width="26" height="4" rx="2" fill="${ink}" opacity=".2"/><rect x="101" y="-18" width="34" height="4" rx="2" fill="${ink}" opacity=".2"/><rect x="101" y="-8" width="18" height="4" rx="2" fill="${ink}" opacity=".2"/><rect x="101" y="2" width="30" height="4" rx="2" fill="${ink}" opacity=".2"/>`}
+      </g>
+    </g>
+  </g>`;
+}
+boxSVG($('#welBox'), 'wel');
+boxSVG($('#landBox'), 'land');
+
+/* welcome loop: a statement drops into the slot, then a ticket rises */
+(function welcomeLoop() {
+  const tk = $('#welBox .tk'); if (RM) return;
+  tk.animate([
+    { transform: 'translateY(-60px)', opacity: 0 },
+    { transform: 'translateY(-48px)', opacity: 1, offset: .12 },
+    { transform: 'translateY(96px)', opacity: 1, offset: .5, easing: 'cubic-bezier(.55,0,.75,.2)' },
+    { transform: 'translateY(96px)', opacity: 1, offset: .62 },
+    { transform: 'translateY(-14px)', opacity: 1, offset: .84, easing: 'cubic-bezier(.23,1,.32,1)' },
+    { transform: 'translateY(-14px)', opacity: 0 }
+  ], { duration: 4200, iterations: Infinity, easing: 'cubic-bezier(.45,0,.55,1)' });
+})();
+
+/* ---------- sign in ---------- */
+$$('#signOpts .opt').forEach(o => o.addEventListener('click', () => {
+  $$('#signOpts .opt').forEach(x => x.classList.toggle('sel', x === o));
+  $('#signNext').disabled = false; buzz(6);
+}));
+$('#signNext').addEventListener('click', () => {
+  const b = $('#signNext'); b.innerHTML = '<span style="width:20px;height:20px;border:2px solid #fff;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite"></span>';
+  setTimeout(() => { b.textContent = 'Continue'; go('seeker'); }, 650);
+});
+
+/* ---------- seeker ---------- */
+$('#seekBtn').addEventListener('click', () => {
+  const b = $('#seekBtn');
+  if (S.seeker) { go('inbox'); return; }
+  b.innerHTML = '<span style="width:20px;height:20px;border:2px solid #fff;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite"></span>';
+  setTimeout(() => {
+    S.seeker = true; S.limit = S.base * 1.5;
+    $('#seekMult').style.opacity = 1; $('#seekMult').style.transform = 'scale(1.18)';
+    $('#seekRays').style.opacity = 1; buzz(16);
+    setTimeout(() => $('#seekMult').style.transform = 'scale(1)', 380);
+    b.textContent = 'Seeker found · Continue'; $('#seekSkip').hidden = true;
+  }, 800);
+});
+$('#seekSkip').addEventListener('click', () => { S.seeker = false; S.limit = S.base; go('inbox'); });
+hooks.seeker = { enter(o) { if (o.back) return; const b = $('#seekBtn'); b.textContent = S.seeker ? 'Seeker found · Continue' : 'Check this phone'; $('#seekMult').style.opacity = S.seeker ? 1 : .25; $('#seekRays').style.opacity = S.seeker ? 1 : 0; $('#seekSkip').hidden = S.seeker; } };
+
+/* ---------- status: the live check ---------- */
+const stT = timers();
+hooks.status = {
+  enter(o) {
+    if (o.back) return;
+    stT.clear();
+    const st = $$('#tl .st');
+    st.forEach((s, i) => { s.className = 'st ' + (i === 0 ? 'live' : 'wait'); });
+    $('#s0').textContent = 'Waiting for the email…';
+    $('#s1').textContent = 'Nobody can look inside it.';
+    $('#meterI').style.transition = 'none'; $('#meterI').style.transform = 'scaleX(0)';
+    $('#stTitle').textContent = 'Waiting for your statement'; $('#stLede').textContent = 'Keep this open, or leave. We\'ll tell you when it\'s done.';
+    $('#stCta').classList.remove('on'); $('.keep .gone').classList.remove('on');
+    stT.at(1500, () => { st[0].className = 'st done'; $('#s0').textContent = 'Sender signature checked.'; buzz(8); st[1].className = 'st live'; $('#stTitle').textContent = 'Reading it now'; });
+    stT.at(1800, () => {
+      const m = $('#meterI'); m.style.transition = 'transform 2.4s cubic-bezier(.45,.05,.4,1)'; m.style.transform = 'scaleX(1)';
+      const s1 = $('#s1'); const t0 = performance.now();
+      const tick = (now) => { const p = Math.min(1, (now - t0) / 2400); const n = Math.round(360 * (p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2)); s1.textContent = `${n} of 360 payments sorted`; if (p < 1 && stack.at(-1) === 'status') requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+    });
+    stT.at(4400, () => { st[1].className = 'st done'; $('#s1').textContent = '360 payments sorted. Statement deleted.'; $('.keep .gone').classList.add('on'); buzz(8); st[2].className = 'st live'; $('#stTitle').textContent = 'Posting your limit'; });
+    stT.at(5500, () => { st[2].className = 'st done'; buzz(20); $('#stTitle').textContent = 'Your limit is ready'; $('#stLede').textContent = 'Done. Only the number left the box.'; $('#stCta').classList.add('on'); });
+  },
+  leave() { stT.clear(); }
+};
+
+/* ---------- landed: ticket out of the box, number rolls, confetti ---------- */
+const COLORS = ['#0F1012', '#0A8754', '#C9581A', '#C9CDD4', '#0F1012', '#0A8754'];
+function confetti() {
+  if (RM) return;
+  const c = $('#confetti'); c.innerHTML = '';
+  for (let i = 0; i < 26; i++) {
+    const p = document.createElement('i');
+    p.style.background = COLORS[i % COLORS.length];
+    if (i % 3 === 0) { p.style.width = '10px'; p.style.height = '10px'; p.style.borderRadius = '50%'; }
+    c.appendChild(p);
+    const a = (-90 + (Math.random() - .5) * 150) * Math.PI / 180;
+    const v = 140 + Math.random() * 150;
+    const dx = Math.cos(a) * v, dy = Math.sin(a) * v;
+    const rot = (Math.random() - .5) * 720;
+    p.animate([
+      { transform: 'translate(-50%,-50%) rotate(0) scale(.6)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${dx * .8}px), calc(-50% + ${dy * .8}px)) rotate(${rot * .6}deg) scale(1)`, opacity: 1, offset: .45 },
+      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy + 260}px)) rotate(${rot}deg) scale(1)`, opacity: 0 }
+    ], { duration: 1500 + Math.random() * 700, easing: 'cubic-bezier(.2,.7,.4,1)', fill: 'forwards', delay: Math.random() * 90 });
+  }
+}
+hooks.landed = {
+  enter() {
+    const tk = $('#landBox .tk'); const amt = $('#landAmt');
+    amt.textContent = '0.00'; amt.dataset.v = 0;
+    $('#landGhs').textContent = 'About GHS 0';
+    $('#landChip').innerHTML = S.seeker ? '<span class="chip"><svg class="ic"><use href="#i-phone"/></svg>Seeker boost 1.5× on</span>' : '';
+    tk.getAnimations().forEach(a => a.cancel());
+    const anim = tk.animate([
+      { transform: 'translateY(90px)' },
+      { transform: 'translateY(-14px)', offset: .7 },
+      { transform: 'translateY(-4px)' }
+    ], { duration: RM ? 1 : 900, delay: RM ? 0 : 380, easing: 'cubic-bezier(.2,.9,.3,1.15)', fill: 'forwards' });
+    setTimeout(() => { buzz(24); confetti();
+      roll(amt, S.limit, { dur: 1100, from: 0 });
+      roll($('#landGhs'), S.limit, { dur: 1100, from: 0, fmt: v => 'About ' + ghs(v) });
+    }, RM ? 0 : 820);
+  }
+};
+
+/* ---------- home ---------- */
+function renderHome(animate) {
+  const avail = S.avail;
+  if (animate) roll($('#hAvail'), avail, { fmt: split, dur: 900 }); else { $('#hAvail').innerHTML = split(avail); $('#hAvail').dataset.v = avail; }
+  $('#hUsed').textContent = money(S.used); $('#hLimit').textContent = money(S.limit);
+  $('#hBar').style.width = (S.used / S.limit * 100) + '%';
+  $('#actLimit').textContent = '+' + money(S.limit);
+  const due = $('#dueCard'); due.hidden = !S.used;
+  if (S.used) { $('#dueAmt').textContent = money(S.used * 1.02); $('#dueDate').textContent = fmtDate(S.due); }
+  $('#bHint').textContent = `of ${money(S.avail)} available`;
+  $('#meSeek').textContent = S.seeker ? 'On · 1.5× limit' : 'Off · not a Seeker';
+}
+hooks.home = { enter() { renderHome(true); placeInd($('#chips')); } };
+function placeInd(wrap) {
+  const on = wrap.querySelector('button.on'), ind = wrap.querySelector('.ind'); if (!on || !ind) return;
+  ind.style.width = on.offsetWidth + 'px'; ind.style.transform = `translateX(${on.offsetLeft}px)`;
+}
+$$('#chips button').forEach(b => b.addEventListener('click', () => {
+  $$('#chips button').forEach(x => x.classList.toggle('on', x === b)); placeInd($('#chips'));
+  const f = b.dataset.f;
+  $$('#acts .item').forEach((it, i) => {
+    const show = f === 'all' || it.dataset.k === f;
+    if (show && it.classList.contains('hide')) { it.classList.remove('hide'); if (!RM) it.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 240, delay: i * 30, easing: 'cubic-bezier(.23,1,.32,1)', fill: 'backwards' }); }
+    else if (!show) it.classList.add('hide');
+  });
+}));
+
+/* ---------- borrow keypad ---------- */
+let entry = '';
+function bRender(bump) {
+  const v = parseFloat(entry || '0');
+  const d = $('#bDigits'); d.textContent = entry || '0';
+  $('#bVal').classList.toggle('empty', !entry);
+  if (bump && !RM) d.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.045)' }, { transform: 'scale(1)' }], { duration: 180, easing: 'cubic-bezier(.23,1,.32,1)' });
+  const over = v > S.avail + 1e-9;
+  const h = $('#bHint'); h.classList.toggle('over', over); h.textContent = over ? `Your limit is ${money(S.avail)}` : `of ${money(S.avail)} available`;
+  $('#bDep').textContent = money(v * .2); $('#bFee').textContent = money(v * .02); $('#bBack').textContent = money(v * 1.02);
+  $('#bDue').textContent = fmtDate(addDays(TODAY, 30));
+  const go = $('#bGo'); go.disabled = !(v > 0) || over;
+  go.textContent = v > 0 && !over ? `Hold to borrow ${money(v)}` : 'Hold to borrow';
+  return over;
+}
+$('#keys').addEventListener('click', (e) => {
+  const k = e.target.closest('button'); if (!k) return;
+  let next = entry;
+  if (k.hasAttribute('data-del')) next = entry.slice(0, -1);
+  else { const c = k.textContent; if (c === '.' && entry.includes('.')) return shakeVal(); if (c === '.' && !entry) next = '0.'; else next = (entry === '0' && c !== '.') ? c : entry + c; if (/\.\d{3}$/.test(next) || next.replace('.', '').length > 6) return shakeVal(); }
+  entry = next; buzz(4);
+  if (bRender(true)) shakeVal();
+});
+function shakeVal() { const v = $('#bVal'); v.classList.remove('shake'); void v.offsetWidth; v.classList.add('shake'); buzz([10, 40, 10]); }
+$$('.quick [data-q]').forEach(b => b.addEventListener('click', () => { const q = b.dataset.q; entry = q === 'max' ? String(+S.avail.toFixed(2)) : q; if (parseFloat(entry) > S.avail) { entry = String(+S.avail.toFixed(2)); } bRender(true); }));
+hooks.borrow = { enter(o) { if (!o.back) { entry = ''; bRender(); } } };
+holdButton($('#bGo'), 900, () => {
+  const v = parseFloat(entry || '0'); if (!(v > 0) || v > S.avail) return;
+  S.used += v; S.deposit += v * .2; S.due = addDays(TODAY, 30);
+  $('#dAmt').textContent = money(v); $('#dBack').textContent = money(S.used * 1.02); $('#dDue').textContent = fmtDate(S.due);
+  renderHome(false); openSheet('done');
+});
+
+/* repay */
+function renderRepay() { $('#rUsed').textContent = money(S.used); $('#rFee').textContent = money(S.used * .02); $('#rTot').textContent = money(S.used * 1.02); $('#rDep').textContent = '+' + money(S.deposit); $('#rGo').textContent = `Hold to pay ${money(S.used * 1.02)}`; }
+window.onSheet = (id) => { if (id === 'repay') renderRepay(); if (id === 'deposit') setDep(100); };
+holdButton($('#rGo'), 900, () => { const dep = S.deposit; S.used = 0; S.deposit = 0; closeSheet(); renderHome(true); setTimeout(() => toast(`Paid. ${money(dep)} deposit is back`), 250); });
+
+/* ---------- lend ---------- */
+const TR = {
+  safe: { label: 'Your Safe share', amt: 250, rate: 'About 7% a year', y: .072, note: 'Paid back first. Lower, steadier return.', title: 'Paid first, hurt last', sub: 'If a borrower doesn\'t pay, the Risky share takes the loss first.', hl: 0, data: [1, 1.0016, 1.003, 1.0041, 1.0058, 1.007, 1.0083, 1.0095, 1.0108, 1.0122, 1.0133, 1.0147, 1.016, 1.0172] },
+  risky: { label: 'Your Risky share', amt: 0, rate: 'About 15% a year', y: .146, note: 'Takes losses first. Earns about twice as much.', title: 'Hurt first, paid more', sub: 'You cushion the Safe share. In return each dollar earns about 2×.', hl: 2, data: [1, 1.004, 1.008, 1.0115, 1.0088, 1.013, 1.017, 1.021, 1.0245, 1.0218, 1.026, 1.03, 1.0335, 1.037] }
+};
+let tr = 'safe';
+function drawSpark(data) {
+  const svg = $('#spark'), W = 320, H = 96, min = Math.min(...data), max = Math.max(...data);
+  const pts = data.map((v, i) => [i / (data.length - 1) * W, H - 8 - (v - min) / (max - min || 1) * (H - 20)]);
+  const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const last = pts[pts.length - 1];
+  svg.innerHTML = `<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0F1012" stop-opacity=".12"/><stop offset="1" stop-color="#0F1012" stop-opacity="0"/></linearGradient></defs>
+    <path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#sg)"/>
+    <path class="l" d="${d}" vector-effect="non-scaling-stroke"/>
+    <circle cx="${last[0]}" cy="${last[1]}" r="4.5" fill="#0F1012" stroke="#fff" stroke-width="2"/>`;
+  const l = svg.querySelector('.l'); const len = l.getTotalLength();
+  if (!RM) { l.style.strokeDasharray = len; l.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }], { duration: 700, easing: 'cubic-bezier(.23,1,.32,1)' }); }
+}
+function setTr(t, anim) {
+  tr = t; const c = TR[t];
+  $('#seg').classList.toggle('r', t === 'risky');
+  $$('#seg button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  $('#lLabel').textContent = c.label; $('#lGain').textContent = '+' + ((c.data.at(-1) - 1) * 100).toFixed(2) + '%'; $('#lRate').textContent = c.rate;
+  roll($('#lAmt'), c.amt, { fmt: split, dur: anim ? 600 : 1 });
+  const ex = $('#lExplain'); ex.querySelector('b').textContent = c.title; ex.querySelector('small').textContent = c.sub;
+  ex.querySelectorAll('.stack i').forEach((i, k) => i.classList.toggle('hl', k === c.hl));
+  $$('.tname').forEach(n => n.textContent = t === 'safe' ? 'Safe share' : 'Risky share');
+  $('#depNote').textContent = c.note;
+  $('#wdGo').textContent = c.amt ? `Ask to withdraw ${money(c.amt)}` : 'Nothing to withdraw yet';
+  $('#wdGo').disabled = !c.amt;
+  drawSpark(c.data);
+}
+$$('#seg button').forEach(b => b.addEventListener('click', () => { if (b.dataset.t !== tr) { buzz(5); setTr(b.dataset.t, true); } }));
+hooks.lend = { enter() { setTr(tr, true); } };
+let depAmt = 100;
+function setDep(a) { depAmt = a; $('#depA').textContent = money(a); $('#depY').textContent = '+' + money(a * TR[tr].y); $('#depGo').textContent = `Deposit ${money(a)} USDC`; $$('#depQ button').forEach(b => b.style.boxShadow = +b.dataset.a === a ? '0 0 0 2px #0F1012' : ''); }
+$$('#depQ button').forEach(b => b.addEventListener('click', () => setDep(+b.dataset.a)));
+$('#depGo').addEventListener('click', () => { TR[tr].amt += depAmt; closeSheet(); setTimeout(() => { setTr(tr, true); toast(`Added ${money(depAmt)} USDC`); }, 200); });
+$('#wdGo').addEventListener('click', () => { closeSheet(); setTimeout(() => toast('Asked. Claim from 28 Nov'), 200); });
+
+/* ---------- jumper prep ---------- */
+window.prepareJump = (id, i) => { if (i >= 6) { renderHome(false); } };
+
+/* boot */
+go('welcome', { reset: true });
+renderHome(false);
+</script>
