@@ -61,7 +61,7 @@ export function Borrow() {
       const lineAddr = await deriveLine(addrs.program, owner);
       const { signature } = await sendTransaction(owner, [ensure, depositBorrowerIx(addrs, owner, lineAddr, ata, toAdd)], signTransaction);
       patch({ line: { deposit: have + toAdd }, usdc: usdc - toAdd });
-      return { signature, note: `Deposit added: ${formatUsdc(toAdd)} USDC.` };
+      return { signature, note: `Deposit added: ${formatUsdc(toAdd, { up: true })} USDC.` };
     });
 
   const onDraw = () =>
@@ -87,9 +87,16 @@ export function Borrow() {
       {head}
       <Sheet title="Sent" onClose={() => { setDone(null); go('home'); }}>
         <DoneView amount={`${formatUsdc(done.draw, { max: 2 })} USDC`} signature={drawAct.signature} onDone={() => { setDone(null); go('home'); }}
-          text={<>is in your wallet. Pay back <b style={{ color: 'var(--ink)' }}>{formatUsdc(done.payoff, { max: 2 })}</b> by {formatDate(line?.due && line.due > 0n ? line.due : done.due)}.</>} />
+          text={<>is in your wallet. Pay back <b style={{ color: 'var(--ink)' }}>{formatUsdc(done.payoff, { up: true })}</b> by {formatDate(line?.due && line.due > 0n ? line.due : done.due)}.</>} />
       </Sheet>
     </>
+  );
+
+  // Nothing left to borrow (whole limit used, or the pool is empty): say so instead of a dead 0 form.
+  if (cap === 0n) return (
+    <>{head}<Empty icon="check" title={s.headroom === 0n ? 'You’ve borrowed your whole limit' : 'The pool has no free USDC right now'}
+      text={s.headroom === 0n ? `Pay back ${formatUsdc(payoffFor(s.drawn), { up: true })} USDC by ${formatDate(line!.due)} to borrow again.` : 'Lenders’ money is all lent out. Try again later.'}
+      action={{ label: 'Go to Home', on: () => go('home') }} /></>
   );
 
   const step = toAdd > 0n ? 1 : 2;
@@ -102,7 +109,7 @@ export function Borrow() {
           <input id="amt" name="amount" inputMode="decimal" autoComplete="off" value={amtStr} onChange={(e) => setAmtStr(e.target.value)} aria-invalid={amtErr ? true : undefined} aria-describedby="amt-err" />
           <span className="u">USDC</span>
         </div>
-        {amtErr ? <p className="field-err" id="amt-err" role="alert">{amtErr}</p> : <div className="back">Pay back <b>{formatUsdc(payoff)}</b> by {formatDate(dueIfNow)}</div>}
+        {amtErr ? <p className="field-err" id="amt-err" role="alert">{amtErr}</p> : <div className="back">Pay back <b>{formatUsdc(payoff, { up: true })}</b> by {formatDate(dueIfNow)}</div>}
       </div>
 
       <div className="seg glass" role="group" aria-label="Quick amounts">
@@ -126,10 +133,10 @@ export function Borrow() {
       </div>
 
       <div className="rcpt pcard" aria-label="What this costs">
-        <div className="r"><span>Deposit needed, 20%<small>Of all you owe. Comes back when you pay.</small></span><b data-testid="dep-needed">{formatUsdc(needed)}</b></div>
+        <div className="r"><span>Deposit needed, 20%<small>Of all you owe. Comes back when you pay.</small></span><b data-testid="dep-needed">{formatUsdc(needed, { up: true })}</b></div>
         <div className="r"><span>Already held</span><b>{formatUsdc(have)}</b></div>
-        <div className="r total"><span>Add now</span><b data-testid="dep-add">{formatUsdc(toAdd)}</b></div>
-        <div className="r"><span>Fee, 2%<small>Paid when you pay back</small></span><b>{formatUsdc(fee)}</b></div>
+        <div className="r total"><span>Add now</span><b data-testid="dep-add">{formatUsdc(toAdd, { up: true })}</b></div>
+        <div className="r"><span>Fee, 2%<small>Paid when you pay back</small></span><b>{formatUsdc(fee, { up: true })}</b></div>
       </div>
 
       <div className="stepper" aria-label="Steps">
@@ -140,8 +147,8 @@ export function Borrow() {
       <div className="dock">
         {step === 1 ? (
           <>
-            <Btn onClick={onDeposit} busy={depAct.busy} disabled={!okAmount || usdc < toAdd}>Add {formatUsdc(toAdd)} USDC deposit</Btn>
-            {okAmount && usdc < toAdd && <><p className="help warn" style={{ textAlign: 'center' }}>Your wallet has {formatUsdc(usdc)} test USDC. You need {formatUsdc(toAdd - usdc)} more.</p><div style={{ display: 'flex', justifyContent: 'center' }}><FaucetButton /></div></>}
+            <Btn onClick={onDeposit} busy={depAct.busy} disabled={!okAmount || usdc < toAdd}>Add {formatUsdc(toAdd, { up: true })} USDC deposit</Btn>
+            {okAmount && usdc < toAdd && <><p className="help warn" style={{ textAlign: 'center' }}>Your wallet has {formatUsdc(usdc)} test USDC. You need {formatUsdc(toAdd - usdc, { up: true })} more.</p><div style={{ display: 'flex', justifyContent: 'center' }}><FaucetButton /></div></>}
           </>
         ) : (
           <Slide label={okAmount ? `Slide to borrow ${formatUsdc(draw!)}` : 'Pick an amount'} aria={okAmount ? `Borrow ${formatUsdc(draw!)} USDC` : 'Borrow'} disabled={!okAmount || drawAct.busy} busy={drawAct.busy} onDone={onDraw} />
@@ -153,7 +160,7 @@ export function Borrow() {
   );
 }
 
-function Empty({ icon, title, text, action }: { icon: 'wallet' | 'mail' | 'clock'; title: string; text: string; action?: { label: string; on: () => void } }) {
+function Empty({ icon, title, text, action }: { icon: 'wallet' | 'mail' | 'clock' | 'check'; title: string; text: string; action?: { label: string; on: () => void } }) {
   return (
     <div className="card pcard empty">
       <div className="ico"><Icon name={icon} /></div>

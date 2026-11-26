@@ -523,3 +523,9 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .sheet details.more summary::after{content:' ›'}
 .sheet details.more[open] summary::after{content:' ⌄'}
 .sheet .note-ios{margin:8px 0 0;padding:10px 12px;border-radius:14px;background:var(--amber-tint);color:var(--amber);font-size:14px}
+
+/* --- real-iPhone run 2 (Nov 26) --- */
+/* status toast: fully opaque (the info tone had no background, so page titles showed through) */
+.return-banner{background:#fff;color:var(--ink);backdrop-filter:none;-webkit-backdrop-filter:none}
+.return-banner.good{background:var(--green-tint);color:#14573A}
+.return-banner.bad{background:var(--verm-tint);color:#8E2413}

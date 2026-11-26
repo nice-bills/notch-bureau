@@ -52,10 +52,11 @@ export function Pool() {
               <Stat label="Out on loan now" value={formatUsdc(s.outstanding, { max: 2 })} unit="USDC" />
               <Stat label="Cash ready to lend" value={formatUsdc(s.idle, { max: 2 })} unit="USDC" />
               <Stat label="Fees earned" value={formatUsdc(s.feesEarned, { max: 2 })} unit="USDC" />
-              <Stat label="Missed payments" value={String(s.defaults)} hint={`${formatUsdc(s.defaultAmount, { max: 2 })} USDC lost`} />
+              {s.defaults === 0n && <Stat label="Missed payments" value="0" />}
               <Stat label="Borrower deposits" value={formatUsdc(s.borrowerDeposits, { max: 2 })} unit="USDC" hint="Held aside, covers losses first" />
             </dl>
-            {s.defaults > 0n && <p className="help devnet-note">This is a devnet test pool: the automated test runs miss payments on purpose, to check that losses land where the rules say.</p>}
+            {/* Devnet only: the losses come from test runs, so they live in this note, not as a headline number. */}
+            {s.defaults > 0n && <p className="help devnet-note" data-testid="missed">This is a devnet test pool. Automated test runs missed {String(s.defaults)} payments on purpose ({formatUsdc(s.defaultAmount, { max: 2 })} USDC, {lossRate.toFixed(1)}% of all lending), to check that losses land where the rules say.</p>}
           </section>
 
           <section className="card pcard" aria-labelledby="hl-h" data-testid="health">
@@ -64,7 +65,7 @@ export function Pool() {
               <Stat label={`${NAME.senior} share price`} value={sharePrice(pool, 'senior')} unit="USDC" hint={shareMove(pool, 'senior').text} />
               <Stat label={`${NAME.junior} share price`} value={sharePrice(pool, 'junior')} unit="USDC" hint={shareMove(pool, 'junior').text} />
               <Stat label="Share of pool on loan" value={util.toFixed(1)} unit="%" />
-              <Stat label="Lost to missed payments" value={lossRate.toFixed(1)} unit="% of all lending" />
+              {s.defaults === 0n && <Stat label="Lost to missed payments" value="0.0" unit="% of all lending" />}
               <Stat label={`${NAME.senior} shares`} value={formatUsdc(pool.seniorSupply, { max: 2 })} />
               <Stat label={`${NAME.junior} shares`} value={formatUsdc(pool.juniorSupply, { max: 2 })} />
             </dl>

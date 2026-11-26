@@ -318,7 +318,7 @@ test.describe('Notch, browser end to end', () => {
       await dep.getByLabel('Amount').fill('5');
       await expect(dep).toContainText('It grows with the fees Risky earns');
       await dep.getByRole('button', { name: 'Deposit 5.00 USDC' }).click();
-      await expect(toast(page, `Deposited 5.00 USDC into Risky for ${usdFull(expShares)} shares.`)).toBeVisible();
+      await expect(toast(page, `Deposited 5.00 USDC into Risky for ${usd2(expShares)} shares.`)).toBeVisible();
       const shares = await waitFor('shares minted', () => shareBalance(w.address), (v) => v > 0n);
       expect(shares).toBe(expShares);
       expect(await tokenBalance(w.address)).toBe(USDC(5));
@@ -338,7 +338,7 @@ test.describe('Notch, browser end to end', () => {
       await wd.getByRole('button', { name: 'All' }).click();
       await expect(wd.getByLabel('USDC to take out of Risky')).toHaveValue(plain(worth));
       await wd.getByRole('button', { name: 'Request withdrawal' }).click();
-      await expect(toast(page, `Requested ${usdFull(shares)} Risky shares. You can claim in 3 days, within 2 days after that.`)).toBeVisible();
+      await expect(toast(page, `Requested ${usd2(shares)} Risky shares. You can claim in 3 days, within 2 days after that.`)).toBeVisible();
       const req = await waitFor('request exists', () => readWithdrawRequest(w.address), (r) => r !== null);
       expect(req!.lender).toBe(w.address);
       expect(req!.shares).toBe(shares);
@@ -434,7 +434,8 @@ test.describe('Notch, browser end to end', () => {
       await expect(v('Out on loan now')).toHaveText(usd2(now.stats.outstanding));
       await expect(v('Cash ready to lend')).toHaveText(usd2(now.stats.idle));
       await expect(v('Fees earned')).toHaveText(usd2(now.stats.feesEarned));
-      await expect(v('Missed payments')).toHaveText(String(now.stats.defaults));
+      if (now.stats.defaults === 0n) await expect(v('Missed payments')).toHaveText('0');
+      else await expect(page.getByTestId('missed')).toContainText(`missed ${now.stats.defaults} payments on purpose (${usd2(now.stats.defaultAmount)} USDC`);
       await expect(v('Borrower deposits')).toHaveText(usd2(now.stats.borrowerDeposits));
       const health = page.getByTestId('health');
       await expect(stat(health, 'Risky shares').locator('.stat-value')).toHaveText(usd2(now.shareSupply));

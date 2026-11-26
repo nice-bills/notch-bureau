@@ -423,7 +423,10 @@ describe('account readers and money rules', () => {
     expect(parseUsdc('1.0000001')).toBeNull();
     expect(parseUsdc('abc')).toBeNull();
     expect(formatUsdc(30_600_000n)).toBe('30.60');
-    expect(formatUsdc(1_234_567n)).toBe('1.234567');
+    expect(formatUsdc(1_234_567n)).toBe('1.23');
+    expect(formatUsdc(1_234_567n, { max: 6 })).toBe('1.234567');
+    expect(formatUsdc(28_315_200n, { up: true })).toBe('28.32');
+    expect(formatUsdc(28_310_000n, { up: true })).toBe('28.31');
   });
 });
 

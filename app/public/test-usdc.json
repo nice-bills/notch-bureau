@@ -1,0 +1,6 @@
+{
+  "name": "Test USDC",
+  "symbol": "USDC",
+  "description": "Free test USDC for the Notch demo on Solana devnet. Not real money.",
+  "image": "https://purposes-roots-front-cat.trycloudflare.com/test-usdc.png"
+}

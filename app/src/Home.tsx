@@ -188,7 +188,7 @@ function HomeConnected() {
             <div className={cx('duec pcard', s.pastDue && 'late')}>
               <span className="q"><Icon name="clock" /></span>
               <span className="t">
-                <b>Pay {formatUsdc(payoffFor(s.drawn))} USDC</b>
+                <b>Pay {formatUsdc(payoffFor(s.drawn), { up: true })} USDC</b>
                 <small>{s.pastDue ? `Was due ${formatDate(line!.due)}. Pay now before it is marked as missed.` : `By ${formatDate(line!.due)} · ${daysLeft(line!.due)} days left`}</small>
               </span>
             </div>
@@ -251,7 +251,7 @@ function RepaySheet({ onClose }: { onClose: () => void }) {
       const { signature } = await sendTransaction(owner, [ensure, repayIx(addrs, owner, lineAddr, ata, payoff)], signTransaction);
       patch({ line: { drawn: 0n, deposit: 0n }, usdc: usdc - payoff + back });
       setPaid({ payoff, back, countedBefore: line?.repaidOnTime ?? 0 });
-      return { signature, note: `Repaid ${formatUsdc(payoff)} USDC. Your ${formatUsdc(back)} USDC deposit came back to you.` };
+      return { signature, note: `Repaid ${formatUsdc(payoff, { up: true })} USDC. Your ${formatUsdc(back)} USDC deposit came back to you.` };
     });
 
   return (
@@ -261,12 +261,12 @@ function RepaySheet({ onClose }: { onClose: () => void }) {
           <p className="sh-p">One payment clears the loan. Your deposit comes back in the same step.</p>
           <div className="rcpt">
             <div className="r"><span>Borrowed</span><b>{formatUsdc(drawn)}</b></div>
-            <div className="r"><span>Fee, 2%</span><b>{formatUsdc(fee)}</b></div>
-            <div className="r total"><span>You pay</span><b>{formatUsdc(payoff)}</b></div>
+            <div className="r"><span>Fee, 2%</span><b>{formatUsdc(fee, { up: true })}</b></div>
+            <div className="r total"><span>You pay</span><b>{formatUsdc(payoff, { up: true })}</b></div>
             <div className="r"><span>Deposit back</span><b style={{ color: 'var(--green)' }}>+{formatUsdc(back)}</b></div>
           </div>
-          {short && <p className="help warn">Your wallet holds {formatUsdc(usdc)} USDC. You need {formatUsdc(payoff - usdc)} more up front; the deposit returns after.</p>}
-          <Btn onClick={onRepay} busy={act.busy} disabled={short || drawn === 0n}>Repay {formatUsdc(payoff)} USDC</Btn>
+          {short && <p className="help warn">Your wallet holds {formatUsdc(usdc)} USDC. You need {formatUsdc(payoff - usdc, { up: true })} more up front; the deposit returns after.</p>}
+          <Btn onClick={onRepay} busy={act.busy} disabled={short || drawn === 0n}>Repay {formatUsdc(payoff, { up: true })} USDC</Btn>
         </>
       ) : (
         <DoneView amount={`${formatUsdc(paid.payoff, { max: 2 })} USDC`} signature={act.signature} onDone={onClose}

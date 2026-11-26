@@ -11,15 +11,19 @@ export function parseUsdc(input: string): bigint | null {
   return BigInt(whole || '0') * SCALE + BigInt(frac.padEnd(USDC_DECIMALS, '0') || '0');
 }
 
-/** 1234567n -> "1.23" (min 2 decimals, up to 6 kept when needed). */
-export function formatUsdc(micro: bigint, opts: { max?: number; round?: boolean } = {}): string {
+/** 1234567n -> "1.23". Two decimals by default (pass max for more).
+ *  Default cuts, so a limit or balance never reads high. round: nearest (what you HOLD: 9.999999 reads 10.00).
+ *  up: ceiling, for what you OWE or must add (28.3152 reads 28.32), so following the screen never underpays. */
+export function formatUsdc(micro: bigint, opts: { max?: number; round?: boolean; up?: boolean } = {}): string {
   const neg = micro < 0n;
   let v = neg ? -micro : micro;
-  // round: to the nearest shown digit (for what you HOLD: 9.999999 reads 10.00). Default cuts, so a limit never reads high.
-  if (opts.round && opts.max !== undefined && opts.max < USDC_DECIMALS) { const q = 10n ** BigInt(USDC_DECIMALS - opts.max); v = ((v + q / 2n) / q) * q; }
+  const max = opts.max ?? 2;
+  if (max < USDC_DECIMALS && (opts.round || opts.up)) {
+    const q = 10n ** BigInt(USDC_DECIMALS - max);
+    v = opts.up ? ((v + q - 1n) / q) * q : ((v + q / 2n) / q) * q;
+  }
   const whole = v / SCALE;
   let frac = (v % SCALE).toString().padStart(USDC_DECIMALS, '0').replace(/0+$/, '');
-  const max = opts.max ?? USDC_DECIMALS;
   frac = frac.slice(0, max);
   if (frac.length < 2) frac = frac.padEnd(2, '0');
   return `${neg ? '-' : ''}${whole.toLocaleString('en-US')}.${frac}`;

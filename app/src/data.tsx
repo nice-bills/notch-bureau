@@ -58,8 +58,8 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   const { connected } = useWallet();
   const owner = connected?.address ?? null;
   const [addrs, setAddrs] = useState<NotchAddresses | null>(null);
-  const [pool, setPool] = useState<PoolView | null>(null);
-  const [poolLoaded, setPoolLoaded] = useState(false);
+  const [pool, setPool] = useState<PoolView | null>(() => load<PoolView>('notch.pool'));
+  const [poolLoaded, setPoolLoaded] = useState(() => pool !== null);
   const [line, setLine] = useState<CreditLine | null>(null);
   const [usdc, setUsdc] = useState(0n);
   const [shares, setShares] = useState<Record<Tranche, bigint>>({ senior: 0n, junior: 0n });
@@ -80,8 +80,6 @@ export function ChainProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (USDC_MINT) deriveAddresses(PROGRAM_ID, USDC_MINT).then(setAddrs);
-    const p = load<PoolView>('notch.pool');
-    if (p) { setPool(p); setPoolLoaded(true); }
   }, []);
 
   const fails = useRef(0);
@@ -132,12 +130,20 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     return false;
   }, [refresh]);
 
-  useEffect(() => {
-    // a new wallet: show its last known numbers at once (or nothing), never the previous wallet's
+  // A new wallet: show its last known numbers in the SAME render (or nothing), never the previous wallet's.
+  // Done during render, not in an effect, so a reload or a return from the wallet app never paints a
+  // "Reading your line…" skeleton first when this device already knows the numbers.
+  const [snapFor, setSnapFor] = useState<string | null | undefined>(undefined);
+  if (snapFor !== owner) {
+    setSnapFor(owner);
     const snap = owner ? load<Snapshot>(snapKey(owner)) : null;
     setLine(snap?.line ?? null); setUsdc(snap?.usdc ?? 0n); setShares(snap?.shares ?? { senior: 0n, junior: 0n });
     setRequests(snap?.requests ?? { senior: null, junior: null }); setSol(snap?.sol ?? null);
     setLoadedFor(snap ? owner : undefined);
+  }
+
+  useEffect(() => {
+    const snap = owner ? load<Snapshot>(snapKey(owner)) : null;
     // what settle() compares against after a reload (a Phantom deeplink return reloads the page)
     lastRead.current = snap ? enc([snap.line, snap.usdc, snap.shares, snap.requests]) : '';
     setSignedState(owner ? liveSigned(load<EnclaveOk>(signedKey(owner))) : null);
