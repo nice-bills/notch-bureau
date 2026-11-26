@@ -51,9 +51,9 @@ const portBusy = (port) => new Promise((res) => {
   s.once('error', () => res(false));
 });
 if (await portBusy(RPC_PORT)) die(`port ${RPC_PORT} is already in use (another validator?). Stop it or set E2E_LOCAL_RPC_PORT.`);
-for (const [port, what] of [[5173, 'a Vite dev server'], [8787, 'the demo underwriter']]) {
-  // A leftover Vite would keep pointing at devnet; a leftover enclave is fine only if it already runs the shared key.
-  if (port === 5173 && (await portBusy(port))) die(`port ${port} is busy (${what} already running, probably aimed at devnet). Stop it so the harness can start one for the local chain.`);
+// The harness starts its own Vite and demo underwriter on its own ports (a phone-test server on 5173/8787 may keep running).
+for (const port of [Number(process.env.E2E_APP_PORT || 15173), Number(process.env.E2E_ENCLAVE_PORT || 18787)]) {
+  if (await portBusy(port)) die(`port ${port} is busy (a leftover e2e server?). Stop it, or set E2E_APP_PORT / E2E_ENCLAVE_PORT.`);
 }
 
 const rpc = async (method, params = []) => {
@@ -135,6 +135,12 @@ try {
     VITE_PROGRAM_ID: PROGRAM_ID,
     VITE_USDC_MINT: mint,
     E2E_ADMIN_KEYPAIR: adminFile,
+    // Own servers on own ports: never reuse a demo server left running for phone testing (it may point at devnet).
+    E2E_FRESH: '1',
+    E2E_ENCLAVE_PORT: process.env.E2E_ENCLAVE_PORT || '18787',
+    E2E_APP_PORT: process.env.E2E_APP_PORT || '15173',
+    VITE_ENCLAVE_URL: `http://localhost:${process.env.E2E_ENCLAVE_PORT || '18787'}`,
+    E2E_APP_URL: `http://localhost:${process.env.E2E_APP_PORT || '15173'}`,
     NOTCH_ID_PEPPER: process.env.NOTCH_ID_PEPPER || crypto.randomBytes(32).toString('hex'), // the demo enclave refuses to start without a secret pepper
   };
   log(`running Playwright against ${RPC} (mint ${mint})`);

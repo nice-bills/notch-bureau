@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url)); // app/e2e
 const app = path.resolve(here, '..'); // app/
-const chromium = process.env.E2E_CHROMIUM; // optional path to a system Chromium if `playwright install chromium` was not run
+const chromium = process.env.E2E_CHROMIUM;
+// scripts/e2e-browser.mjs sets E2E_FRESH=1 with its own ports: a demo server already running for phone testing (on devnet)
+// must never be reused against the local validator, or its faucet pays the wrong chain.
+const fresh = process.env.E2E_FRESH === '1';
+const enclavePort = Number(process.env.E2E_ENCLAVE_PORT || 8787);
+const appPort = Number(process.env.E2E_APP_PORT || 5173); // optional path to a system Chromium if `playwright install chromium` was not run
 
 export default defineConfig({
   testDir: here,
@@ -22,7 +27,7 @@ export default defineConfig({
   globalTeardown: path.join(here, 'global-teardown.ts'),
   use: {
     headless: true,
-    baseURL: process.env.E2E_APP_URL || 'http://localhost:5173',
+    baseURL: process.env.E2E_APP_URL || `http://localhost:${appPort}`,
     launchOptions: chromium ? { executablePath: chromium } : {},
     trace: 'retain-on-failure',
   },
@@ -32,16 +37,16 @@ export default defineConfig({
       command: 'node scripts/demo-enclave.mjs',
       cwd: app,
       // The demo enclave refuses to start without a secret pepper (the phone-number hash on chain would be brute-forceable).
-      env: { NOTCH_KEY_FILE: path.resolve(app, '../.underwriter-key.json'), NOTCH_ID_PEPPER: process.env.NOTCH_ID_PEPPER || crypto.randomBytes(32).toString('hex') },
-      url: 'http://localhost:8787/attestation',
-      reuseExistingServer: true,
+      env: { PORT: String(enclavePort), NOTCH_KEY_FILE: path.resolve(app, '../.underwriter-key.json'), NOTCH_ID_PEPPER: process.env.NOTCH_ID_PEPPER || crypto.randomBytes(32).toString('hex') },
+      url: `http://localhost:${enclavePort}/attestation`,
+      reuseExistingServer: !fresh,
       timeout: 60_000,
     },
     {
-      command: 'pnpm exec vite --port 5173 --strictPort',
+      command: `pnpm exec vite --port ${appPort} --strictPort`,
       cwd: app,
-      url: 'http://localhost:5173',
-      reuseExistingServer: true,
+      url: `http://localhost:${appPort}`,
+      reuseExistingServer: !fresh,
       timeout: 60_000,
     },
   ],
