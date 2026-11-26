@@ -34,7 +34,7 @@ export function Avatar() {
   if (restoring) return <span className="av skel" aria-label="Reconnecting your wallet" style={{ minWidth: 48, height: 48, borderRadius: 24 }} />;
   return connected ? (
     <button type="button" className="av tap wallet-pill" onClick={openAccount} aria-label={`Your wallet ${shortAddr(connected.address)}`} title={connected.address}>
-      <img src={connected.wallet.icon} alt="" />
+      <img src={connected.wallet.icon} alt="" width={28} height={28} />
     </button>
   ) : (
     <Btn small onClick={openSignIn}>Connect wallet</Btn>

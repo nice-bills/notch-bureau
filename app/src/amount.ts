@@ -32,11 +32,11 @@ export function toInput(micro: bigint): string {
 
 export function formatDate(unixSeconds: bigint | number): string {
   const d = new Date(Number(unixSeconds) * 1000);
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 export function formatDateTime(unixSeconds: bigint | number): string {
   const d = new Date(Number(unixSeconds) * 1000);
-  return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 export function shortAddr(a: string, n = 4): string {

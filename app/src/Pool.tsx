@@ -5,7 +5,7 @@ import { useChain } from './data';
 import { useWallet } from './wallet';
 import { PROGRAM_ID, explorerAddress } from './config';
 import { deriveLine, isPastDue, markDefaultIx, poolAssets, type CreditLine } from './notch';
-import { formatUsdc, shortAddr } from './amount';
+import { formatDateTime, formatUsdc, shortAddr } from './amount';
 import { ActionStatus, Btn, Field, Icon, Notice, Stat, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Avatar } from './Home';
@@ -91,8 +91,8 @@ export function Pool() {
         <li><button type="button" className="item tap" onClick={() => go('cheat')}><span className="ico"><Icon name="shield" /></span><span className="t"><b>Try to cheat it</b><small>Edit an email, reuse one, forge a limit</small></span><span className="chev"><Icon name="chev" /></span></button></li>
       </ul>
       <p className="help pad" style={{ fontSize: 12 }}>
-        Program <a href={explorerAddress(PROGRAM_ID)} target="_blank" rel="noreferrer" className="mono">{shortAddr(PROGRAM_ID, 6)}</a>
-        {addrs && <> · Vault <a href={explorerAddress(addrs.vault)} target="_blank" rel="noreferrer" className="mono">{shortAddr(addrs.vault, 6)}</a></>}
+        Program <a href={explorerAddress(PROGRAM_ID)} target="_blank" rel="noreferrer" className="mono" translate="no">{shortAddr(PROGRAM_ID, 6)}</a>
+        {addrs && <> · Vault <a href={explorerAddress(addrs.vault)} target="_blank" rel="noreferrer" className="mono" translate="no">{shortAddr(addrs.vault, 6)}</a></>}
       </p>
     </div>
   );
@@ -140,7 +140,7 @@ function MarkDefault() {
     <section className="card pcard mark-default" aria-labelledby="md-h">
       <h3 id="md-h">Mark an overdue loan as missed</h3>
       <p className="sub">Anyone can do this once a loan is past due. The borrower’s 20% deposit goes to the lenders, the rest of the loss is written off, and that wallet can never borrow again. The program refuses it before the due date.</p>
-      <Field label="Borrower wallet" inputMode="text" value={input} onChange={setInput} placeholder="Wallet address" error={badInput ? 'That is not a valid wallet address.' : null} />
+      <Field label="Borrower wallet" inputMode="text" value={input} onChange={setInput} placeholder="Paste a wallet address…" error={badInput ? 'That is not a valid wallet address.' : null} />
       {lookup.state === 'loading' && <p className="help">Looking up the credit line…</p>}
       {lookup.state === 'none' && <Notice tone="info">This wallet has no credit line here.</Notice>}
       {lookup.state === 'error' && <Notice tone="warn">{lookup.message}</Notice>}
@@ -148,8 +148,8 @@ function MarkDefault() {
         <Notice tone={overdue ? 'bad' : line.defaulted ? 'warn' : 'info'} title={line.defaulted ? 'Already defaulted' : overdue ? 'Overdue' : 'Not overdue'}>
           {line.defaulted ? 'This line was already closed after a missed payment.'
             : line.drawn === 0n ? 'Nothing is borrowed right now.'
-            : overdue ? `Owes ${formatUsdc(line.drawn)} USDC, due ${new Date(Number(line.due) * 1000).toLocaleString()}.`
-            : `Owes ${formatUsdc(line.drawn)} USDC, due ${new Date(Number(line.due) * 1000).toLocaleString()}. Too early to mark.`}
+            : overdue ? `Owes ${formatUsdc(line.drawn)} USDC, due ${formatDateTime(line.due)}.`
+            : `Owes ${formatUsdc(line.drawn)} USDC, due ${formatDateTime(line.due)}. Too early to mark.`}
         </Notice>
       )}
       {!connected && <p className="help">Connect a wallet to send this. You only pay the network fee. <button type="button" onClick={openSignIn} style={{ color: 'var(--ultra)', fontWeight: 600 }}>Connect</button></p>}

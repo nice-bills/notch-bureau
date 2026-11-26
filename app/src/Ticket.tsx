@@ -16,12 +16,12 @@ export function Ticket({ result, wallet }: { result: EnclaveOk; wallet: string }
           <span className="ticket-unit">USDC credit limit</span>
         </p>
         <dl className="ticket-facts">
-          <div><dt>Made for wallet</dt><dd className="mono">{shortAddr(wallet, 5)}</dd></div>
+          <div><dt>Made for wallet</dt><dd className="mono" translate="no">{shortAddr(wallet, 5)}</dd></div>
           <div><dt>Good until</dt><dd>{formatDate(rec.expiry)}</dd></div>
-          <div><dt>Email fingerprint</dt><dd className="mono" title="A one-way hash. It stops the same email counting twice and reveals nothing about what the email says.">{bytesToHex(rec.dedupe).slice(0, 12)}…</dd></div>
-          <div><dt>Counter</dt><dd className="mono">{rec.nonce.toString().slice(-8)}</dd></div>
+          <div><dt>Email fingerprint</dt><dd className="mono" translate="no" title="A one-way hash. It stops the same email counting twice and reveals nothing about what the email says.">{bytesToHex(rec.dedupe).slice(0, 12)}…</dd></div>
+          <div><dt>Counter</dt><dd className="mono" translate="no">{rec.nonce.toString().slice(-8)}</dd></div>
         </dl>
-        <p className="ticket-sig"><span>Signature</span><span className="mono">{sig.slice(0, 28)}…{sig.slice(-8)}</span></p>
+        <p className="ticket-sig"><span>Signature</span><span className="mono" translate="no">{sig.slice(0, 28)}…{sig.slice(-8)}</span></p>
       </div>
       <div className="ticket-perf" aria-hidden="true" />
       <div className="ticket-bottom">

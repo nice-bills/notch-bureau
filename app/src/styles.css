@@ -437,3 +437,18 @@ details.raw pre,details.real-error pre{margin:8px 0 0;padding:12px;background:va
 .sheet .opt-link{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:18px;background:rgba(255,255,255,.7);text-decoration:none;color:var(--ink);font-weight:600}
 .sheet .opt-link small{display:block;color:var(--soft);font-weight:400;font-size:13px}
 .return-banner{margin:12px 24px 0}
+
+/* ---------- interface guidelines pass (Nov 26) ---------- */
+a,button,input,label,summary{touch-action:manipulation}
+.sheet:focus{outline:none} /* focused as a container on phones so the keyboard stays down; not a control */
+.opt-link{transition:transform .2s var(--spring),background-color .15s}
+.opt-link:active{transform:scale(.97)}
+@media (pointer:fine){html{overscroll-behavior:none}}
+/* hover only where a real pointer hovers; phones keep the press (scale) feedback alone */
+@media (hover:hover) and (pointer:fine){
+  .btn:not(:disabled):not(.ghost):hover{filter:brightness(1.07) saturate(1.05)}
+  .opt:not(:disabled):hover,.opt-link:hover{background:rgba(255,255,255,.95)}
+  .chip:not(:disabled):hover{background:#E8E8EE}
+  .tabs a:hover{color:var(--ink)}
+  .btn,.opt,.chip{transition:transform .2s var(--spring),filter .15s,background-color .15s}
+}

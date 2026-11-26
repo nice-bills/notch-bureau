@@ -89,7 +89,7 @@ export function Borrow() {
       <div className="bamt">
         <label htmlFor="amt">How much do you want to borrow? <span style={{ color: 'var(--faint)' }}>Up to {formatUsdc(cap)}</span></label>
         <div className="v">
-          <input id="amt" inputMode="decimal" autoComplete="off" value={amtStr} onChange={(e) => setAmtStr(e.target.value)} aria-invalid={amtErr ? true : undefined} aria-describedby="amt-err" />
+          <input id="amt" name="amount" inputMode="decimal" autoComplete="off" value={amtStr} onChange={(e) => setAmtStr(e.target.value)} aria-invalid={amtErr ? true : undefined} aria-describedby="amt-err" />
           <span className="u">USDC</span>
         </div>
         {amtErr ? <p className="field-err" id="amt-err" role="alert">{amtErr}</p> : <div className="back">Pay back <b>{formatUsdc(payoff)}</b> by {formatDate(dueIfNow)}</div>}
@@ -191,7 +191,7 @@ function Slide({ label, aria, disabled, busy, onDone }: { label: string; aria: s
         onPointerUp={() => { const s = st.current; st.current = null; if (!s) return; if (s.x > s.max * 0.86) { put(s.max, false); buzz(24); onDone(); } else put(0, true); }}
         onPointerCancel={() => { st.current = null; put(0, true); }}
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !disabled) { e.preventDefault(); onDone(); } }}
-        onClick={(e) => e.preventDefault()}>
+        onClick={(e) => { e.preventDefault(); if (e.detail === 0 && !disabled) onDone(); }}>
         {busy ? <span className="spinner" aria-hidden="true" /> : <Icon name="next" />}
       </button>
     </div>

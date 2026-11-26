@@ -269,7 +269,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
       </div>
       <div className="env pcard">
         <div className="row1">
-          <div style={{ minWidth: 0 }}><div className="to">To</div><code data-testid="inbox-address">{inbox.address}</code></div>
+          <div style={{ minWidth: 0 }}><div className="to">To</div><code data-testid="inbox-address" translate="no">{inbox.address}</code></div>
           <div className="slot" aria-hidden="true"><Icon name="lock" /></div>
         </div>
         <div className="foot2">

@@ -221,7 +221,7 @@ function WithdrawSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
           { at: claimBy, title: 'Claim by this day', sub: 'After that: cancel and ask again' },
         ].map((r) => (
           <li key={r.title}>
-            <span className="d"><b>{day(r.at).getDate()}</b><small>{day(r.at).toLocaleString('en-GB', { month: 'short' })}</small></span>
+            <span className="d"><b>{day(r.at).getDate()}</b><small>{day(r.at).toLocaleString(undefined, { month: 'short' })}</small></span>
             <span><b>{r.title}</b><small>{r.sub}</small></span>
           </li>
         ))}
@@ -281,8 +281,8 @@ function Pending({ t, r, pool, now }: { t: Tranche; r: WithdrawRequest; pool: Po
         <div className="count" data-testid="countdown">{phase === 'waiting' ? formatCountdown(unlock - now) : phase === 'open' ? formatCountdown(closes - now) : formatDateTime(closes)}</div>
       </div>
       <ul className="wd">
-        <li className={cx(phase !== 'waiting' && 'past', phase === 'waiting' && 'now')}><span className="d"><b>{new Date(unlock * 1000).getDate()}</b><small>{new Date(unlock * 1000).toLocaleString('en-GB', { month: 'short' })}</small></span><span><b>Unlocks</b><small>{formatDateTime(unlock)}</small></span></li>
-        <li className={cx(phase === 'open' && 'now', phase === 'lapsed' && 'past')}><span className="d"><b>{new Date(closes * 1000).getDate()}</b><small>{new Date(closes * 1000).toLocaleString('en-GB', { month: 'short' })}</small></span><span><b>Claim by</b><small>{formatDateTime(closes)} · a 2-day window</small></span></li>
+        <li className={cx(phase !== 'waiting' && 'past', phase === 'waiting' && 'now')}><span className="d"><b>{new Date(unlock * 1000).getDate()}</b><small>{new Date(unlock * 1000).toLocaleString(undefined, { month: 'short' })}</small></span><span><b>Unlocks</b><small>{formatDateTime(unlock)}</small></span></li>
+        <li className={cx(phase === 'open' && 'now', phase === 'lapsed' && 'past')}><span className="d"><b>{new Date(closes * 1000).getDate()}</b><small>{new Date(closes * 1000).toLocaleString(undefined, { month: 'short' })}</small></span><span><b>Claim by</b><small>{formatDateTime(closes)} · a 2-day window</small></span></li>
       </ul>
       {phase === 'lapsed' && <p className="help warn">The 2-day claim window has closed. Cancel to get your shares back, then ask again.</p>}
       {partial && <p className="help warn">The pool has {formatUsdc(idle)} USDC free right now; the rest is out on loan. A claim pays that part now and keeps the rest waiting at the same price.</p>}

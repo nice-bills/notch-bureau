@@ -166,7 +166,7 @@ function Shell() {
           </ScreenGuard>
         </main>
         <footer className="help" style={{ textAlign: 'center', padding: '32px 24px 0', fontSize: 12 }}>
-          Solana devnet only. Test money, no real funds. Program <a className="mono" href={explorerAddress(PROGRAM_ID)} target="_blank" rel="noreferrer">{shortAddr(PROGRAM_ID, 5)}</a>
+          Solana devnet only. Test money, no real funds. Program <a className="mono" translate="no" href={explorerAddress(PROGRAM_ID)} target="_blank" rel="noreferrer">{shortAddr(PROGRAM_ID, 5)}</a>
         </footer>
       </div>
       {tabbed && <TabBar route={route} go={go} />}
@@ -282,7 +282,7 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
           return (
             <button key={w.name} type="button" role="menuitem" className="opt tap" disabled={connecting}
               onClick={() => { setErr(null); connect(w).then(onClose).catch((e) => setErr(e instanceof Error ? e.message : String(e))); }}>
-              <span className="badge"><img src={w.icon} alt="" /></span>
+              <span className="badge"><img src={w.icon} alt="" width={28} height={28} /></span>
               <span className="t"><b>{title}</b><small>{sub}</small></span>
               {connecting ? <span className="spinner chev" aria-hidden="true" /> : <span className="chev"><Icon name="chev" /></span>}
             </button>
@@ -344,7 +344,7 @@ function AccountSheet({ onClose, att, retryAtt, pollar, setPollar }: { onClose: 
     <Sheet title={connected ? 'Your wallet' : 'Account'} onClose={onClose}>
       {connected && (
         <p className="sh-p">
-          {connected.wallet.name} · <span className="mono">{shortAddr(connected.address, 6)}</span>{' '}
+          {connected.wallet.name} · <span className="mono" translate="no">{shortAddr(connected.address, 6)}</span>{' '}
           <button type="button" className="tap" style={{ color: 'var(--ultra)', fontWeight: 600 }} onClick={() => { void navigator.clipboard?.writeText(connected.address).then(() => setCopied(true), () => {}); }}>
             {copied ? 'Copied' : 'Copy'}
           </button>
@@ -360,13 +360,13 @@ function AccountSheet({ onClose, att, retryAtt, pollar, setPollar }: { onClose: 
             <b>Sealed computer</b>
             <small>
               {att === null ? 'Checking…' : att === 'down' ? <>Not answering at {ENCLAVE_URL}. <button type="button" onClick={retryAtt} style={{ textDecoration: 'underline' }}>Try again</button></> : (
-                <>{att.mode === 'local-dev' ? 'Local prototype, not yet in secure hardware' : att.mode} · key <span className="mono">{shortAddr(att.underwriter, 5)}</span></>
+                <>{att.mode === 'local-dev' ? 'Local prototype, not yet in secure hardware' : att.mode} · key <span className="mono" translate="no">{shortAddr(att.underwriter, 5)}</span></>
               )}
             </small>
           </span>
         </div>
         {pollar?.step === 'authenticated' && (
-          <div className="fact"><GoogleMark /><span><b>Google, via Pollar</b><small>{pollar.email ?? 'Signed in'}{pollar.solana ? <> · wallet <span className="mono">{shortAddr(pollar.solana)}</span></> : ''}</small></span></div>
+          <div className="fact"><GoogleMark /><span><b>Google, via Pollar</b><small>{pollar.email ?? 'Signed in'}{pollar.solana ? <> · wallet <span className="mono" translate="no">{shortAddr(pollar.solana)}</span></> : ''}</small></span></div>
         )}
       </div>
       {connected && <div style={{ margin: '4px 0 12px' }}><FaucetButton /></div>}

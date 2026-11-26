@@ -74,7 +74,7 @@ export function Field({ label, hint, suffix, value, onChange, inputMode = 'decim
     <div className={cx('field', error && 'has-error')}>
       <label className="field-label" htmlFor={fid}>{label}</label>
       <span className="field-box">
-        <input id={fid} value={value} onChange={(e) => onChange(e.target.value)} inputMode={inputMode} placeholder={placeholder} disabled={disabled}
+        <input id={fid} name={fid} value={value} onChange={(e) => onChange(e.target.value)} inputMode={inputMode} placeholder={placeholder} disabled={disabled}
           autoComplete="off" spellCheck={false} aria-invalid={error ? true : undefined} aria-describedby={`${fid}-h`} />
         {suffix && <span className="field-suffix">{suffix}</span>}
         {action && <button type="button" className="field-action tap" onClick={action.onClick} disabled={disabled}>{action.label}</button>}
@@ -121,7 +121,9 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     const el = ref.current;
-    el?.querySelector<HTMLElement>('input, button:not(.x), a')?.focus({ preventScroll: true });
+    // Phones: focus the sheet itself, so no keyboard jumps up before the user taps a field.
+    const coarse = matchMedia('(pointer: coarse)').matches;
+    (coarse ? el : el?.querySelector<HTMLElement>('input, button:not(.x), a'))?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close.current(); };
     addEventListener('keydown', onKey);
     if (el) requestAnimationFrame(() => buildLenses(el));
@@ -144,8 +146,8 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
   }, []);
   return createPortal(
     <>
-      <div className="scrim" onClick={onClose} />
-      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby={tid} ref={ref}>
+      <div className="scrim" aria-hidden="true" onClick={onClose} />
+      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby={tid} ref={ref} tabIndex={-1}>
         <div className="grab" aria-hidden="true" />
         <div className="sh-h">
           <h2 id={tid}>{title}</h2>
