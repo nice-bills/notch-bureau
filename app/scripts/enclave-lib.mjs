@@ -34,7 +34,7 @@ export function makeServer(u, opts = {}) {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, authorization, x-wallet, x-notch-device, x-notch-ts, x-notch-sig, x-notch-token' }); return res.end(); }
     if (await handleDevice(u, req, new URL(req.url, 'http://x'), send)) return;
     if (req.method === 'GET' && req.url === '/attestation') {
-      return send(200, { underwriter: u.publicKey, mode: 'local-dev', extraction: u.llm ? { mode: 'llm', model: u.llm.model } : { mode: 'rules' }, note: 'demo underwriter with synthetic DKIM fixtures' });
+      return send(200, { underwriter: u.publicKey, mode: 'local-dev', faucet: Boolean(opts.faucet), extraction: u.llm ? { mode: 'llm', model: u.llm.model } : { mode: 'rules' }, note: 'demo underwriter with synthetic DKIM fixtures' });
     }
     // A freshly signed demo email on every request. Each carries its own transaction ID, like real
     // provider emails, so it is never a duplicate of an earlier demo run (dedupe is on the body hash).
@@ -63,6 +63,15 @@ export function makeServer(u, opts = {}) {
     }
     // The statement inbox (same handler as the real enclave), plus a DEMO-ONLY mailer: it emails a synthetic, freshly
     // DKIM-signed MoMo statement to an inbox address through the same `receive` path the Cloudflare worker uses.
+    // DEMO ONLY: devnet faucet (scripts/faucet.mjs), when the demo server was started with a faucet key.
+    if (opts.faucet && req.method === 'POST' && req.url === '/demo/faucet') {
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 1024) return send(413, { ok: false, reason: 'too large' }); }
+      let wallet = '';
+      try { wallet = JSON.parse(body).wallet; } catch { /* reported below */ }
+      const r = await opts.faucet.drip(wallet);
+      return send(r.status, r.body);
+    }
     if (opts.inbox) {
       const url = new URL(req.url, 'http://x');
       if (req.method === 'POST' && url.pathname === '/demo/deliver') {
