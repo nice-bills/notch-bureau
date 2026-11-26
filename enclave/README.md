@@ -54,6 +54,11 @@ v2 record and `seeker: false`. A Seeker who sends no proof gets no phone binding
 and is not counted as a refusal (the address is not locked or spent). Tests: `test/inbox-device.test.js`, devnet e2e step 13.
 
 ### Statement parsing (security model)
+Two layouts are read. The statement MTN **emails** on a `*170#` request (landscape table with drawn borders,
+`TRANSACTION DATE | FROM ACCT | ... | OVA`, account number labelled `MSISDN:`) is read by `src/statement-email.js`:
+cells come from the table borders, direction from which of FROM NO. / TO NO. is the account, and BAL BEFORE / BAL AFTER
+check every row. Real one (2026-11-26, aggregates only): 30 days, 116 rows, 9 pages, 0 balance breaks. The other layout:
+
 Layout is the REAL MTN MoMo statement (made with pdfmake; read from a real file on 2026-11-23): header block
 (Account holder, Wallet number, From/To date), then a table repeated on every page:
 `Date & Time | Payment Type | To/From | Account Name | Amount (+/-) | Transaction ID | Fees | Tax | Balance | Reference`,

@@ -1,4 +1,5 @@
 // Mobile-money statement PDF -> transaction rows + the account's identity (wallet number, holder).
+// Two layouts: the one below, and the statement MTN emails on a *170# request (src/statement-email.js).
 //
 // Layout (MTN MoMo Ghana, read from a REAL statement on 2026-11-23, made with pdfmake): a header block
 // ("Account holder:", "Wallet number:", "From date:", "To date:" ...), an "Available balance GHS x" line, then a table
@@ -23,6 +24,7 @@
 //   * free text is handed on as data. src/income.js lets it LOWER what a credit counts for, never raise it.
 import crypto from 'node:crypto';
 import { readPdf } from './pdf-text.js';
+import { isEmailedLayout, parseEmailedStatement } from './statement-email.js';
 
 export class StatementError extends Error {}
 
@@ -58,13 +60,11 @@ export async function parseStatements(pdfs, { now = new Date(), defaultCurrency 
   if (!pdfs.length) throw new StatementError('the email has no PDF statement attached');
   const parts = [];
   for (const pdf of pdfs) {
-    let doc;
-    try {
-      doc = await readPdf(pdf.content);
-    } catch (e) {
-      throw new StatementError(e.message);
-    }
-    parts.push(parseStatement(doc, { now, defaultCurrency, countryCode }));
+    const read = (opts) => readPdf(pdf.content, opts).catch((e) => { throw new StatementError(e.message); });
+    const doc = await read();
+    parts.push(isEmailedLayout(doc)
+      ? parseEmailedStatement(await read({ rules: true }), { now, countryCode }) // this one needs the table borders too
+      : parseStatement(doc, { now, defaultCurrency, countryCode }));
   }
   const numbers = new Set(parts.map((p) => p.msisdn).filter(Boolean));
   if (numbers.size === 0) throw new StatementError('could not find the account phone number in the statement');
@@ -278,6 +278,7 @@ function buildRow(cell, page, { defaultCurrency, now, countryCode }) {
 // rows are newest first. For each row with an older neighbour: balance - olderBalance == amount - fee - tax.
 // A row that breaks it (a misread cell, or rows missing from the statement) is listed in `failed` by row number
 // (1 = newest) and its credit never counts as income. The oldest row has no neighbour and is not checked.
+// `rowOk: false` (a layout that prints both balances found the row inconsistent by itself) fails a row too.
 export function checkBalances(rows) {
   const failed = [];
   let checked = 0;
@@ -286,10 +287,14 @@ export function checkBalances(rows) {
     const r = rows[i];
     const diff = Math.round((r.balance - rows[i + 1].balance) * 100) / 100;
     const want = Math.round((r.amount - r.fee - r.tax) * 100) / 100;
-    r.balanceOk = Math.abs(diff - want) <= CHAIN_TOLERANCE;
+    r.balanceOk = Math.abs(diff - want) <= CHAIN_TOLERANCE && r.rowOk !== false;
     if (!r.balanceOk) failed.push(i + 1);
   }
-  if (rows.length) rows[rows.length - 1].balanceOk = true; // nothing older to compare with: judged by its own cells only
+  if (rows.length) {
+    const oldest = rows[rows.length - 1]; // nothing older to compare with: judged by its own cells only
+    oldest.balanceOk = oldest.rowOk !== false;
+    if (!oldest.balanceOk) { checked++; failed.push(rows.length); }
+  }
   return { checked, passed: checked - failed.length, failed };
 }
 
