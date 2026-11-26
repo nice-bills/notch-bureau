@@ -140,6 +140,30 @@ with `GET /record/<wallet>` + header `x-notch-token` (`waiting | ready | refused
   forgets open addresses); no domain is owned yet (`inbox.notch.invalid` placeholder). Rehearsal incl. devnet:
   `node enclave/scripts/e2e-inbox.mjs`.
 
+### Real mail for free: one AgentMail mailbox (`src/agentmail-bridge.js`)
+No domain needed. Set `NOTCH_INBOX_ADDRESS=notch-inbox@agentmail.to` and each wallet's address becomes
+`notch-inbox+<code>@agentmail.to` (without it, `<code>@NOTCH_INBOX_DOMAIN` as above). With `AGENTMAIL_API_KEY` also set,
+the demo server and the CVM server poll the mailbox every 10 s, download the raw message and run it through the same
+`receive` path as `/inbound`. The signed `To` header must still name that exact plus address.
+```
+set -a; . ~/.config/notch/agentmail.env; set +a          # AGENTMAIL_API_KEY, never printed or committed
+NOTCH_INBOX_ADDRESS=notch-inbox@agentmail.to NOTCH_LLM=off pnpm --dir app demo:enclave
+node enclave/scripts/e2e-agentmail.mjs                   # live check: real send -> refused; synthetic fixture -> limit
+```
+- Bridge mail is checked against **real DNS** and the real source list, even on a demo server (whose other routes trust the test key).
+- Optional: point an AgentMail `message.received` webhook at `POST /agentmail/webhook`. Its body is ignored; it only triggers a poll.
+- Separate process instead (for `src/server.js`): `scripts/agentmail-bridge.mjs`, which posts to `/inbound` with `NOTCH_INBOUND_SECRET`.
+- Only messages addressed to a code this process issued are downloaded. Nothing about a message is logged or written to disk.
+  `NOTCH_AGENTMAIL_POLL_MS` changes the 10 s.
+
+Honest limits:
+- **AgentMail receives and keeps the statement** (so can whoever holds the API key). "Only the sealed computer reads it" is not true on this route.
+- With the AI reader on, pseudonymised statement rows go to `NOTCH_LLM_URL`. Leave it off for real statements unless that endpoint is trusted.
+- **Not verified with real MTN mail**: the trusted signer is `mtn.com` (see SOURCES), the signature must cover `To`, and MTN's
+  form must accept a `+` in an email address.
+- The app treats the mailbox as a real mail domain, so the "Send a sample statement" button shows only on the local demo server.
+- Forwarding a statement from your own mail does not work: the signed `To` is then yours, not the inbox address.
+
 ### The secret pepper in `id_hash` (required)
 There are only about 10^9 phone numbers, so a plain `sha256("notch-msisdn"|number)` on chain (the public PDA `["identity", id_hash]`) can be
 matched by hashing every number. The hash is therefore `sha256("notch-msisdn"|pepper|number)` with a secret pepper, and **a real server
@@ -166,6 +190,8 @@ Changing from no pepper to a pepper changes every `id_hash`: devnet lines made e
 | `NOTCH_SUPERTEAM_DOMAIN` | DKIM domain of Earn payout emails (default `superteam.fun`) |
 | `NOTCH_INBOX_DOMAIN` | domain of the statement inbox addresses (default `inbox.notch.invalid`, a placeholder) |
 | `NOTCH_INBOUND_SECRET` | shared secret of the Cloudflare worker; `/inbound` is disabled without it |
+| `NOTCH_INBOX_ADDRESS` | shared mailbox `<local>@<domain>`: addresses become `<local>+<code>@<domain>` (wins over `NOTCH_INBOX_DOMAIN`) |
+| `AGENTMAIL_API_KEY` | with `NOTCH_INBOX_ADDRESS`, polls that AgentMail inbox. Secret: env only |
 | `NOTCH_STORE` | `memory` (default) or `supabase`: where public statement status goes |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` | the live project (service key writes status; anon key checks "Sign in with Solana" tokens). Secrets: env only |
 | `NOTCH_ID_PEPPER` | **required**: secret (>= 32 chars) mixed into the identity hash (see above); derived inside the TEE on Phala |

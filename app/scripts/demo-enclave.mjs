@@ -22,6 +22,7 @@ import { pepperOrExit } from '../../enclave/src/pepper.js';
 import { Inbox } from '../../enclave/src/inbox.js';
 import { createStoreFromEnv } from '../../enclave/src/store.js';
 import { createAuthFromEnv } from '../../enclave/src/supabase-auth.js';
+import { startAgentMailBridge } from '../../enclave/src/agentmail-bridge.js';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { createFaucet } from './faucet.mjs';
@@ -50,8 +51,9 @@ const llm = process.env.NOTCH_LLM === 'off' ? null : llmConfigFromEnv({ ...readE
 const u = makeUnderwriter(process.env.NOTCH_KEY_FILE, { llm, idPepper, cls: InboxedUnderwriter });
 // The statement inbox, as on the real enclave. Status rows go to memory, or to Supabase when NOTCH_STORE=supabase and
 // SUPABASE_* are set (then the app can watch them live over Realtime). The inbound secret is random per start: only this
-// process (its demo mailer) can deliver, there is no mail worker in a local demo.
-const inbox = new Inbox({ domain: process.env.NOTCH_INBOX_DOMAIN || 'inbox.notch.invalid', secret: crypto.randomBytes(24).toString('hex'), store: createStoreFromEnv(), auth: createAuthFromEnv() });
+// process (its demo mailer and, when configured, the AgentMail bridge) can deliver, there is no mail worker in a local demo.
+// Addresses are <code>@NOTCH_INBOX_DOMAIN, or <local>+<code>@<domain> when NOTCH_INBOX_ADDRESS is set.
+const inbox = new Inbox({ secret: crypto.randomBytes(24).toString('hex'), store: createStoreFromEnv(), auth: createAuthFromEnv() });
 // DEMO ONLY: a devnet faucet (SOL for fees + test USDC) when a mint-authority key is around: NOTCH_FAUCET_KEYPAIR, the e2e admin,
 // or ~/.config/solana/id.json (the key devnet-setup.mjs used). RPC and mint come from app/.env.local unless the shell overrides them.
 const appEnv = { ...readEnv(path.join(here, '..', '.env.local')), ...process.env };
@@ -60,11 +62,13 @@ const faucet = await createFaucet({
   rpcUrl: appEnv.VITE_RPC_URL || 'https://api.devnet.solana.com',
   mint: appEnv.VITE_USDC_MINT,
 }).catch((e) => { console.warn(`faucet off: ${e.message}`); return null; });
-const server = makeServer(u, { inbox, faucet });
+// Real mail through AgentMail (AGENTMAIL_API_KEY + NOTCH_INBOX_ADDRESS). It is checked against REAL DNS, not the test key.
+const mailBridge = startAgentMailBridge({ inbox, underwriter: u });
+const server = makeServer(u, { inbox, faucet, mailBridge });
 const port = Number(process.env.PORT || 8787);
 server.listen(port, () => {
   console.log(`demo underwriter ${u.publicKey} on :${port} (reader: ${u.llm ? `AI ${u.llm.model}` : 'rules'}; fresh samples at /samples/{momo,deel,bank}.eml)`);
   console.log(`sample emails written to ${samplesDir}`);
-  console.log(`statement inbox: ${inbox.domain} (status store: ${inbox.store.kind || 'memory'}${inbox.auth ? ', Sign in with Solana on' : ''}); demo mailer at POST /demo/deliver`);
+  console.log(`statement inbox: ${inbox.describe}${mailBridge ? ' (real mail via AgentMail)' : ''} (status store: ${inbox.store.kind || 'memory'}${inbox.auth ? ', Sign in with Solana on' : ''}); demo mailer at POST /demo/deliver`);
   console.log(faucet ? `devnet faucet on (POST /demo/faucet, key ${faucet.admin})` : 'devnet faucet off (no mint-authority key or mainnet RPC)');
 });

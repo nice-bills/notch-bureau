@@ -114,6 +114,9 @@ async function call(path: string, init?: RequestInit): Promise<Response> {
   }
 }
 
+/** The 10 character code in an inbox address: `<code>@domain`, or `<mailbox>+<code>@domain` on a shared mailbox. */
+export const inboxCode = (address: string) => address.split('@')[0].split('+').pop()!;
+
 /** What the wallet signs to ask for an inbox address: same text the underwriter checks. */
 export const inboxMessage = (wallet: string, ts: number) => `notch-inbox-v1|${wallet}|${ts}`;
 

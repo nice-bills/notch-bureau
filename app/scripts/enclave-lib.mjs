@@ -11,6 +11,7 @@ import { handleUnderwrite } from '../../enclave/src/underwrite-http.js';
 import * as fixtures from '../../enclave/test/fixtures/emails.js';
 import { createSampleLimiter, callerKey } from '../../enclave/src/sample-limit.js';
 import { handleInbox } from '../../enclave/src/inbox.js';
+import { handleAgentMailWebhook } from '../../enclave/src/agentmail-bridge.js';
 
 export { fixtures };
 
@@ -72,6 +73,7 @@ export function makeServer(u, opts = {}) {
       const r = await opts.faucet.drip(wallet);
       return send(r.status, r.body);
     }
+    if (handleAgentMailWebhook(opts.mailBridge, req, new URL(req.url, 'http://x'), send)) return;
     if (opts.inbox) {
       const url = new URL(req.url, 'http://x');
       if (req.method === 'POST' && url.pathname === '/demo/deliver') {
@@ -83,7 +85,7 @@ export function makeServer(u, opts = {}) {
         for await (const c of req) { body += c; if (body.length > 2048) return send(413, { ok: false, reason: 'too large' }); }
         let address;
         try { address = String(JSON.parse(body).address || '').trim().toLowerCase(); } catch { address = ''; }
-        if (!address.endsWith(`@${opts.inbox.domain}`)) return send(400, { ok: false, reason: 'send JSON {"address": "<your inbox address>"}' });
+        if (!opts.inbox.codeOf(address)) return send(400, { ok: false, reason: 'send JSON {"address": "<your inbox address>"}' });
         const eml = await fixtures.momoStatementEmail({ msisdn: fixtures.randomMsisdn(), to: address });
         try {
           const r = await opts.inbox.receive(u, { rcpt: address, eml, secret: opts.inbox.secret });

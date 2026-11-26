@@ -1,8 +1,11 @@
 // Statement inbox: "MTN sends the statement straight to Notch".
 //
-// Each wallet gets its own mail address  <code>@<NOTCH_INBOX_DOMAIN>  (the code is a short random id kept inside the
-// enclave). The borrower asks MTN to mail the statement to that address. A Cloudflare Email Worker
-// (deploy/cloudflare/email-worker.js) forwards the RAW message, unchanged, to POST /inbound. The enclave then
+// Each wallet gets its own mail address (the code is a short random id kept inside the enclave), in one of two styles:
+//     <code>@<NOTCH_INBOX_DOMAIN>          our own mail domain (the default)
+//     <local>+<code>@<domain>              one shared mailbox, NOTCH_INBOX_ADDRESS=<local>@<domain> (plus-addressing)
+// The borrower asks MTN to mail the statement to that address. A Cloudflare Email Worker
+// (deploy/cloudflare/email-worker.js) forwards the RAW message, unchanged, to POST /inbound; for a shared AgentMail
+// mailbox, agentmail-bridge.js fetches it instead. The enclave then
 //
 //   1. checks the shared secret (the worker is the only caller),
 //   2. maps the recipient address -> code -> wallet; unknown, expired, used and locked codes are refused,
@@ -49,6 +52,26 @@ export const CODE_LEN = 10;
 const DEFAULT_DOMAIN = 'inbox.notch.invalid'; // .invalid never resolves: no domain is owned yet, set NOTCH_INBOX_DOMAIN
 export const MAX_INBOUND_BYTES = 5 * 1024 * 1024;
 
+// "<local>@<domain>" of a shared mailbox -> its two halves, lower-cased. The local part has no "+": that is where the code goes.
+export function parseMailbox(address) {
+  const m = /^([a-z0-9._-]{1,53})@([a-z0-9.-]+\.[a-z]{2,})$/.exec(String(address || '').trim().toLowerCase());
+  if (!m) throw new Error('NOTCH_INBOX_ADDRESS must be a plain <local>@<domain> address without "+"');
+  return { local: m[1], domain: m[2] };
+}
+
+// The code a recipient address carries, or null. `mailbox` is parseMailbox()'s result for the plus style, null for
+// <code>@<domain>. Not case sensitive.
+export function recipientCode(rcpt, { domain, mailbox = null }) {
+  const [local, host, extra] = String(rcpt || '').trim().toLowerCase().split('@');
+  if (extra !== undefined || host !== domain) return null;
+  let code = local;
+  if (mailbox) {
+    if (!local.startsWith(`${mailbox.local}+`)) return null;
+    code = local.slice(mailbox.local.length + 1);
+  }
+  return new RegExp(`^[a-z2-7]{${CODE_LEN}}$`).test(code) ? code : null;
+}
+
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
 const safeEq = (a, b) => crypto.timingSafeEqual(sha(a), sha(b));
 
@@ -59,7 +82,9 @@ function newCode() {
 
 export class Inbox {
   constructor({
-    domain = process.env.NOTCH_INBOX_DOMAIN || DEFAULT_DOMAIN,
+    domain,
+    // The shared mailbox for plus-addressing. An explicit `domain` (and no `address`) keeps the <code>@<domain> style.
+    address = domain === undefined ? process.env.NOTCH_INBOX_ADDRESS || '' : '',
     secret = process.env.NOTCH_INBOUND_SECRET || '',
     requireWalletSig = true, // a wallet proof is required by default; there is no env switch to turn it off
     insecureAllowUnsignedForTests = false, // TEST ONLY: lets /inbox/new skip the wallet proof. No server sets it.
@@ -71,7 +96,8 @@ export class Inbox {
     maxFailures = 5,
     now = () => Date.now(),
   } = {}) {
-    this.domain = String(domain).toLowerCase();
+    this.mailbox = address ? parseMailbox(address) : null;
+    this.domain = this.mailbox ? this.mailbox.domain : String(domain ?? (process.env.NOTCH_INBOX_DOMAIN || DEFAULT_DOMAIN)).toLowerCase();
     this.secret = secret;
     this.requireWalletSig = requireWalletSig && !insecureAllowUnsignedForTests;
     this.store = store;
@@ -86,7 +112,28 @@ export class Inbox {
   }
 
   get domainConfigured() {
-    return this.domain !== DEFAULT_DOMAIN;
+    return this.mailbox !== null || this.domain !== DEFAULT_DOMAIN;
+  }
+
+  // The full address a code is reached at.
+  addressFor(code) {
+    return this.mailbox ? `${this.mailbox.local}+${code}@${this.domain}` : `${code}@${this.domain}`;
+  }
+
+  // The code in a recipient address of this inbox's style, or null.
+  codeOf(rcpt) {
+    return recipientCode(rcpt, this);
+  }
+
+  // Does this recipient name a code issued here (in any state)? The mail bridge asks before it downloads a message.
+  knows(rcpt) {
+    const code = this.codeOf(rcpt);
+    return code !== null && this.codes.has(code);
+  }
+
+  // How logs describe where mail is expected.
+  get describe() {
+    return this.mailbox ? this.addressFor('<code>') : this.domain;
   }
 
   #purge() {
@@ -142,7 +189,7 @@ export class Inbox {
       status: 200,
       body: {
         ok: true,
-        address: `${code}@${this.domain}`,
+        address: this.addressFor(code),
         pollToken: token, // keep it: it is the only way to read the result
         expiresAt: new Date(created + this.ttlMs).toISOString(),
         domainConfigured: this.domainConfigured,
@@ -157,21 +204,20 @@ export class Inbox {
   async receive(underwriter, { rcpt, eml, secret }) {
     if (!this.secret) return { status: 503, body: { ok: false, reason: 'the inbound endpoint is not configured (NOTCH_INBOUND_SECRET)' } };
     if (!secret || !safeEq(secret, this.secret)) return { status: 401, body: { ok: false, reason: 'bad inbound secret' } };
-    const m = new RegExp(`^([a-z2-7]{${CODE_LEN}})@${this.domain.replace(/[.]/g, '\\.')}$`).exec(String(rcpt || '').trim().toLowerCase());
-    const entry = m && this.codes.get(m[1]);
+    const code = this.codeOf(rcpt);
+    const entry = code && this.codes.get(code);
     if (!entry) return { status: 404, body: { ok: false, reason: 'unknown inbox address' } };
-    if (entry.expires < this.now()) { this.codes.delete(m[1]); this.status.dropped(m[1]); return { status: 410, body: { ok: false, reason: 'this inbox address has expired' } }; }
+    if (entry.expires < this.now()) { this.codes.delete(code); this.status.dropped(code); return { status: 410, body: { ok: false, reason: 'this inbox address has expired' } }; }
     if (entry.state === 'used') return { status: 410, body: { ok: false, reason: 'this inbox address already received a statement; ask for a new one' } };
     if (entry.state === 'locked') return { status: 429, body: { ok: false, reason: 'this inbox address is locked after too many refused messages; ask for a new one' } };
     if (entry.busy) return { status: 409, body: { ok: false, reason: 'a message for this address is being processed' } };
     entry.busy = true;
-    const code = m[1];
     try {
       await this.status.received(code);
       await this.status.checking(code);
       let r;
       try {
-        r = await underwriter.submit(eml, entry.wallet, { recipient: `${code}@${this.domain}`, deviceProven: entry.deviceProven === true && entry.deviceWallet === entry.wallet });
+        r = await underwriter.submit(eml, entry.wallet, { recipient: this.addressFor(code), deviceProven: entry.deviceProven === true && entry.deviceWallet === entry.wallet });
       } catch (e) {
         await this.status.refused(code, 'internal error');
         throw e;

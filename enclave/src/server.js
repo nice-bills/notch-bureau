@@ -21,4 +21,4 @@ const inbox = new Inbox({ store: createStoreFromEnv(), auth: createAuthFromEnv()
 
 const port = Number(process.env.PORT || 8787);
 createApp(u, inbox).listen(port, () =>
-  console.log(`notch underwriter ${u.publicKey} on :${port} (extraction: ${u.llm ? `llm ${u.llm.model}` : 'rules'}; inbox ${inbox.domain}${inbox.secret ? '' : ', inbound DISABLED: set NOTCH_INBOUND_SECRET'})`));
+  console.log(`notch underwriter ${u.publicKey} on :${port} (extraction: ${u.llm ? `llm ${u.llm.model}` : 'rules'}; inbox ${inbox.describe}${inbox.secret ? '' : ', inbound DISABLED: set NOTCH_INBOUND_SECRET'})`));

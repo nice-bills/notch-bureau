@@ -32,7 +32,7 @@ export const NOTCH_ENV = {
   NOTCH_USDC_MINT: '8w1jur5oikV5aax7Q8eTSZwfZwVvFQDTknMTREJ75NNS', // devnet test USDC
 };
 // Names only (values come from Phala's encrypted env): never put a value here.
-export const SEALED_ENV = ['NOTCH_LLM_URL', 'NOTCH_LLM_MODEL', 'NOTCH_LLM_KEY', 'NOTCH_LLM_TIMEOUT_MS', 'NOTCH_INBOX_DOMAIN', 'NOTCH_INBOUND_SECRET', 'NOTCH_INBOX_REQUIRE_WALLET_SIG', 'NOTCH_STORE', 'SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'];
+export const SEALED_ENV = ['NOTCH_LLM_URL', 'NOTCH_LLM_MODEL', 'NOTCH_LLM_KEY', 'NOTCH_LLM_TIMEOUT_MS', 'NOTCH_INBOX_DOMAIN', 'NOTCH_INBOUND_SECRET', 'NOTCH_INBOX_REQUIRE_WALLET_SIG', 'NOTCH_STORE', 'SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'AGENTMAIL_API_KEY', 'NOTCH_INBOX_ADDRESS'];
 
 // The phone-number pepper is derived INSIDE the TEE by cvm-server.js (dstack key derivation, enclave/src/pepper.js). It must
 // never be an environment value: an env value is visible to whoever deploys, and a missing pepper must stop the server, not

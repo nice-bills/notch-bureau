@@ -44,6 +44,7 @@ The devnet program is left on the **local** demo key, because `app/scripts/e2e-d
 ```sh
 set -a; . notch/.env.phala; set +a                       # PHALA_CLOUD_API_KEY, never printed or committed
 node deploy/phala/build-compose.mjs                       # regenerate docker-compose.yml from enclave/src (edit NOTCH_ENV there)
+# real mail (optional): put AGENTMAIL_API_KEY and NOTCH_INBOX_ADDRESS in the -e file below (sealed), see enclave/README.md
 npx -y phala@latest deploy -n notch-underwriter -c deploy/phala/docker-compose.yml -t tdx.small \
     -e enclave/.env --cvm-id notch-underwriter --wait    # update in place; omit --cvm-id for a new one
 npx -y phala@latest cvms stop notch-underwriter           # stop billing without deleting

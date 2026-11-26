@@ -5,7 +5,7 @@ import { FaucetButton } from './Faucet';
 import { PHANTOM_LINK_NAME, takeSignedMessage, returnedWith } from './phantom-link';
 import { useChain } from './data';
 import { useWallet } from './wallet';
-import { demoDeliver, newInbox, pollRecord, recordBytes, reportPosted, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
+import { demoDeliver, inboxCode, newInbox, pollRecord, recordBytes, reportPosted, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
 import { signInWithSolana, watchJobs, type JobRow } from './live';
 import { decodeRecord } from './notch';
 import { postIxsFor } from './post';
@@ -215,7 +215,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
   // Live steps over Supabase Realtime, when configured.
   useEffect(() => {
     if (!inbox || !LIVE_STATUS) return;
-    const code = inbox.address.split('@')[0];
+    const code = inboxCode(inbox.address);
     return watchJobs(wallet, code, (r: JobRow) => {
       if (done.current) return;
       setLive(r.status === 'received' ? 'received' : r.status === 'checking' ? 'checking' : r.status === 'refused' ? 'refused' : 'done');

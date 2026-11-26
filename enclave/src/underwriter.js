@@ -91,9 +91,11 @@ export class Underwriter {
   // Seeker (limit as before). A bad proof is refused; an RPC outage is reported as retry-later, never as "not a Seeker".
   // `deviceProven` (statement inbox only, set by the Inbox from its own state): the proof was already verified when the
   // address was issued, so only the token read is left.
-  async submit(eml, wallet, { recipient, device, deviceProven = false } = {}) {
+  // `dkim` ({ trusted, resolver? }) replaces this underwriter's DKIM settings for this one message. Only the in-process mail
+  // bridge passes it (real mail is checked against real DNS even on a demo underwriter); no HTTP route does.
+  async submit(eml, wallet, { recipient, device, deviceProven = false, dkim } = {}) {
     bs58.decode(wallet); // throws on a bad address
-    const v = await verifyEmail(eml, { trusted: this.trusted, resolver: this.resolver });
+    const v = await verifyEmail(eml, dkim ?? { trusted: this.trusted, resolver: this.resolver });
     if (!v.ok) return { ok: false, reason: v.reason };
     if (recipient) {
       const to = toAddresses(eml);
