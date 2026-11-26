@@ -485,3 +485,11 @@ body:has(.sheet) .tabs{visibility:hidden}
 /* the posted screen's pattern fades out instead of ending in a hard line */
 .rosette{-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
 /* first visit: a mark while the app downloads (index.html), replaced when React mounts */
+/* iOS 26 Safari: the URL bar floats over the page bottom. Leave room for it, the floating tab bar and the home indicator
+   at the end of every page, so the last line can always be scrolled clear of both. */
+.app{padding-bottom:calc(156px + env(safe-area-inset-bottom,0px))}
+.app.no-tabs{padding-bottom:calc(104px + env(safe-area-inset-bottom,0px))}
+html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
+.dock{bottom:calc(12px + env(safe-area-inset-bottom,0px))}
+.devnet-note{margin:12px 0 0;padding:10px 12px;border-radius:14px;background:var(--well)}
+@media (orientation:landscape) and (max-height:480px){.app{padding-bottom:calc(88px + env(safe-area-inset-bottom,0px))}}

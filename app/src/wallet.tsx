@@ -31,7 +31,9 @@ const isSolanaWallet = (w: Wallet): w is SolanaWallet =>
 interface WalletState {
   wallets: DetectedWallet[];
   connected: { wallet: DetectedWallet; account: WalletAccount; address: Address } | null;
-  connecting: boolean;
+  /** The name of the wallet being connected (only that row shows a spinner), or null. */
+  connecting: string | null;
+  cancelConnect: () => void;
   /** True while a remembered wallet is being reconnected silently after a reload (show a skeleton, not the welcome). */
   restoring: boolean;
   connect: (w: DetectedWallet) => Promise<void>;
@@ -53,7 +55,15 @@ const remember = (name: string | null) => { try { if (name) localStorage.setItem
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallets, setWallets] = useState<DetectedWallet[]>([]);
   const [connected, setConnected] = useState<WalletState['connected']>(null);
-  const [connecting, setConnecting] = useState(false);
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const attempt = useRef(0);
+  // Safari can restore this page from its back/forward cache after the user left for a wallet app: never keep a
+  // spinner from before.
+  useEffect(() => {
+    const on = (e: PageTransitionEvent) => { if (e.persisted) { attempt.current++; setConnecting(null); } };
+    addEventListener('pageshow', on);
+    return () => removeEventListener('pageshow', on);
+  }, []);
   const [restoring, setRestoring] = useState(() => remembered() !== null);
   const tried = useRef(false);
 
@@ -106,19 +116,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [connected]);
 
   const connect = useCallback(async (d: DetectedWallet) => {
-    setConnecting(true);
+    // A newer tap wins: an older connect that finishes (or never does) cannot touch the state any more.
+    const mine = ++attempt.current;
+    const before = remembered();
+    setConnecting(d.name);
     remember(d.name); // a deeplink wallet leaves the page here; on return the silent reconnect picks it up
     try {
       const w = d.wallet as SolanaWallet;
       const { accounts } = await w.features[StandardConnect].connect();
       const account = accounts.find((a) => a.chains.some((c) => c.startsWith('solana:'))) ?? accounts[0];
       if (!account) throw new Error('The wallet did not share an account.');
+      if (mine !== attempt.current) return;
       remember(d.name);
       setConnected({ wallet: d, account, address: address(account.address) });
+    } catch (e) {
+      if (mine === attempt.current) remember(before); // cancelled: keep the wallet that was remembered before
+      throw e;
     } finally {
-      setConnecting(false);
+      if (mine === attempt.current) setConnecting(null);
     }
   }, []);
+  /** Forget a pending connect (the sheet was closed, or the user came back without approving). */
+  const cancelConnect = useCallback(() => { attempt.current++; setConnecting(null); }, []);
 
   const disconnect = useCallback(async () => {
     const w = connected?.wallet.wallet as SolanaWallet | undefined;
@@ -159,8 +178,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ wallets, connected, connecting, restoring: restoring && !connected, connect, disconnect, signTransaction, signMessage }),
-    [wallets, connected, connecting, restoring, connect, disconnect, signTransaction, signMessage],
+    () => ({ wallets, connected, connecting, restoring: restoring && !connected, connect, cancelConnect, disconnect, signTransaction, signMessage }),
+    [wallets, connected, connecting, restoring, connect, cancelConnect, disconnect, signTransaction, signMessage],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

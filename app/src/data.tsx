@@ -33,6 +33,8 @@ interface ChainData {
   sol: bigint | null;
   error: string | null;
   refresh: () => Promise<void>;
+  /** After a confirmed transaction: read again (a few times, backing off) until the wallet's numbers change. */
+  settle: (before?: string) => Promise<boolean>;
   /** After a confirmed transaction: show the known result at once (absolute values from before the action), then re-read. */
   patch: (p: { line?: Partial<CreditLine>; usdc?: bigint }) => void;
   session: Session;
@@ -82,12 +84,22 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     if (p) { setPool(p); setPoolLoaded(true); }
   }, []);
 
+  const fails = useRef(0);
+  const lastRead = useRef('');
   const refresh = useCallback(async () => {
     if (!USDC_MINT) return;
     try {
       const g = gen.current;
       const who = ownerRef.current;
-      const e = await fetchEverything(who);
+      // A phone drops requests in flight when the user switches to the wallet app and back ("Load failed"):
+      // try again, backing off, before calling Solana unreachable.
+      let e: Awaited<ReturnType<typeof fetchEverything>> | undefined;
+      for (const wait of [0, 600, 1500, 3000]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        try { e = await fetchEverything(who); break; } catch (err) { if (wait === 3000) throw err; }
+      }
+      if (!e) return;
+      lastRead.current = enc([e.line, e.usdc, e.shares, e.requests]);
       const [p, l, u, sj, ss, lamports, wrj, wrs] = [e.pool, e.line, e.usdc, e.shares.junior, e.shares.senior, e.sol, e.requests.junior, e.requests.senior];
       if (ownerRef.current !== who || gen.current !== g) return; // wallet changed, or an optimistic patch landed, while loading
       setPool(p);
@@ -97,14 +109,28 @@ export function ChainProvider({ children }: { children: ReactNode }) {
       setRequests({ junior: wrj, senior: wrs });
       setLoadedFor(who);
       setSol(lamports);
+      fails.current = 0;
       setError(null);
       setPoolLoaded(true); // only after a successful read: a failed RPC call must not look like "pool not created"
       save('notch.pool', p);
       if (who) save(snapKey(who), { line: l, usdc: u, shares: { junior: sj, senior: ss }, requests: { junior: wrj, senior: wrs }, sol: lamports } satisfies Snapshot);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // The banner only after two failed refreshes in a row (each already retried), and never for a hidden page.
+      if (document.visibilityState !== 'visible') return;
+      if (++fails.current >= 2) setError(e instanceof Error ? e.message : String(e));
+      console.warn('Solana read failed', fails.current, e);
     }
   }, []);
+
+  const settle = useCallback(async (before: string = lastRead.current) => {
+    for (const wait of [0, 800, 1500, 2500, 4000, 6000]) {
+      if (wait) await new Promise((r) => setTimeout(r, wait));
+      gen.current++; // an optimistic patch must not make this read look stale
+      await refresh();
+      if (lastRead.current && lastRead.current !== before) return true;
+    }
+    return false;
+  }, [refresh]);
 
   useEffect(() => {
     // a new wallet: show its last known numbers at once (or nothing), never the previous wallet's
@@ -112,6 +138,8 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     setLine(snap?.line ?? null); setUsdc(snap?.usdc ?? 0n); setShares(snap?.shares ?? { senior: 0n, junior: 0n });
     setRequests(snap?.requests ?? { senior: null, junior: null }); setSol(snap?.sol ?? null);
     setLoadedFor(snap ? owner : undefined);
+    // what settle() compares against after a reload (a Phantom deeplink return reloads the page)
+    lastRead.current = snap ? enc([snap.line, snap.usdc, snap.shares, snap.requests]) : '';
     setSignedState(owner ? liveSigned(load<EnclaveOk>(signedKey(owner))) : null);
     void refresh();
     // Poll only while the page is on screen; catch up at once when it comes back (e.g. from the wallet app).
@@ -133,10 +161,16 @@ export function ChainProvider({ children }: { children: ReactNode }) {
 
   const session = useMemo<Session>(() => ({ eml, setEml, signed, setSigned }), [eml, signed, setSigned]);
   const value = useMemo<ChainData>(
-    () => ({ addrs, configured: USDC_MINT !== null, pool, poolLoaded, line, usdc, shares, requests, loading: loadedFor !== owner, sol, error, refresh, patch, session }),
-    [addrs, pool, poolLoaded, line, usdc, shares, requests, loadedFor, owner, sol, error, refresh, patch, session],
+    () => ({ addrs, configured: USDC_MINT !== null, pool, poolLoaded, line, usdc, shares, requests, loading: loadedFor !== owner, sol, error, refresh, settle, patch, session }),
+    [addrs, pool, poolLoaded, line, usdc, shares, requests, loadedFor, owner, sol, error, refresh, settle, patch, session],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+/** The wallet's numbers as last saved on this device (before a deeplink trip reloaded the page): settle()'s baseline. */
+export function savedPrint(owner: string | null): string {
+  const snap = owner ? load<Snapshot>(snapKey(owner)) : null;
+  return snap ? enc([snap.line, snap.usdc, snap.shares, snap.requests]) : '';
 }
 
 export function useChain(): ChainData {

@@ -1,5 +1,5 @@
 import { Component, Suspense, createContext, lazy, startTransition, useCallback, useContext, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
-import { ChainProvider, useChain } from './data';
+import { ChainProvider, savedPrint, useChain } from './data';
 import { useWallet } from './wallet';
 import { getAttestation, type Attestation } from './enclave';
 import { ENCLAVE_URL, POLLAR_ON, PROGRAM_ID, explorerAddress, explorerTx } from './config';
@@ -10,7 +10,7 @@ import { Btn, GoogleMark, Icon, Sheet, cx } from './ui';
 import { googleLogin, pollarLogout, watchPollar, type PollarState } from './pollar';
 import { submitSigned } from './chain';
 import { explainError } from './errors';
-import { PHANTOM_LINK_NAME, takeError, takeSignedTransaction } from './phantom-link';
+import { PHANTOM_LINK_NAME, linkedAddress, takeError, takeSignedTransaction } from './phantom-link';
 import { WC_NAME } from './walletconnect';
 import { browseLinks, isPhone } from './device';
 import { FaucetButton } from './Faucet';
@@ -190,7 +190,7 @@ const returnError = () => (phantomErr === undefined ? (phantomErr = takeError())
 
 /** Back from the Phantom app with a signed transaction: send it, and say what happened. */
 function PhantomReturn() {
-  const { refresh } = useChain();
+  const { settle } = useChain();
   const [state, setState] = useState<{ tone: 'info' | 'good' | 'bad'; text: string; sig?: string } | null>(() => {
     const e = returnError();
     return e ? { tone: 'bad', text: e } : null;
@@ -198,11 +198,16 @@ function PhantomReturn() {
   useEffect(() => {
     const t = takeSignedTransaction();
     if (!t) return;
+    const before = savedPrint(linkedAddress());
     setState({ tone: 'info', text: 'Phantom signed it. Sending to Solana…' });
     submitSigned(t.signed, t.lastValidBlockHeight)
-      .then(({ signature }) => { setState({ tone: 'good', text: 'Done: your transaction is on Solana.', sig: signature }); void refresh(); })
+      .then(({ signature }) => {
+        setState({ tone: 'info', text: 'Done: your transaction is on Solana. Updating your numbers…', sig: signature });
+        // re-read until the chain shows it (the RPC node can lag a moment behind the confirmation)
+        void settle(before).then(() => setState({ tone: 'good', text: 'Done: your transaction is on Solana.', sig: signature }));
+      })
       .catch((e) => setState({ tone: 'bad', text: explainError(e).message }));
-  }, [refresh]);
+  }, [settle]);
   if (!state) return null;
   return (
     <div className={cx('action-status return-banner', state.tone === 'good' && 'good', state.tone === 'bad' && 'bad')} role={state.tone === 'bad' ? 'alert' : 'status'}>
@@ -264,7 +269,9 @@ function Banner({ tone, title, children, action }: { tone: 'warn' | 'bad' | 'inf
 }
 
 function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; pollar: PollarState | null; setPollar: (s: PollarState) => void }) {
-  const { wallets, connect, connecting } = useWallet();
+  const { wallets, connect, connecting, cancelConnect } = useWallet();
+  // Closing the sheet drops a pending connect, so no spinner is left for next time.
+  useEffect(() => () => cancelConnect(), [cancelConnect]);
   const [err, setErr] = useState<string | null>(null);
   const [gBusy, setGBusy] = useState(false);
   const onGoogle = async () => {
@@ -288,11 +295,11 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
         {wallets.map((w) => {
           const [title, sub] = walletLabel(w.name);
           return (
-            <button key={w.name} type="button" role="menuitem" className="opt tap" disabled={connecting}
+            <button key={w.name} type="button" role="menuitem" className="opt tap" aria-busy={connecting === w.name || undefined}
               onClick={() => { setErr(null); connect(w).then(onClose).catch((e) => setErr(e instanceof Error ? e.message : String(e))); }}>
               <span className="badge"><img src={w.icon} alt="" width={28} height={28} /></span>
               <span className="t"><b>{title}</b><small>{sub}</small></span>
-              {connecting ? <span className="spinner chev" aria-hidden="true" /> : <span className="chev"><Icon name="chev" /></span>}
+              {connecting === w.name ? <span className="spinner chev" aria-hidden="true" /> : <span className="chev"><Icon name="chev" /></span>}
             </button>
           );
         })}

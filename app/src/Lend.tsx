@@ -23,7 +23,7 @@ import {
   type WithdrawRequest,
 } from './notch';
 import { formatDateTime, formatUsdc, parseUsdc, toInput } from './amount';
-import { ActionStatus, Btn, DoneView, Field, Icon, Money, Sheet, Skel, cx, useAction, type ActionState } from './ui';
+import { ActionStatus, Btn, DoneView, Field, Icon, Money, Sheet, Skel, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Avatar } from './Home';
 import { NeedsTestMoney, useSticky } from './Faucet';
@@ -75,15 +75,18 @@ export function claimValue(p: PoolView, t: Tranche, r: WithdrawRequest): bigint 
 
 export function Lend() {
   const { connected } = useWallet();
-  const { pool, shares, requests, loading, poolLoaded, usdc } = useChain();
+  const { pool, shares, requests, loading, poolLoaded, usdc, refresh } = useChain();
   const { openSignIn } = useUi();
   const owner = connected?.address ?? null;
   const now = useNowSeconds();
   const [sel, setSel] = useState<Tranche>('senior');
   const [sheet, setSheet] = useState<'deposit' | 'withdraw' | null>(null);
   const [loss, setLoss] = useState(false);
-  // A claim or cancel closes the request, and its card with it: the result is shown here instead.
-  const [closed, setClosed] = useState<{ t: Tranche; a: ActionState } | null>(null);
+  // Claim and cancel live here, not in the card: they close the request and the card with it (possibly before the
+  // transaction call returns, when a background read sees it first), and their result must still show.
+  const claimAct = useAction(async () => { await refresh(); });
+  const cancelAct = useAction(async () => { await refresh(); });
+  const [actOn, setActOn] = useState<Tranche | null>(null);
 
   const value = (t: Tranche) => {
     if (!pool) return 0n;
@@ -132,8 +135,8 @@ export function Lend() {
         <Btn onClick={() => (owner ? setSheet('deposit') : openSignIn())}><Icon name="plus" />Add to {NAME[sel]}</Btn>
         <Btn variant="secondary" onClick={() => (owner ? setSheet('withdraw') : openSignIn())}>Withdraw</Btn>
       </div>
-      {owner && (['senior', 'junior'] as Tranche[]).map((t) => requests[t] && pool && <Pending key={t} t={t} r={requests[t]!} pool={pool} now={now} onSuccess={(a) => setClosed({ t, a })} />)}
-      {closed && !requests[closed.t] && <div className="pad"><ActionStatus a={closed.a} /></div>}
+      {owner && (['senior', 'junior'] as Tranche[]).map((t) => requests[t] && pool && <Pending key={t} t={t} r={requests[t]!} pool={pool} now={now} claimAct={claimAct} cancelAct={cancelAct} onAct={() => setActOn(t)} />)}
+      {actOn && !requests[actOn] && <div className="pad"><ActionStatus a={claimAct} /><ActionStatus a={cancelAct} /></div>}
 
       <section className="card pcard" aria-labelledby="loss-h">
         <h3 id="loss-h">What if someone doesn’t pay?</h3>
@@ -273,36 +276,33 @@ function WithdrawSheet({ t, onClose }: { t: Tranche; onClose: () => void }) {
   );
 }
 
-function Pending({ t, r, pool, now, onSuccess }: { t: Tranche; r: WithdrawRequest; pool: PoolView; now: number; onSuccess: (a: ActionState) => void }) {
+type Act = ReturnType<typeof useAction>;
+function Pending({ t, r, pool, now, claimAct, cancelAct, onAct }: { t: Tranche; r: WithdrawRequest; pool: PoolView; now: number; claimAct: Act; cancelAct: Act; onAct: () => void }) {
   const { connected, signTransaction } = useWallet();
-  const { addrs, refresh } = useChain();
+  const { addrs } = useChain();
   const owner = connected!.address;
-  const claimAct = useAction(async () => { await refresh(); });
-  const cancelAct = useAction(async () => { await refresh(); });
-  useEffect(() => { if (claimAct.signature) onSuccess(claimAct); }, [claimAct.signature]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (cancelAct.signature) onSuccess(cancelAct); }, [cancelAct.signature]); // eslint-disable-line react-hooks/exhaustive-deps
   const unlock = Number(r.unlockTs), closes = unlock + Number(CLAIM_WINDOW_SECONDS);
   const phase = now < unlock ? 'waiting' : now <= closes ? 'open' : 'lapsed';
   const pay = claimValue(pool, t, r);
   const idle = pool.stats.idle;
   const partial = phase === 'open' && pay > idle;
 
-  const onClaim = () =>
+  const onClaim = () => (onAct(), cancelAct.reset(),
     claimAct.run(async () => {
       if (!addrs) throw new Error('Still reading the pool.');
       const usdcAta = await deriveAta(owner, addrs.mint);
       const [escrow, request] = await Promise.all([deriveEscrow(addrs.program, owner, t), deriveWithdrawRequest(addrs.program, owner, t)]);
       const { signature } = await sendTransaction(owner, [createAtaIdempotentIx(owner, usdcAta, owner, addrs.mint), claimWithdrawIx(addrs, owner, escrow, request, usdcAta, t)], signTransaction);
       return { signature, note: partial ? `Claimed about ${formatUsdc(idle)} USDC. The rest stays waiting at the same price.` : `Claimed about ${formatUsdc(pay)} USDC.` };
-    });
-  const onCancel = () =>
+    }));
+  const onCancel = () => (onAct(), claimAct.reset(),
     cancelAct.run(async () => {
       if (!addrs) throw new Error('Still reading the pool.');
       const shareAta = await deriveAta(owner, trancheMint(addrs, t));
       const [escrow, request] = await Promise.all([deriveEscrow(addrs.program, owner, t), deriveWithdrawRequest(addrs.program, owner, t)]);
       const { signature } = await sendTransaction(owner, [createAtaIdempotentIx(owner, shareAta, owner, trancheMint(addrs, t)), cancelWithdrawIx(addrs, owner, shareAta, escrow, request, t)], signTransaction);
       return { signature, note: 'Cancelled. Your shares are back in your wallet.' };
-    });
+    }));
 
   return (
     <section className="pending pcard" aria-label={`${NAME[t]} withdrawal`} data-testid={`pending-${t}`}>
