@@ -16,6 +16,7 @@ import { ActionStatus, Btn, Icon, Notice, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Ticket } from './Ticket';
 import { Restoring } from './Home';
+import { copyText, longDay, numericDay, statementRange } from './statement-dates';
 
 const SAMPLES = [
   { file: '/samples/deel.eml', label: 'Deel payout' },
@@ -145,6 +146,8 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
   const [pollErr, setPollErr] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedDate, setCopiedDate] = useState(false);
+  const range = useMemo(() => statementRange(), []);
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoErr, setDemoErr] = useState<string | null>(null);
 
@@ -273,12 +276,12 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
       </div>
       <div className="env pcard">
         <div className="row1">
-          <div style={{ minWidth: 0 }}><div className="to">To</div><code data-testid="inbox-address" translate="no">{inbox.address.split('@')[0]}@<wbr />{inbox.address.split('@').slice(1).join('@')}</code></div>
+          <div style={{ minWidth: 0 }}><div className="to">To</div><code data-testid="inbox-address" translate="no">{breakable(inbox.address)}</code></div>
           <div className="slot" aria-hidden="true"><Icon name="lock" /></div>
         </div>
         <div className="foot2">
           <small>Works once. Expires {formatDate(Date.parse(inbox.expiresAt) / 1000)}.</small>
-          <Btn variant="secondary" small onClick={() => { void navigator.clipboard?.writeText(inbox.address).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); }, () => {}); }}>
+          <Btn variant="secondary" small onClick={() => { void copyText(inbox.address).then((ok) => { if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1600); } }); }}>
             <Icon name={copied ? 'check' : 'copy'} />{copied ? 'Copied' : 'Copy'}
           </Btn>
         </div>
@@ -287,9 +290,19 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
         <div className="pad"><Notice tone="info" title="Demo address">Real mail can’t reach this address yet (no mail domain is set up). Use “Send a sample statement” below to try the whole path.</Notice></div>
       )}
       <ol className="steps3">
-        <li><span className="n">1</span><span>In <b>your money app</b>, open Statements</span></li>
-        <li><span className="n">2</span><span>Pick <b>the last 3 months</b></span></li>
-        <li><span className="n">3</span><span>Paste the address and <b>send</b></span></li>
+        <li><span className="n">1</span><span>In <b>your money app</b>, open <b>Statements</b> and ask for a statement.<small className="eg">On MTN MoMo, for example: dial <b translate="no">*170#</b> → My Wallet → Statements → Statement Request.</small></span></li>
+        <li><span className="n">2</span><span>
+          <span className="dates">
+            <span>Start date: <b data-testid="start-date">{longDay(range.start)}</b>{' '}
+              <button type="button" className="chip tap" data-testid="copy-start" onClick={() => { void copyText(numericDay(range.start)).then((ok) => { if (ok) { setCopiedDate(true); setTimeout(() => setCopiedDate(false), 1600); } }); }}>
+                <Icon name={copiedDate ? 'check' : 'copy'} />{copiedDate ? 'Copied' : numericDay(range.start)}
+              </button>
+            </span>
+            <span>End date: <b data-testid="end-date">today, {longDay(range.end)}</b></span>
+          </span>
+          <small className="eg">That’s the last 3 months, counted from today.</small>
+        </span></li>
+        <li><span className="n">3</span><span>Paste the address above and <b>send</b>.</span></li>
       </ol>
       <ul className="log pcard" aria-live="polite" aria-label="Statement status">
         {steps.map((s, i) => {
@@ -427,4 +440,14 @@ function Landed({ signed, onDone, postAct }: { signed: EnclaveOk; onDone: () => 
       </div>
     </section>
   );
+}
+
+/** A long inbox address (notch-inbox+code@agentmail.to) may break after "+" and "@", never mid-word on a narrow phone. */
+function breakable(address: string) {
+  // no regex lookbehind: older iPhone Safari cannot even parse it
+  const parts: string[] = [];
+  let cur = '';
+  for (const ch of address) { cur += ch; if (ch === '+' || ch === '@' || ch === '.') { parts.push(cur); cur = ''; } }
+  if (cur) parts.push(cur);
+  return parts.map((part, i) => <span key={i}>{i > 0 && <wbr />}{part}</span>);
 }

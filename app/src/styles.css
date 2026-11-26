@@ -540,3 +540,11 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .tab-note.stale p{color:#5a3a04}
 .tab-note .row{display:flex;gap:8px}
 .tab-note .x{flex:none;width:28px;height:28px;border-radius:50%;display:grid;place-items:center}
+/* inbox steps: real dates to type, and the provider example */
+.steps3 li{align-items:flex-start}
+.steps3 .n{margin-top:2px}
+.steps3 .eg{display:block;margin-top:4px;font-size:14px;color:var(--soft)}
+.steps3 .dates{display:flex;flex-direction:column;gap:6px}
+.steps3 .chip{display:inline-flex;align-items:center;gap:4px;margin-left:4px;padding:2px 10px;border-radius:999px;background:var(--well);border:1px solid var(--line);font:inherit;font-size:13px;font-variant-numeric:tabular-nums;color:var(--ink);vertical-align:1px}
+.steps3 .chip svg{width:14px;height:14px}
+.env code{overflow-wrap:break-word;word-break:normal}

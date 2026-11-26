@@ -75,6 +75,22 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   expect(w.messageCount, 'the wallet signed the inbox request').toBe(msgs0 + 1);
   await expect(page.getByRole('heading', { name: 'Waiting for your statement' })).toBeVisible();
   await expect(page.getByLabel('Statement status')).toContainText('Waiting for the email');
+  // the statement dates, spelled out (today minus 90 days, in the phone's format), and the *170# path as an example
+  const want = await page.evaluate(() => {
+    const t = new Date(); const s = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 90);
+    const o = { day: 'numeric', month: 'short', year: 'numeric' } as const;
+    return { start: s.toLocaleDateString(undefined, o), num: s.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric' }), end: t.toLocaleDateString(undefined, o) };
+  });
+  await expect(page.getByTestId('start-date')).toHaveText(want.start);
+  await expect(page.getByTestId('end-date')).toHaveText(`today, ${want.end}`);
+  await expect(page.locator('.steps3')).toContainText('*170# → My Wallet → Statements → Statement Request');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.getByTestId('copy-start').click();
+  await expect(page.getByTestId('copy-start')).toHaveText('Copied');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(want.num);
+  await page.getByRole('button', { name: 'Copy', exact: true }).click();
+  const addrText = await addr.innerText();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(addrText);
   await shot('inbox');
   if (o.shots) await noOverflow();
 
