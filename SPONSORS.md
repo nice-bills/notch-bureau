@@ -51,4 +51,4 @@ For a trader, cash deposits ARE income. As built, Notch would turn down the typi
 
 ## Pollar setup (Nov 24)
 - Test app `notch-bureau` (id cmwurt405002g0hskgkyy67fl), created through Pollar's MCP gateway with the user's token. It has a publishable key, 1000 free test credits, allowed origin localhost:5173 and redirect URI /auth/callback. Keys are in `.env.pollar` (git-ignored).
-- Still needed: Solana must be enabled under Wallets > Settings > Enabled chains. The gateway has no tool for that, so it is done in the dashboard.
+- Solana enabled in the dashboard by the user (Nov 26). Google login is being wired live.
