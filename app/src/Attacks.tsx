@@ -9,6 +9,8 @@ import { explainError, TxError } from './errors';
 import { address, getAddressEncoder } from '@solana/kit';
 import { decodeRecord, deriveDedupe, deriveIdentity, hasIdentity, deriveLine, encodeRecord, postLimitIxs, USDC, bytesToBase64, bytesToHex } from './notch';
 import { Btn, Notice } from './ui';
+import { Banners, useUi } from './App';
+import { Nav } from './GetLimit';
 import { formatUsdc } from './amount';
 
 interface Step {
@@ -25,7 +27,7 @@ const DEMO_WALLET = '11111111111111111111111111111112';
 async function loadSampleEmail(): Promise<{ name: string; bytes: Uint8Array }> {
   const r = await fetch(`${ENCLAVE_URL}/samples/momo.eml`);
   const t = await r.text();
-  if (!r.ok || !/DKIM-Signature/i.test(t)) throw new Error('No email to attack yet. Choose one on the Borrow screen, or run "pnpm demo:enclave" to create sample emails.');
+  if (!r.ok || !/DKIM-Signature/i.test(t)) throw new Error('No sample email to attack. Start the demo underwriter with "pnpm demo:enclave".');
   return { name: 'momo.eml', bytes: new TextEncoder().encode(t) };
 }
 
@@ -72,6 +74,7 @@ export function Attacks() {
   const { connected, signMessage } = useWallet();
   const { addrs, session } = useChain();
   const owner = connected?.address ?? null;
+  const { go } = useUi();
   const [out, setOut] = useState<Record<string, Step[] | { error: string } | 'running'>>({});
   const set = (k: string, v: Step[] | { error: string } | 'running') => setOut((o) => ({ ...o, [k]: v }));
 
@@ -156,9 +159,11 @@ export function Attacks() {
 
   return (
     <div className="attacks">
-      <div className="lede">
-        <h2>Try to cheat it</h2>
-        <p>Three ways to fake a credit limit. Each one runs for real against the sealed computer or the Solana program, and shows the answer unedited.</p>
+      <Nav title="Try to cheat it" onBack={() => go('pool')} />
+      <Banners />
+      <div className="h">
+        <h1>Try to cheat it</h1>
+        <p>Three ways to fake a credit limit. Each runs for real against the sealed computer or the Solana program, and shows the answer unedited.</p>
       </div>
 
       <AttackCard n="A" title="Edit the email" what="Make the payment look 10x bigger inside a real, signed email." run={attackEdited} state={out.a} cta="Edit and send" />
@@ -171,16 +176,16 @@ export function Attacks() {
 function AttackCard({ n, title, what, run, state, cta, needsWallet }: { n: string; title: string; what: string; run: () => Promise<void>; state: Step[] | { error: string } | 'running' | undefined; cta: string; needsWallet?: boolean }) {
   const running = state === 'running';
   return (
-    <section className="attack">
+    <section className="attack pcard">
       <header>
         <span className="attack-n" aria-hidden="true">{n}</span>
         <div>
           <h3>{title}</h3>
           <p>{what}</p>
         </div>
-        <Btn variant="secondary" onClick={() => void run()} busy={running} disabled={needsWallet}>{cta}</Btn>
       </header>
-      {needsWallet && <p className="step-help">Connect a wallet to run this one. It is a dry run: nothing is sent.</p>}
+      <Btn variant="secondary" onClick={() => void run()} busy={running} disabled={needsWallet}>{cta}</Btn>
+      {needsWallet && <p className="help">Connect a wallet to run this one. It is a dry run: nothing is sent.</p>}
       {state && state !== 'running' && ('error' in state ? <Notice tone="warn">{state.error}</Notice> : (
         <ol className="attack-steps">
           {state.map((s, i) => (

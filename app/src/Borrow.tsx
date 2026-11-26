@@ -1,319 +1,194 @@
-import { ENCLAVE_URL } from './config';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { sendTransaction } from './chain';
 import { useChain } from './data';
 import { useWallet } from './wallet';
-import { underwrite, getAttestation, recordBytes, signatureBytes } from './enclave';
-import {
-  createAtaIdempotentIx,
-  depositBorrowerIx,
-  depositNeededFor,
-  deriveAta,
-  deriveDedupe,
-  deriveIdentity,
-  hasIdentity,
-  deriveLine,
-  drawIx,
-  feeFor,
-  payoffFor,
-  postLimitIxs,
-  repayIx,
-  withdrawBorrowerIx,
-  decodeRecord,
-} from './notch';
-import { address, getAddressEncoder } from '@solana/kit';
-import { formatDate, formatDateTime, formatUsdc, parseUsdc, toInput, daysLeft } from './amount';
-import { ActionStatus, Btn, Field, Notice, Step, Stat, useAction } from './ui';
-import { Ticket } from './Ticket';
-import { ConnectPrompt } from './ConnectPrompt';
+import { LOAN_TERM_SECONDS, depositBorrowerIx, depositNeededFor, deriveLine, drawIx, feeFor, payoffFor } from './notch';
+import { formatDate, formatUsdc, parseUsdc, toInput } from './amount';
+import { stamp } from './art';
+import { buzz } from './glass';
+import { ActionStatus, Btn, Icon, Sheet, cx, useAction } from './ui';
+import { Banners, useUi } from './App';
+import { Nav } from './GetLimit';
+import { lineState, withAta } from './Home';
 
-const SAMPLES = [
-  { file: '/samples/momo.eml', label: 'MTN MoMo payment' },
-  { file: '/samples/deel.eml', label: 'Deel payout' },
-  { file: '/samples/bank.eml', label: 'Bank statement' },
-];
+const UNITS = [1n, 2n, 5n, 10n, 20n, 50n, 100n, 200n, 500n, 1000n, 5000n].map((u) => u * 1_000_000n);
+const MOTIFS = ['kente', 'sun', 'horn'] as const;
 
 export function Borrow() {
-  const { connected, signTransaction, signMessage } = useWallet();
-  const { addrs, line, pool, usdc, refresh, session, configured } = useChain();
+  const { connected, signTransaction } = useWallet();
+  const { line, pool, usdc, addrs, refresh, loading } = useChain();
+  const { go } = useUi();
   const owner = connected?.address ?? null;
-  const [uwKey, setUwKey] = useState<string | null>(null);
-  const [drawStr, setDrawStr] = useState('');
-  const [depStr, setDepStr] = useState('');
-  const [uwBusy, setUwBusy] = useState(false);
-  const [uwError, setUwError] = useState<string | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const { eml, signed } = session;
-
-  useEffect(() => {
-    getAttestation().then((a) => setUwKey(a.underwriter)).catch(() => setUwKey(null));
-  }, []);
-
-  const now = Date.now() / 1000;
-  const live = line && line.limit > 0n && line.expiry > BigInt(Math.floor(now)) && !line.defaulted;
-  const limit = live ? line.limit : 0n;
-  const drawn = line?.drawn ?? 0n;
-  const headroom = limit > drawn ? limit - drawn : 0n;
+  const s = lineState(line);
   const idle = pool?.stats.idle ?? 0n;
+  const cap = s.headroom < idle ? s.headroom : idle;
+  const [amtStr, setAmtStr] = useState('');
+  const [done, setDone] = useState<{ draw: bigint; payoff: bigint; due: bigint } | null>(null);
 
-  // Default the amount to what is available to borrow, once.
   const seeded = useRef(false);
   useEffect(() => {
-    if (seeded.current || !live) return;
+    if (seeded.current || !s.live || !pool) return;
     seeded.current = true;
-    const start = headroom < idle ? headroom : idle;
-    setDrawStr(toInput(start > 0n ? start : headroom));
-  }, [live, headroom, idle]);
+    const start = cap > 20_000_000n ? 20_000_000n : cap;
+    setAmtStr(toInput(start));
+  }, [s.live, pool, cap]);
 
-  const draw = parseUsdc(drawStr);
-  const totalAfter = drawn + (draw ?? 0n);
+  const draw = parseUsdc(amtStr);
+  const totalAfter = s.drawn + (draw ?? 0n);
   const needed = draw ? depositNeededFor(totalAfter) : 0n;
-  const have = line?.deposit ?? 0n;
+  const have = s.deposit;
   const toAdd = needed > have ? needed - have : 0n;
-  useEffect(() => {
-    setDepStr(toInput(toAdd));
-  }, [toAdd]);
-  const depAmt = parseUsdc(depStr);
+  const fee = feeFor(totalAfter);
+  const payoff = payoffFor(totalAfter);
+  const dueIfNow = BigInt(Math.floor(Date.now() / 1000)) + LOAN_TERM_SECONDS;
+  const amtErr = amtStr && draw === null ? 'Enter a number like 25 or 12.5' : draw && draw > s.headroom ? `Your limit leaves ${formatUsdc(s.headroom)} USDC.` : draw && draw > idle ? `The pool only has ${formatUsdc(idle)} USDC free right now.` : null;
+  const okAmount = !!draw && draw > 0n && !amtErr;
 
-  const posted = !!(signed && line && line.lastNonce >= BigInt(signed.nonce));
-  const payoff = payoffFor(drawn);
-  const fee = feeFor(drawn);
-  const pastDue = !!line && line.drawn > 0n && line.due > 0n && BigInt(Math.floor(now)) > line.due;
+  const unit = useMemo(() => UNITS.find((u) => (s.limit + u - 1n) / u <= 12n) ?? UNITS[UNITS.length - 1], [s.limit]);
+  const count = Number((s.limit + unit - 1n) / unit);
+  const usedN = Number((s.drawn + unit - 1n) / unit);
+  const pickN = draw ? Number((draw + unit - 1n) / unit) : 0;
+  const stampSvgs = useMemo(() => MOTIFS.map((m) => stamp(88, 104, { ink: 'verm', motif: m, num: formatUsdc(unit).replace(/\.00$/, ''), cap: 'USDC', numSize: 34, top: 'NOTCH' })), [unit]);
 
-  const after = async () => {
-    await refresh();
-  };
-  const postAct = useAction(after);
-  const depAct = useAction(after);
-  const drawAct = useAction(after);
-  const repayAct = useAction(after);
-  const wdAct = useAction(after);
-
-  const loadEml = async (name: string, bytes: Uint8Array) => {
-    session.setEml({ name, bytes });
-    session.setSigned(null);
-    setUwError(null);
-  };
-  const onFile = async (f: File | undefined) => {
-    if (!f) return;
-    await loadEml(f.name, new Uint8Array(await f.arrayBuffer()));
-  };
-  const loadSample = async (file: string, label: string) => {
-    try {
-      const r = await fetch(`${ENCLAVE_URL}${file}`);
-      const text = await r.text();
-      if (!r.ok || !/DKIM-Signature/i.test(text)) throw new Error('missing');
-      await loadEml(file.split('/').pop()!, new TextEncoder().encode(text));
-    } catch {
-      setUwError(`The ${label} sample is not there yet. Run "pnpm demo:enclave" in the app folder to create the sample emails.`);
-    }
-  };
-
-  const sendToSealed = async () => {
-    if (!owner || !eml) return;
-    setUwBusy(true);
-    setUwError(null);
-    try {
-      const res = await underwrite(eml.bytes, owner, signMessage);
-      if (!res.ok) {
-        setUwError(res.friendly);
-        session.setSigned(null);
-      } else {
-        session.setSigned(res);
-      }
-    } catch (e) {
-      setUwError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setUwBusy(false);
-    }
-  };
-
-  const onPost = () =>
-    postAct.run(async () => {
-      if (!owner || !addrs || !signed || !uwKey) throw new Error('Missing wallet, limit or underwriter key.');
-      const record = recordBytes(signed);
-      const { dedupe: dedupeHash, idHash } = decodeRecord(record);
-      const dedupe = await deriveDedupe(addrs.program, dedupeHash);
-      const identity = hasIdentity(idHash) ? await deriveIdentity(addrs.program, idHash) : undefined;
-      const lineAddr = await deriveLine(addrs.program, owner);
-      const ixs = postLimitIxs(addrs, { payer: owner, borrower: owner, line: lineAddr, dedupe, record, identity }, addressBytes(uwKey), signatureBytes(signed));
-      const { signature } = await sendTransaction(owner, ixs, signTransaction);
-      return { signature, note: 'Your limit is now on Solana.' };
-    });
-
-  const withAta = async (owner_: ReturnType<typeof address>) => {
-    const ata = await deriveAta(owner_, addrs!.mint);
-    return { ata, ensure: createAtaIdempotentIx(owner_, ata, owner_, addrs!.mint) };
-  };
+  const depAct = useAction(refresh);
+  const drawAct = useAction(refresh);
 
   const onDeposit = () =>
     depAct.run(async () => {
-      if (!owner || !addrs || !line || !depAmt) throw new Error('Enter a deposit amount.');
-      const { ata, ensure } = await withAta(owner);
+      if (!owner || !addrs) throw new Error('Connect a wallet first.');
+      if (!toAdd) throw new Error('No deposit is needed for this amount.');
+      const { ata, ensure } = await withAta(addrs, owner);
       const lineAddr = await deriveLine(addrs.program, owner);
-      const { signature } = await sendTransaction(owner, [ensure, depositBorrowerIx(addrs, owner, lineAddr, ata, depAmt)], signTransaction);
-      return { signature, note: `Deposit added: ${formatUsdc(depAmt)} USDC.` };
+      const { signature } = await sendTransaction(owner, [ensure, depositBorrowerIx(addrs, owner, lineAddr, ata, toAdd)], signTransaction);
+      return { signature, note: `Deposit added: ${formatUsdc(toAdd)} USDC.` };
     });
 
   const onDraw = () =>
     drawAct.run(async () => {
       if (!owner || !addrs || !draw) throw new Error('Enter how much to borrow.');
-      const { ata, ensure } = await withAta(owner);
+      const { ata, ensure } = await withAta(addrs, owner);
       const lineAddr = await deriveLine(addrs.program, owner);
       const { signature } = await sendTransaction(owner, [ensure, drawIx(addrs, owner, lineAddr, ata, draw)], signTransaction);
+      setDone({ draw, payoff, due: dueIfNow });
       return { signature, note: `${formatUsdc(draw)} USDC sent to your wallet.` };
     });
 
-  const onRepay = () =>
-    repayAct.run(async () => {
-      if (!owner || !addrs) throw new Error('Connect a wallet first.');
-      const { ata, ensure } = await withAta(owner);
-      const lineAddr = await deriveLine(addrs.program, owner);
-      const back = line?.deposit ?? 0n;
-      const { signature } = await sendTransaction(owner, [ensure, repayIx(addrs, owner, lineAddr, ata, payoff)], signTransaction);
-      return { signature, note: `Repaid ${formatUsdc(payoff)} USDC. Your ${formatUsdc(back)} USDC deposit came back to you.` };
-    });
+  const head = <><Nav title="Borrow" onBack={() => go('home')} /><Banners /></>;
+  if (!owner) return <>{head}<Empty icon="wallet" title="Connect a wallet first" text="Borrowing uses your wallet’s limit." /></>;
+  if (loading) return <>{head}<div className="bamt"><label>Reading your line…</label><div className="v"><span className="skel" style={{ fontSize: 64 }}>00.00</span></div></div></>;
+  if (!s.live) return <>{head}<Empty icon="mail" title={line?.defaulted ? 'This line is closed' : 'No limit yet'} text={line?.defaulted ? 'A payment was missed, so this wallet can’t borrow again.' : 'Get your limit first: it takes one statement.'} action={line?.defaulted ? undefined : { label: 'Get my limit', on: () => go('limit') }} /></>;
+  if (s.pastDue) return <>{head}<Empty icon="clock" title="Your loan is overdue" text="Pay it back first. Then you can borrow again." action={{ label: 'Go to pay back', on: () => go('home') }} /></>;
 
-  const onWithdraw = () =>
-    wdAct.run(async () => {
-      if (!owner || !addrs) throw new Error('Connect a wallet first.');
-      const { ata, ensure } = await withAta(owner);
-      const lineAddr = await deriveLine(addrs.program, owner);
-      const { signature } = await sendTransaction(owner, [ensure, withdrawBorrowerIx(addrs, owner, lineAddr, ata)], signTransaction);
-      return { signature, note: 'Deposit returned to your wallet.' };
-    });
-
-  const stage = useMemo(() => {
-    if (!owner) return 1;
-    if (!live && !signed) return 2;
-    if (!live || (signed && !posted && !live)) return 3;
-    if (drawn > 0n) return 6;
-    if (draw && have < needed) return 4;
-    return 5;
-  }, [owner, live, signed, posted, drawn, draw, have, needed]);
-  const st = (n: number, done: boolean): 'done' | 'active' | 'locked' => (done ? 'done' : stage === n ? 'active' : 'locked');
-
-  if (!configured) return <Notice tone="warn" title="This app is not pointed at a Notch deployment yet">Set <code>VITE_USDC_MINT</code> (see <code>.env.example</code>) and restart. <code>pnpm setup:devnet</code> prints the values.</Notice>;
-
+  const step = toAdd > 0n ? 1 : 2;
   return (
-    <div className="borrow">
-      <div className="borrow-main">
-        <div className="lede">
-          <h2>Borrow against your income, without showing it</h2>
-          <p>Forward one payment email to a sealed computer. It checks the sender’s digital signature, works out a limit, and hands back only the limit. Nobody else ever sees the email.</p>
+    <div>
+      {head}
+      <div className="bamt">
+        <label htmlFor="amt">How much do you want to borrow? <span style={{ color: 'var(--faint)' }}>Up to {formatUsdc(cap)}</span></label>
+        <div className="v">
+          <input id="amt" inputMode="decimal" autoComplete="off" value={amtStr} onChange={(e) => setAmtStr(e.target.value)} aria-invalid={amtErr ? true : undefined} aria-describedby="amt-err" />
+          <span className="u">USDC</span>
         </div>
-
-        <Step n={1} title="Connect your wallet" state={owner ? 'done' : 'active'} summary={owner ? 'Connected' : undefined}>
-          <ConnectPrompt />
-        </Step>
-
-        <Step n={2} title="Send an income email to the sealed computer" state={st(2, !!signed || !!live)} summary={signed ? `Limit ${formatUsdc(decodeRecord(recordBytes(signed)).limitMicro, { max: 2 })} USDC` : undefined}>
-          <p className="step-help">Download the payment email as an <code>.eml</code> file (MTN MoMo, Deel, Wise, Payoneer, Superteam Earn, or a supported bank) and drop it here.</p>
-          <div className="file-row">
-            <input ref={fileInput} type="file" accept=".eml,message/rfc822" hidden onChange={(e) => void onFile(e.target.files?.[0])} />
-            <Btn variant="secondary" onClick={() => fileInput.current?.click()}>{eml ? 'Choose a different .eml' : 'Choose an .eml file'}</Btn>
-            {eml && <span className="file-name mono">{eml.name}</span>}
-          </div>
-          <div className="sample-row">
-            <span>No email handy? Try a demo sample:</span>
-            {SAMPLES.map((s) => (
-              <button key={s.file} type="button" className="chip" onClick={() => void loadSample(s.file, s.label)}>{s.label}</button>
-            ))}
-          </div>
-          <Btn onClick={() => void sendToSealed()} busy={uwBusy} disabled={!eml || !owner}>Send to the sealed computer</Btn>
-          {uwError && <Notice tone="bad" title="The sealed computer said no">{uwError}</Notice>}
-          {signed && owner && (
-            <>
-              <Ticket result={signed} wallet={owner} />
-              <details className="raw-reply">
-                <summary>Show the raw reply</summary>
-                <pre>{JSON.stringify(signed, null, 2)}</pre>
-              </details>
-            </>
-          )}
-        </Step>
-
-        <Step n={3} title="Put your limit on Solana" state={st(3, !!live && (!signed || posted))} summary={live ? `Valid until ${formatDate(line!.expiry)}` : undefined}>
-          <p className="step-help">One transaction posts the signed limit. The program checks the signature itself, so even we cannot make up a limit.</p>
-          <Btn onClick={onPost} busy={postAct.busy} disabled={!signed || posted || !uwKey}>Post my limit</Btn>
-          {!uwKey && signed && <Notice tone="warn">Could not read the underwriter’s public key from {`the sealed computer`}. Is it running?</Notice>}
-          <ActionStatus a={postAct} />
-        </Step>
-
-        <Step n={4} title="Choose an amount and put down 20%" state={st(4, !!live && !!draw && have >= needed && needed > 0n)} summary={live ? `Deposit held: ${formatUsdc(have)} USDC` : undefined}>
-          <p className="step-help">You hold a security deposit worth 20% of everything you owe. It stays yours: it comes back when you repay, and it only gets used if you miss the due date.</p>
-          <Field label="How much do you want to borrow?" suffix="USDC" value={drawStr} onChange={setDrawStr}
-            action={{ label: 'Max', onClick: () => setDrawStr(toInput(headroom < idle ? headroom : idle)) }}
-            error={draw === null && drawStr ? 'Enter a number like 25 or 12.5' : draw && draw > headroom ? `Your limit leaves ${formatUsdc(headroom)} USDC available.` : draw && draw > idle ? `The pool only has ${formatUsdc(idle)} USDC free right now.` : null}
-            hint={`Available to borrow: ${formatUsdc(headroom)} USDC`} />
-          <dl className="calc">
-            <div><dt>Total you will owe after this</dt><dd>{formatUsdc(totalAfter)}</dd></div>
-            <div><dt>Deposit needed (20%)</dt><dd>{formatUsdc(needed)}</dd></div>
-            <div><dt>Already deposited</dt><dd>{formatUsdc(have)}</dd></div>
-            <div className="calc-total"><dt>Add now</dt><dd>{formatUsdc(toAdd)}</dd></div>
-          </dl>
-          <Field label="Deposit to add" suffix="USDC" value={depStr} onChange={setDepStr} />
-          <Btn onClick={onDeposit} busy={depAct.busy} disabled={!live || !depAmt || depAmt <= 0n}>Add deposit</Btn>
-          {usdc < (depAmt ?? 0n) && depAmt ? <Notice tone="warn">Your wallet has {formatUsdc(usdc)} test USDC. You need a bit more to cover this deposit.</Notice> : null}
-          <ActionStatus a={depAct} />
-        </Step>
-
-        <Step n={5} title="Borrow" state={st(5, drawn > 0n)} summary={drawn > 0n ? `Borrowed ${formatUsdc(drawn)} USDC` : undefined}>
-          <p className="step-help">{draw ? `You will receive ${formatUsdc(draw)} USDC in your wallet.` : 'Pick an amount in the step above.'} The 2% fee is paid when you repay, not now.</p>
-          <Btn onClick={onDraw} busy={drawAct.busy} disabled={!live || !draw || draw <= 0n || have < needed}>Borrow {draw ? `${formatUsdc(draw)} USDC` : ''}</Btn>
-          {live && draw && have < needed ? <p className="step-help warn">Add {formatUsdc(toAdd)} USDC to your deposit first.</p> : null}
-          <ActionStatus a={drawAct} />
-        </Step>
-
-        <Step n={6} title="Repay" state={st(6, false)} summary={drawn > 0n && line ? `Due ${formatDate(line.due)}` : undefined}>
-          {drawn > 0n && line ? (
-            <>
-              <dl className="calc">
-                <div><dt>Borrowed</dt><dd>{formatUsdc(drawn)}</dd></div>
-                <div><dt>Fee (2%, rounded up)</dt><dd>{formatUsdc(fee)}</dd></div>
-                <div className="calc-total"><dt>Pay back in one go</dt><dd>{formatUsdc(payoff)}</dd></div>
-              </dl>
-              <p className={`step-help ${pastDue ? 'warn' : ''}`}>
-                {pastDue
-                  ? `This was due on ${formatDate(line.due)}. Pay now: once someone marks it as missed, your line closes for good.`
-                  : `Due ${formatDateTime(line.due)} (${daysLeft(line.due)} days left). Paying on time raises your next limit.`}
-              </p>
-              <Btn onClick={onRepay} busy={repayAct.busy} disabled={usdc < payoff}>Repay {formatUsdc(payoff)} USDC</Btn>
-              {usdc < payoff && <Notice tone="warn">Your wallet holds {formatUsdc(usdc)} USDC. The 20% deposit returns in the same step, but you need {formatUsdc(payoff - usdc)} USDC more up front to cover the repayment.</Notice>}
-            </>
-          ) : (
-            <p className="step-help">Nothing to repay. Once you borrow, the amount and due date show up here.</p>
-          )}
-          <ActionStatus a={repayAct} />
-        </Step>
-
-        <Step n={7} title="Take your deposit back" state={drawn === 0n && have > 0n ? 'active' : 'locked'}>
-          <p className="step-help">{drawn > 0n ? 'Available once you owe nothing. Repaying in full returns it automatically.' : have > 0n ? `${formatUsdc(have)} USDC is waiting for you.` : 'No deposit is being held.'}</p>
-          <Btn variant="secondary" onClick={onWithdraw} busy={wdAct.busy} disabled={drawn > 0n || have === 0n}>Withdraw {have > 0n ? `${formatUsdc(have)} USDC` : 'deposit'}</Btn>
-          <ActionStatus a={wdAct} />
-        </Step>
+        {amtErr ? <p className="field-err" id="amt-err" role="alert">{amtErr}</p> : <div className="back">Pay back <b>{formatUsdc(payoff)}</b> by {formatDate(dueIfNow)}</div>}
       </div>
 
-      <aside className={`borrow-side${owner ? '' : ' is-empty'}`} aria-label="Your credit line">
-        <div className="line-card">
-          <h3>Your credit line</h3>
-          {!owner ? <p className="muted">Connect a wallet to see your line.</p> : !line ? <p className="muted">No line yet. Send an income email to get one.</p> : (
-            <dl className="stats">
-              <Stat label="Limit" value={formatUsdc(line.limit, { max: 2 })} unit="USDC" hint={line.expiry > 0n ? `Expires ${formatDate(line.expiry)}` : undefined} />
-              <Stat label="Borrowed" value={formatUsdc(line.drawn, { max: 2 })} unit="USDC" hint={line.drawn > 0n ? `Due ${formatDate(line.due)}` : 'Nothing owed'} />
-              <Stat label="Your deposit" value={formatUsdc(line.deposit, { max: 2 })} unit="USDC" hint="Held, not spent" />
-              <Stat label="Repaid on time" value={line.repaidOnTime} hint={line.repaidLate ? `${line.repaidLate} late` : 'Each one raises your next limit'} />
-              {line.defaulted && <Stat label="Status" value="Closed" tone="bad" hint="Missed payment. This line cannot be used again." />}
-            </dl>
-          )}
-          {owner && <p className="side-balance">Wallet balance <strong>{formatUsdc(usdc, { max: 2 })}</strong> USDC</p>}
+      <div className="seg glass" role="group" aria-label="Quick amounts">
+        {[unit, unit * 2n, unit * 4n].filter((a) => a <= cap).map((a) => (
+          <button key={String(a)} type="button" className={cx('tap', draw === a && 'on')} onClick={() => { setAmtStr(toInput(a)); buzz(4); }}>{formatUsdc(a).replace(/\.00$/, '')}</button>
+        ))}
+        <button type="button" className={cx('tap', draw === cap && 'on')} onClick={() => { setAmtStr(toInput(cap)); buzz(4); }} disabled={cap === 0n}>All</button>
+      </div>
+
+      <div className="sheetwrap" aria-hidden="true">
+        <div className="selv"><span>Notch · {formatUsdc(unit).replace(/\.00$/, '')} USDC each</span><span>{Math.min(pickN, count - usedN)} of {count - usedN} left</span></div>
+        <div className="sgrid">
+          {Array.from({ length: count }, (_, i) => (
+            <button key={i} type="button" tabIndex={-1} className={cx(i < usedN && 'gone', i >= usedN && i < usedN + pickN && 'pick')} disabled={i < usedN}
+              onClick={() => { const a = BigInt(i - usedN + 1) * unit; setAmtStr(toInput(a < cap ? a : cap)); buzz(4); }}>
+              <svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: stampSvgs[i % 3] }} />
+            </button>
+          ))}
         </div>
-      </aside>
+        <div className="selvb">Tap a stamp to tear off up to it</div>
+      </div>
+
+      <div className="rcpt pcard" aria-label="What this costs">
+        <div className="r"><span>Deposit needed, 20%<small>Of all you owe. Comes back when you pay.</small></span><b data-testid="dep-needed">{formatUsdc(needed)}</b></div>
+        <div className="r"><span>Already held</span><b>{formatUsdc(have)}</b></div>
+        <div className="r total"><span>Add now</span><b data-testid="dep-add">{formatUsdc(toAdd)}</b></div>
+        <div className="r"><span>Fee, 2%<small>Paid when you pay back</small></span><b>{formatUsdc(fee)}</b></div>
+      </div>
+
+      <div className="stepper" aria-label="Steps">
+        <div className={step === 1 ? 'on' : 'ok'}><i>{step === 1 ? 1 : '✓'}</i>Put down 20%</div>
+        <div className={step === 2 ? 'on' : ''}><i>2</i>Borrow</div>
+      </div>
+
+      <div className="dock">
+        {step === 1 ? (
+          <>
+            <Btn onClick={onDeposit} busy={depAct.busy} disabled={!okAmount || usdc < toAdd}>Add {formatUsdc(toAdd)} USDC deposit</Btn>
+            {okAmount && usdc < toAdd && <p className="help warn" style={{ textAlign: 'center' }}>Your wallet has {formatUsdc(usdc)} test USDC. You need {formatUsdc(toAdd - usdc)} more.</p>}
+          </>
+        ) : (
+          <Slide label={okAmount ? `Slide to borrow ${formatUsdc(draw!)}` : 'Pick an amount'} aria={okAmount ? `Borrow ${formatUsdc(draw!)} USDC` : 'Borrow'} disabled={!okAmount || drawAct.busy} busy={drawAct.busy} onDone={onDraw} />
+        )}
+      </div>
+      <div className="pad"><ActionStatus a={depAct} /><ActionStatus a={drawAct} /></div>
+
+      {done && (
+        <Sheet title="Sent" onClose={() => { setDone(null); go('home'); }}>
+          <div style={{ textAlign: 'center', paddingTop: 8 }}>
+            <div className="done-amt">{formatUsdc(done.draw, { max: 2 })} USDC</div>
+            <p className="sh-p">is in your wallet. Pay back <b style={{ color: 'var(--ink)' }}>{formatUsdc(done.payoff, { max: 2 })}</b> by {formatDate(line?.due && line.due > 0n ? line.due : done.due)}.</p>
+          </div>
+          <Btn onClick={() => { setDone(null); go('home'); }}>Done</Btn>
+        </Sheet>
+      )}
     </div>
   );
 }
 
-const addressEncoder = getAddressEncoder();
-function addressBytes(a: string): Uint8Array {
-  return new Uint8Array(addressEncoder.encode(address(a)));
+function Empty({ icon, title, text, action }: { icon: 'wallet' | 'mail' | 'clock'; title: string; text: string; action?: { label: string; on: () => void } }) {
+  return (
+    <div className="card pcard empty">
+      <div className="ico"><Icon name={icon} /></div>
+      <b>{title}</b>
+      <p>{text}</p>
+      {action && <div style={{ marginTop: 16 }}><Btn onClick={action.on}>{action.label}</Btn></div>}
+    </div>
+  );
+}
+
+/** Slide to confirm. Drag the knob all the way, or press Enter/Space on it. */
+function Slide({ label, aria, disabled, busy, onDone }: { label: string; aria: string; disabled: boolean; busy: boolean; onDone: () => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const knob = useRef<HTMLButtonElement>(null);
+  const fill = useRef<HTMLDivElement>(null);
+  const st = useRef<{ x0: number; max: number; x: number } | null>(null);
+  const rubber = (x: number, d = 60, c = 0.55) => (x * d * c) / (d + c * Math.abs(x));
+  const put = (x: number, anim: boolean) => {
+    const k = knob.current, f = fill.current, b = box.current;
+    if (!k || !f || !b) return;
+    k.style.transition = anim ? 'transform .5s var(--spring)' : 'none';
+    f.style.transition = anim ? 'transform .45s var(--ease-out)' : 'none';
+    k.style.transform = x ? `translateX(${x}px)` : '';
+    f.style.transform = `scaleX(${x ? Math.max(0, (x + 60) / b.offsetWidth) : 0})`;
+  };
+  useEffect(() => { if (!busy) put(0, true); }, [busy]);
+  return (
+    <div ref={box} className={cx('swipe glass lens', disabled && 'off')}>
+      <div className="fillr" ref={fill} />
+      <div className="lbl"><span className={disabled ? '' : 'shimmer'}>{busy ? 'Sending…' : label}</span></div>
+      <button ref={knob} type="button" className="knob glass tint" aria-label={aria} disabled={disabled}
+        onPointerDown={(e) => { if (disabled) return; const b = box.current!; st.current = { x0: e.clientX, max: b.offsetWidth - 64, x: 0 }; knob.current!.setPointerCapture(e.pointerId); buzz(4); }}
+        onPointerMove={(e) => { const s = st.current; if (!s) return; const raw = e.clientX - s.x0; s.x = raw < 0 ? rubber(raw) : raw > s.max ? s.max + rubber(raw - s.max) : raw; put(s.x, false); }}
+        onPointerUp={() => { const s = st.current; st.current = null; if (!s) return; if (s.x > s.max * 0.86) { put(s.max, false); buzz(24); onDone(); } else put(0, true); }}
+        onPointerCancel={() => { st.current = null; put(0, true); }}
+        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !disabled) { e.preventDefault(); onDone(); } }}
+        onClick={(e) => e.preventDefault()}>
+        {busy ? <span className="spinner" aria-hidden="true" /> : <Icon name="next" />}
+      </button>
+    </div>
+  );
 }
