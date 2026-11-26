@@ -151,9 +151,13 @@ function HomeConnected() {
           <section className="card pcard ready-card" aria-label="Limit ready to post">
             <span className="tag good" style={{ alignSelf: 'flex-start' }}>READY TO POST</span>
             <div><span className="big" data-testid="ready-amount">{formatUsdc(BigInt(Math.round(ready.limitUsdc * 1e6)), { max: 2 })}</span> <span className="help">USDC limit</span></div>
-            <p className="help" style={{ margin: 0 }}>Signed by the sealed computer, good until {formatDate(BigInt(ready.expiry))}. Post it to Solana to start borrowing.</p>
+            <p className="help" style={{ margin: 0 }}>Signed by the sealed computer, good until {formatDate(BigInt(ready.expiry))}. Borrow now and it goes on Solana in the same approval, or post it first.</p>
           </section>
-          <div className="actions"><Btn onClick={() => go('limit')}>Limit ready, post it</Btn></div>
+          <div className="actions">
+            {/* one approval posts the limit, puts down 20% and borrows */}
+            <Btn onClick={() => go('borrow')}>Borrow now</Btn>
+            <Btn variant="secondary" onClick={() => go('limit')}>Limit ready, post it</Btn>
+          </div>
           {empty && <NeedsTestMoney need={empty} />}
         </>
       ) : !s.live ? (

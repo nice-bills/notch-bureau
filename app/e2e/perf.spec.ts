@@ -147,9 +147,8 @@ test('perf probe (4x CPU, 390x844)', async ({ browser }) => {
     await page.locator('#amt').fill('');
     await page.locator('#amt').pressSequentially('3.5', { delay: 60 });
   });
-  // the knob: put the deposit down so the slider shows
+  // the knob (deposit + borrow are one slide now; a half drag springs back, nothing is sent)
   await page.locator('#amt').fill('2');
-  await page.getByRole('button', { name: /Add .* USDC deposit/ }).click();
   const knob = page.getByRole('button', { name: /^Borrow .* USDC$/ });
   await knob.waitFor({ timeout: 60_000 });
   await page.waitForTimeout(800);

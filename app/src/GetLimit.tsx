@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { address, getAddressEncoder } from '@solana/kit';
 import { ENCLAVE_URL, LIVE_STATUS } from './config';
 import { MIN_FEE_LAMPORTS, sendTransaction } from './chain';
 import { FaucetButton } from './Faucet';
 import { PHANTOM_LINK_NAME, takeSignedMessage, returnedWith } from './phantom-link';
 import { useChain } from './data';
 import { useWallet } from './wallet';
-import { demoDeliver, newInbox, pollRecord, recordBytes, reportPosted, signatureBytes, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
+import { demoDeliver, newInbox, pollRecord, recordBytes, reportPosted, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
 import { signInWithSolana, watchJobs, type JobRow } from './live';
-import { decodeRecord, deriveDedupe, deriveIdentity, deriveLine, hasIdentity, postLimitIxs } from './notch';
+import { decodeRecord } from './notch';
+import { postIxsFor } from './post';
 import { formatDate, formatUsdc } from './amount';
 import { rosette, stamp } from './art';
 import { buzz } from './glass';
@@ -51,12 +51,7 @@ export function GetLimit() {
     postAct.run(async () => {
       if (!owner || !addrs || !signed) throw new Error('Missing wallet or limit.');
       if (!uwKey) throw new Error('Could not read the sealed computer’s public key. Is it running?');
-      const record = recordBytes(signed);
-      const { dedupe: dedupeHash, idHash } = decodeRecord(record);
-      const dedupe = await deriveDedupe(addrs.program, dedupeHash);
-      const identity = hasIdentity(idHash) ? await deriveIdentity(addrs.program, idHash) : undefined;
-      const lineAddr = await deriveLine(addrs.program, owner);
-      const ixs = postLimitIxs(addrs, { payer: owner, borrower: owner, line: lineAddr, dedupe, record, identity }, addressBytes(uwKey), signatureBytes(signed));
+      const ixs = await postIxsFor(addrs, owner, signed, uwKey);
       const { signature } = await sendTransaction(owner, ixs, signTransaction);
       if (fromInbox.current) void reportPosted(signature);
       setLanded(true);
@@ -101,7 +96,12 @@ export function GetLimit() {
             {posted ? (
               <Btn onClick={() => go('home')}>Start borrowing</Btn>
             ) : (
-              <Btn onClick={onPost} busy={postAct.busy} disabled={!uwKey}>Post my limit</Btn>
+              <>
+                {/* One approval: post the limit, put down 20% and borrow, all in one transaction. */}
+                <Btn onClick={() => go('borrow')} disabled={!uwKey || postAct.busy}>Choose an amount and borrow</Btn>
+                <p className="help" style={{ textAlign: 'center', margin: '4px 0 0' }}>Posting your limit, the deposit and the loan go in one approval.</p>
+                <Btn variant="secondary" onClick={onPost} busy={postAct.busy} disabled={!uwKey}>Post my limit</Btn>
+              </>
             )}
             {!uwKey && !posted && <p className="help warn">Waiting for the sealed computer’s public key…</p>}
             {!posted && sol !== null && sol < MIN_FEE_LAMPORTS && !postAct.error && (
@@ -424,9 +424,4 @@ function Landed({ signed, onDone, postAct }: { signed: EnclaveOk; onDone: () => 
       </div>
     </section>
   );
-}
-
-const addressEncoder = getAddressEncoder();
-function addressBytes(a: string): Uint8Array {
-  return new Uint8Array(addressEncoder.encode(address(a)));
 }

@@ -10,13 +10,16 @@ import {
   WITHDRAW_COOLDOWN_SECONDS,
   base64ToBytes,
   decodeRecord,
+  depositBorrowerIx,
   depositNeededFor,
+  deriveAta,
+  deriveLine,
   feeFor,
   payoffFor,
   sharesForDeposit,
 } from '../src/notch.ts';
 import { ERROR_MESSAGES } from '../src/errors.ts';
-import { escrowShares, readLine, readPool, readUnderwriter, readWithdrawRequest, shareBalance, tokenBalance, waitFor } from './chain.ts';
+import { chainContext, escrowShares, readLine, sendTx, readPool, readUnderwriter, readWithdrawRequest, shareBalance, tokenBalance, waitFor } from './chain.ts';
 import { loadState, saveState } from './state.ts';
 import { PHONE, connectWallet, fundedWallet, log, openSession, openTab, screenshot, slide, stat, plain, usd2, usd2r, usdFull, type Session } from './app.ts';
 
@@ -117,61 +120,70 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   }
   expect(await readLine(w.address)).toBeNull(); // nothing posted yet
 
-  // --- post the limit: the stamp lands ---------------------------------------------------------------
-  log('post the limit');
-  await page.getByRole('button', { name: 'Post my limit' }).click();
-  await expect(page.getByRole('heading', { name: /USDC to borrow/ })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByTestId('landed-amount')).toHaveText(usd2(limit));
-  await expect(toast(page, 'Your limit is now on Solana.')).toBeVisible();
-  let line = await waitFor('credit line exists', () => readLine(w.address), (l) => l !== null);
-  expect(line!.wallet).toBe(w.address);
-  expect(line!.limit).toBe(limit);
-  expect(line!.expiry).toBe(record.expiry);
-  expect(line!.lastNonce).toBe(record.nonce);
-  expect(line!.drawn).toBe(0n);
-  expect(line!.deposit).toBe(0n);
-  expect(line!.defaulted).toBe(false);
-  await shot('limit-landed');
-  await page.getByRole('button', { name: 'Start borrowing' }).click();
-  await expect(page.getByTestId('available')).toHaveText(`${usd2(limit)}USDC`);
-  await expect(page.getByTestId('limit')).toHaveText(`${usd2(limit)} limit`);
-  await shot('home-limit');
-
-  // --- choose an amount, deposit 20% ----------------------------------------------------------------------
+  // The two ways to put the limit on Solana: flow 1 posts it on its own ("Post my limit", then deposit + borrow in
+  // one approval); flow 6 (phone) does post + deposit + borrow in ONE approval from the limit screen.
+  const bundle = !!o.shots;
   const draw = limit >= USDC(4) ? USDC(4) : (limit / 2n / 10_000n) * 10_000n;
   const needed = depositNeededFor(draw);
   const fee = feeFor(draw);
   const payoff = payoffFor(draw);
+  const up2 = (m: bigint) => usd2((m + 9_999n) / 10_000n * 10_000n); // the app rounds what you owe or add UP
+  let line: Awaited<ReturnType<typeof readLine>> = null;
   const walletUsdc0 = await tokenBalance(w.address);
   const pool0 = await readPool();
 
-  log(`deposit 20% (${usdFull(needed)}) for a ${usdFull(draw)} draw`);
-  await page.getByRole('button', { name: 'Borrow', exact: true }).click();
+  if (!bundle) {
+    // --- post the limit on its own: the stamp lands ---------------------------------------------------
+    log('post the limit');
+    const signs0 = w.signCount;
+    await page.getByRole('button', { name: 'Post my limit' }).click();
+    await expect(page.getByRole('heading', { name: /USDC to borrow/ })).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId('landed-amount')).toHaveText(usd2(limit));
+    await expect(toast(page, 'Your limit is now on Solana.')).toBeVisible();
+    expect(w.signCount - signs0, 'posting alone is one approval').toBe(1);
+    line = await waitFor('credit line exists', () => readLine(w.address), (l) => l !== null);
+    expect(line!.wallet).toBe(w.address);
+    expect(line!.limit).toBe(limit);
+    expect(line!.expiry).toBe(record.expiry);
+    expect(line!.lastNonce).toBe(record.nonce);
+    expect(line!.drawn).toBe(0n);
+    expect(line!.deposit).toBe(0n);
+    expect(line!.defaulted).toBe(false);
+    await shot('limit-landed');
+    await page.getByRole('button', { name: 'Start borrowing' }).click();
+    await expect(page.getByTestId('available')).toHaveText(`${usd2(limit)}USDC`);
+    await expect(page.getByTestId('limit')).toHaveText(`${usd2(limit)} limit`);
+    await shot('home-limit');
+    await page.getByRole('button', { name: 'Borrow', exact: true }).click();
+  } else {
+    log('limit not posted: go straight to Borrow');
+    await page.getByRole('button', { name: 'Choose an amount and borrow' }).click();
+  }
+
+  // --- choose an amount: one approval does [post +] deposit 20% + borrow ----------------------------------
+  log(`borrow ${usdFull(draw)}, putting down ${usdFull(needed)}${bundle ? ', posting the limit too' : ''}`);
   await page.locator('#amt').fill(plain(draw));
-  await expect(page.getByTestId('dep-needed')).toHaveText(usdFull(needed));
-  await expect(page.getByTestId('dep-add')).toHaveText(usdFull(needed));
-  await expect(page.getByText(`Pay back ${usdFull(payoff)} by`)).toBeVisible();
+  await expect(page.getByTestId('dep-needed')).toHaveText(up2(needed));
+  await expect(page.getByTestId('dep-add')).toHaveText(up2(needed));
+  await expect(page.getByText(`Pay back ${up2(payoff)} by`)).toBeVisible();
+  await expect(page.getByTestId('one-tx')).toHaveText(`One approval${bundle ? ': posts your limit, ' : ': '}puts down ${up2(needed)} and sends you ${usd2(draw)}.`);
   await shot('amount-chosen');
   if (o.shots) await noOverflow();
-  await page.getByRole('button', { name: `Add ${usdFull(needed)} USDC deposit` }).click();
-  await expect(toast(page, `Deposit added: ${usdFull(needed)} USDC.`)).toBeVisible();
-  line = await waitFor('deposit lands', () => readLine(w.address), (l) => l?.deposit === needed);
-  expect(line!.drawn).toBe(0n);
-  expect(await tokenBalance(w.address)).toBe(walletUsdc0 - needed);
-  expect((await readPool()).stats.borrowerDeposits).toBe(pool0.stats.borrowerDeposits + needed);
-  await expect(page.getByTestId('dep-add')).toHaveText('0.00');
-  await shot('deposit-added');
-
-  // --- draw: slide to borrow ------------------------------------------------------------------------------
-  log(`slide to borrow ${usdFull(draw)}`);
-  await slide(page, page.getByRole('button', { name: `Borrow ${usdFull(draw)} USDC` }));
+  const signs1 = w.signCount;
+  await slide(page, page.getByRole('button', { name: `Borrow ${usd2(draw)} USDC` }));
   const sent = page.getByRole('dialog', { name: 'Sent' });
   await expect(sent).toBeVisible({ timeout: 60_000 });
   await expect(sent).toContainText(`${usd2(draw)} USDC`);
   await expect(sent).toContainText('is in your wallet');
   await expect(sent.getByRole('link', { name: 'View on Solana Explorer' })).toBeVisible();
+  expect(w.signCount - signs1, 'deposit + borrow (and the post) is ONE approval').toBe(1);
   line = await waitFor('draw lands', () => readLine(w.address), (l) => l?.drawn === draw);
   expect(line!.deposit).toBe(needed);
+  if (bundle) {
+    expect(line!.limit).toBe(limit);
+    expect(line!.lastNonce).toBe(record.nonce);
+    expect(line!.expiry).toBe(record.expiry);
+  }
   const nowS = BigInt(Math.floor(Date.now() / 1000));
   expect(line!.due).toBeGreaterThan(nowS + 29n * 86_400n);
   expect(line!.due).toBeLessThan(nowS + 31n * 86_400n);
@@ -179,11 +191,12 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   const pool1 = await readPool();
   expect(pool1.stats.outstanding - pool0.stats.outstanding).toBe(draw);
   expect(pool1.stats.totalLent - pool0.stats.totalLent).toBe(draw);
+  expect(pool1.stats.borrowerDeposits).toBe(pool0.stats.borrowerDeposits + needed);
   await shot('drawn');
   await sent.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByTestId('limit')).toBeVisible();
   await expect(page.locator('.line-card .tag')).toContainText('DUE');
-  await expect(page.getByText(`Pay ${usdFull(payoff)} USDC`)).toBeVisible();
+  await expect(page.getByText(`Pay ${up2(payoff)} USDC`)).toBeVisible();
   await expect(page.getByTestId('deposit')).toHaveText(usd2(needed));
   await shot('home-owing');
   if (o.shots) await noOverflow();
@@ -196,10 +209,10 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   const balBeforeRepay = await tokenBalance(w.address);
   await page.getByRole('button', { name: 'Pay back' }).click();
   const repay = page.getByRole('dialog', { name: 'Pay back' });
-  await expect(repay).toContainText(`You pay${usdFull(payoff)}`);
-  await expect(repay).toContainText(`Deposit back+${usdFull(needed)}`);
+  await expect(repay).toContainText(`You pay${up2(payoff)}`);
+  await expect(repay).toContainText(`Deposit back+${usd2(needed)}`);
   await shot('repay-sheet');
-  await repay.getByRole('button', { name: `Repay ${usdFull(payoff)} USDC` }).click();
+  await repay.getByRole('button', { name: `Repay ${up2(payoff)} USDC` }).click();
   await expect(page.getByRole('dialog', { name: 'Paid back' })).toContainText(`Your ${usd2(needed)} USDC deposit is back in your wallet.`);
   await expect(page.getByRole('dialog', { name: 'Paid back' })).toBeVisible();
   line = await waitFor('repay lands', () => readLine(w.address), (l) => l?.drawn === 0n);
@@ -216,17 +229,18 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   await expect(page.getByTestId('on-time')).toHaveText('0');
   await shot('repaid');
 
-  // --- put a deposit down, then take it back --------------------------------------------------------------
-  log('deposit again, then withdraw the deposit');
-  await page.getByRole('button', { name: 'Borrow', exact: true }).click();
-  await page.locator('#amt').fill(plain(draw));
-  await page.getByRole('button', { name: `Add ${usdFull(needed)} USDC deposit` }).click();
-  await expect(toast(page, `Deposit added: ${usdFull(needed)} USDC.`)).toBeVisible();
-  await waitFor('second deposit lands', () => readLine(w.address), (l) => l?.deposit === needed);
-  await back(page);
-  await expect(page.getByText(`${usdFull(needed)} USDC is waiting for you.`)).toBeVisible();
+  // --- a deposit with no loan (sent as the bare instruction: the app always bundles it with a borrow), then take it back
+  log('a bare deposit, then withdraw it in the app');
+  {
+    const { A } = await chainContext();
+    const ata = await deriveAta(w.address as never, A.mint);
+    await sendTx(w.signer, [depositBorrowerIx(A, w.signer.address, await deriveLine(A.program, w.signer.address), ata, needed)]);
+  }
+  await waitFor('bare deposit lands', () => readLine(w.address), (l) => l?.deposit === needed);
+  await page.reload();
+  await expect(page.getByText(`${usd2(needed)} USDC is waiting for you.`)).toBeVisible({ timeout: 30_000 });
   await shot('deposit-waiting');
-  await page.getByRole('button', { name: `Withdraw ${usdFull(needed)} USDC` }).click();
+  await page.getByRole('button', { name: `Withdraw ${usd2(needed)} USDC` }).click();
   await expect(toast(page, 'Deposit returned to your wallet.')).toBeVisible();
   line = await waitFor('withdraw lands', () => readLine(w.address), (l) => l?.deposit === 0n);
   expect(line!.drawn).toBe(0n);

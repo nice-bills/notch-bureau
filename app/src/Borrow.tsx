@@ -10,6 +10,8 @@ import { ActionStatus, Btn, DoneView, Icon, Sheet, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Nav } from './GetLimit';
 import { FaucetButton } from './Faucet';
+import { lineAfterPost, postIxsFor, unposted } from './post';
+import { reportPosted } from './enclave';
 import { lineState, withAta } from './Home';
 
 const UNITS = [1n, 2n, 5n, 10n, 20n, 50n, 100n, 200n, 500n, 1000n, 5000n].map((u) => u * 1_000_000n);
@@ -17,9 +19,13 @@ const MOTIFS = ['kente', 'sun', 'horn'] as const;
 
 export function Borrow() {
   const { connected, signTransaction } = useWallet();
-  const { line, pool, usdc, addrs, refresh, patch, loading } = useChain();
-  const { go } = useUi();
+  const { line: chainLine, pool, usdc, addrs, refresh, patch, loading, session } = useChain();
+  const { go, att } = useUi();
   const owner = connected?.address ?? null;
+  // A signed limit not on Solana yet: price the loan as if it were posted, and post it in the same transaction.
+  const pending = owner ? unposted(session.signed, chainLine) : null;
+  const uwKey = att && att !== 'down' ? att.underwriter : null;
+  const line = pending && owner ? lineAfterPost(pending, owner, chainLine) : chainLine;
   const s = lineState(line);
   const idle = pool?.stats.idle ?? 0n;
   const cap = s.headroom < idle ? s.headroom : idle;
@@ -50,27 +56,25 @@ export function Borrow() {
     return stamp(88, 104, { ink: 'verm', motif: MOTIFS[i % 3], num, cap: 'USDC', numSize: num.length > 3 ? 24 : 34, top: 'NOTCH' });
   }), [unit, count, lastVal]);
 
-  const depAct = useAction(refresh);
   const drawAct = useAction(refresh);
 
-  const onDeposit = () =>
-    depAct.run(async () => {
-      if (!owner || !addrs) throw new Error('Connect a wallet first.');
-      if (!toAdd) throw new Error('No deposit is needed for this amount.');
-      const { ata, ensure } = await withAta(addrs, owner);
-      const lineAddr = await deriveLine(addrs.program, owner);
-      const { signature } = await sendTransaction(owner, [ensure, depositBorrowerIx(addrs, owner, lineAddr, ata, toAdd)], signTransaction);
-      patch({ line: { deposit: have + toAdd }, usdc: usdc - toAdd });
-      return { signature, note: `Deposit added: ${formatUsdc(toAdd, { up: true })} USDC.` };
-    });
-
-  const onDraw = () =>
+  // ONE approval: [post the limit] + [put down the 20% top-up] + borrow, in a single transaction (about 1.1 KB at
+  // most, under Solana's 1232-byte cap). Only what is needed goes in: a draw that needs no top-up is just the draw.
+  const onBorrow = () =>
     drawAct.run(async () => {
       if (!owner || !addrs || !draw) throw new Error('Enter how much to borrow.');
+      if (pending && !uwKey) throw new Error('Could not read the sealed computer’s public key. Try again in a moment.');
       const { ata, ensure } = await withAta(addrs, owner);
       const lineAddr = await deriveLine(addrs.program, owner);
-      const { signature } = await sendTransaction(owner, [ensure, drawIx(addrs, owner, lineAddr, ata, draw)], signTransaction);
-      patch({ line: { drawn: (line?.drawn ?? 0n) + draw, ...(line && line.drawn === 0n ? { due: dueIfNow } : {}) }, usdc: usdc + draw });
+      const ixs = [
+        ...(pending ? await postIxsFor(addrs, owner, pending, uwKey!) : []),
+        ensure,
+        ...(toAdd > 0n ? [depositBorrowerIx(addrs, owner, lineAddr, ata, toAdd)] : []),
+        drawIx(addrs, owner, lineAddr, ata, draw),
+      ];
+      const { signature } = await sendTransaction(owner, ixs, signTransaction);
+      if (pending) void reportPosted(signature);
+      patch({ line: { drawn: (chainLine?.drawn ?? 0n) + draw, deposit: have + toAdd, ...(s.drawn === 0n ? { due: dueIfNow } : {}) }, usdc: usdc - toAdd + draw });
       setDone({ draw, payoff, due: dueIfNow });
       return { signature, note: `${formatUsdc(draw)} USDC sent to your wallet.` };
     });
@@ -87,7 +91,7 @@ export function Borrow() {
       {head}
       <Sheet title="Sent" onClose={() => { setDone(null); go('home'); }}>
         <DoneView amount={`${formatUsdc(done.draw, { max: 2 })} USDC`} signature={drawAct.signature} onDone={() => { setDone(null); go('home'); }}
-          text={<>is in your wallet. Pay back <b style={{ color: 'var(--ink)' }}>{formatUsdc(done.payoff, { up: true })}</b> by {formatDate(line?.due && line.due > 0n ? line.due : done.due)}.</>} />
+          text={<>is in your wallet. Pay back <b style={{ color: 'var(--ink)' }}>{formatUsdc(done.payoff, { up: true })}</b> by {formatDate(chainLine?.due && chainLine.due > 0n ? chainLine.due : done.due)}.</>} />
       </Sheet>
     </>
   );
@@ -99,7 +103,6 @@ export function Borrow() {
       action={{ label: 'Go to Home', on: () => go('home') }} /></>
   );
 
-  const step = toAdd > 0n ? 1 : 2;
   return (
     <div>
       {head}
@@ -139,22 +142,20 @@ export function Borrow() {
         <div className="r"><span>Fee, 2%<small>Paid when you pay back</small></span><b>{formatUsdc(fee, { up: true })}</b></div>
       </div>
 
-      <div className="stepper" aria-label="Steps">
-        <div className={step === 1 ? 'on' : 'ok'}><i>{step === 1 ? 1 : '✓'}</i>Put down 20%</div>
-        <div className={step === 2 ? 'on' : ''}><i>2</i>Borrow</div>
-      </div>
+      {okAmount && usdc >= toAdd && <p className="help one-tx" data-testid="one-tx">
+        One approval{pending ? ': posts your limit, ' : ': '}{toAdd > 0n ? <>puts down <b>{formatUsdc(toAdd, { up: true })}</b> and </> : ''}sends you <b>{formatUsdc(draw!)}</b>.
+      </p>}
 
       <div className="dock">
-        {step === 1 ? (
-          <>
-            <Btn onClick={onDeposit} busy={depAct.busy} disabled={!okAmount || usdc < toAdd}>Add {formatUsdc(toAdd, { up: true })} USDC deposit</Btn>
-            {okAmount && usdc < toAdd && <><p className="help warn" style={{ textAlign: 'center' }}>Your wallet has {formatUsdc(usdc)} test USDC. You need {formatUsdc(toAdd - usdc, { up: true })} more.</p><div style={{ display: 'flex', justifyContent: 'center' }}><FaucetButton /></div></>}
-          </>
+        {okAmount && usdc < toAdd ? (
+          <><p className="help warn" style={{ textAlign: 'center' }}>Your wallet has {formatUsdc(usdc)} test USDC. The deposit needs {formatUsdc(toAdd - usdc, { up: true })} more.</p><div style={{ display: 'flex', justifyContent: 'center' }}><FaucetButton /></div></>
         ) : (
-          <Slide label={okAmount ? `Slide to borrow ${formatUsdc(draw!)}` : 'Pick an amount'} aria={okAmount ? `Borrow ${formatUsdc(draw!)} USDC` : 'Borrow'} disabled={!okAmount || drawAct.busy} busy={drawAct.busy} onDone={onDraw} />
+          <>
+            <Slide label={okAmount ? `Slide to borrow ${formatUsdc(draw!)}` : 'Pick an amount'} aria={okAmount ? `Borrow ${formatUsdc(draw!)} USDC` : 'Borrow'} disabled={!okAmount || drawAct.busy} busy={drawAct.busy} onDone={onBorrow} />
+          </>
         )}
       </div>
-      <div className="pad"><ActionStatus a={depAct} /><ActionStatus a={drawAct} /></div>
+      <div className="pad"><ActionStatus a={drawAct} /></div>
 
     </div>
   );
