@@ -78,3 +78,102 @@ export async function underwrite(eml: Uint8Array, wallet: string, signMessage?: 
 
 export const recordBytes = (r: EnclaveOk) => base64ToBytes(r.message);
 export const signatureBytes = (r: EnclaveOk) => base64ToBytes(r.signature);
+
+// ---- The statement inbox -------------------------------------------------------------------------------------------
+// A MoMo statement only counts when the provider emails it to the wallet's own inbox address (the DKIM-signed To must
+// name it). `POST /inbox/new` hands out that address and a poll token; `GET /record/<wallet>` answers with the result.
+
+export interface InboxAddress {
+  address: string;
+  pollToken: string;
+  expiresAt: string;
+  /** false: the underwriter has no real mail domain yet, so only the demo delivery can reach this address. */
+  domainConfigured: boolean;
+  /** true when the underwriter writes the public status rows (Supabase) the phone can watch live. */
+  liveStatus: boolean;
+}
+export type RecordPoll =
+  | { status: 'waiting' }
+  | { status: 'ready'; result: EnclaveOk }
+  | { status: 'refused' | 'locked'; reason: string; friendly: string };
+
+async function readJson(r: Response): Promise<Record<string, unknown>> {
+  try {
+    return await r.json();
+  } catch {
+    throw new Error(`The sealed computer answered HTTP ${r.status} with something unreadable.`);
+  }
+}
+async function call(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(`${ENCLAVE_URL}${path}`, init);
+  } catch {
+    throw new Error(`Could not reach the sealed computer at ${ENCLAVE_URL}. Check your connection, or start it with "pnpm demo:enclave".`);
+  }
+}
+
+/** What the wallet signs to ask for an inbox address: same text the underwriter checks. */
+export const inboxMessage = (wallet: string, ts: number) => `notch-inbox-v1|${wallet}|${ts}`;
+
+/**
+ * Ask for this wallet's statement address. Proof of the wallet is either a Supabase "Sign in with Solana" token
+ * (`bearer`) or a signature over `notch-inbox-v1|wallet|ts`.
+ */
+export async function newInbox(wallet: string, proof: { bearer: string } | { signMessage: (m: Uint8Array) => Promise<Uint8Array> }): Promise<InboxAddress> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  const body: Record<string, unknown> = { wallet };
+  if ('bearer' in proof) headers.authorization = `Bearer ${proof.bearer}`;
+  else {
+    const ts = Date.now();
+    body.ts = ts;
+    body.signature = toB64(await proof.signMessage(new TextEncoder().encode(inboxMessage(wallet, ts))));
+  }
+  const r = await call('/inbox/new', { method: 'POST', headers, body: JSON.stringify(body) });
+  const j = await readJson(r);
+  if (r.status === 404) throw new Error('This sealed computer has no statement inbox. Restart it with the latest "pnpm demo:enclave".');
+  if (!r.ok || !j.ok) throw new Error(explainEnclaveReason(String(j.reason ?? `HTTP ${r.status}`)));
+  return j as unknown as InboxAddress;
+}
+
+/** One poll of the result for this wallet's inbox. */
+export async function pollRecord(wallet: string, pollToken: string, signal?: AbortSignal): Promise<RecordPoll> {
+  let r: Response;
+  try {
+    r = await fetch(`${ENCLAVE_URL}/record/${wallet}`, { headers: { 'x-notch-token': pollToken }, signal });
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    throw new Error('Lost touch with the sealed computer. Retrying…');
+  }
+  const j = await readJson(r);
+  if (r.status === 404) throw new Error('This inbox address is no longer known (it expired, or the sealed computer restarted). Ask for a new one.');
+  if (!r.ok) throw new Error(explainEnclaveReason(String(j.reason ?? `HTTP ${r.status}`)));
+  if (j.status === 'ready') {
+    const { status: _s, ...rest } = j;
+    void _s;
+    return { status: 'ready', result: rest as unknown as EnclaveOk };
+  }
+  if (j.status === 'refused' || j.status === 'locked') {
+    const reason = String(j.reason ?? 'refused');
+    return { status: j.status, reason, friendly: j.status === 'locked' ? 'This address refused too many emails and is now locked. Ask for a new one.' : explainEnclaveReason(reason) };
+  }
+  return { status: 'waiting' };
+}
+
+/** DEMO ONLY (the local demo underwriter): email a synthetic, freshly signed MoMo statement to this inbox address. */
+export async function demoDeliver(address: string): Promise<void> {
+  const r = await call('/demo/deliver', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ address }) });
+  if (r.status === 404) throw new Error('This sealed computer has no demo mailer. Only the local demo underwriter can send a sample statement.');
+  const j = await readJson(r);
+  if (!r.ok && !j.reason) throw new Error(`HTTP ${r.status}`);
+  // A refusal (422) is a real answer: the poll shows it in plain words.
+  if (!r.ok && r.status !== 422) throw new Error(explainEnclaveReason(String(j.reason)));
+}
+
+/** Tell the underwriter which devnet transaction posted the record (links the public status row). Best effort. */
+export async function reportPosted(signature: string): Promise<void> {
+  try {
+    await fetch(`${ENCLAVE_URL}/posted`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ signature }) });
+  } catch {
+    /* only a convenience for the public status; the limit is already on chain */
+  }
+}

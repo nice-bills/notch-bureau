@@ -28,6 +28,8 @@ export const LOAN_TERM_SECONDS = 30n * 86_400n;
 export const MIN_LOAN_TERM_SECONDS = 10n;
 /** Mirrors WITHDRAW_COOLDOWN_S in programs/notch/src/lib.rs. */
 export const WITHDRAW_COOLDOWN_SECONDS = 3n * 86_400n;
+/** After unlock, the claim must land within this window (`CLAIM_WINDOW_S`); then the request lapses and only cancel works. */
+export const CLAIM_WINDOW_SECONDS = 2n * 86_400n;
 
 /** Anchor discriminators: sha256("global:<name>")[0..8]. Verified against node:crypto in the unit test. */
 const DISCRIMINATORS = {
@@ -566,6 +568,9 @@ export interface WithdrawRequest {
   shares: bigint;
   /** Unix seconds; `claim_withdraw` works once the chain clock reaches this. */
   unlockTs: bigint;
+  /** Tranche NAV and share supply when the request was filed (price lock). 0 on a legacy request. */
+  navAtRequest: bigint;
+  supplyAtRequest: bigint;
 }
 
 export const WITHDRAW_REQUEST_MIN_LEN = 58;
@@ -577,6 +582,8 @@ export function decodeWithdrawRequest(data: Uint8Array): WithdrawRequest {
     lender: getAddressDecoderFromBytes(data.subarray(8, 40)),
     shares: v.getBigUint64(40, true),
     unlockTs: v.getBigInt64(48, true),
+    navAtRequest: data.length >= 74 ? v.getBigUint64(58, true) : 0n,
+    supplyAtRequest: data.length >= 74 ? v.getBigUint64(66, true) : 0n,
   };
 }
 

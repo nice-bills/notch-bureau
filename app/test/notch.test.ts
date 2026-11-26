@@ -290,12 +290,16 @@ describe('notch.ts matches tests/notch.test.js', () => {
   });
 
   it('decodeWithdrawRequest reads lender, shares and unlock time (lib.rs WithdrawRequest layout)', () => {
-    const data = Buffer.alloc(8 + 32 + 8 + 8 + 1 + 1);
+    const data = Buffer.alloc(8 + 32 + 8 + 8 + 1 + 1 + 8 + 8);
     Buffer.from(enc.encode(lenderAddr)).copy(data, 8);
     data.writeBigUInt64LE(123_456_789n, 40);
     data.writeBigInt64LE(1_800_259_200n, 48);
+    data.writeBigUInt64LE(5_000_000n, 58);
+    data.writeBigUInt64LE(4_900_000n, 66);
     const r = decodeWithdrawRequest(data);
-    expect(r).toEqual({ lender: lenderAddr, shares: 123_456_789n, unlockTs: 1_800_259_200n });
+    expect(r).toEqual({ lender: lenderAddr, shares: 123_456_789n, unlockTs: 1_800_259_200n, navAtRequest: 5_000_000n, supplyAtRequest: 4_900_000n });
+    // a request made before the price snapshot existed (58 bytes) reads as zeros
+    expect(decodeWithdrawRequest(data.subarray(0, 58))).toEqual({ lender: lenderAddr, shares: 123_456_789n, unlockTs: 1_800_259_200n, navAtRequest: 0n, supplyAtRequest: 0n });
     expect(() => decodeWithdrawRequest(data.subarray(0, 40))).toThrow();
   });
 

@@ -9,7 +9,8 @@ const PROGRAM_ERRORS = [
   'InvalidPoolState', 'BalanceOutstanding', 'MathOverflow', 'CooldownActive',
   'IdentityBound', 'IdentityRequired', 'NoCreditLine', 'InsufficientCredit',
   'SubordinationBreached', 'BadTrancheMint', 'InvalidTrancheParams', 'InvalidTerm',
-  'DeviceBound', 'DeviceRequired',
+  'DeviceBound', 'DeviceRequired', 'ClaimWindowClosed', 'LoanOverdue', 'WalletIdentityPinned',
+  'DepositTooSmall', 'DustSupply', 'NotLegacyRequest',
 ] as const;
 export type ProgramErrorName = (typeof PROGRAM_ERRORS)[number];
 
@@ -45,6 +46,12 @@ export const ERROR_MESSAGES: Record<ProgramErrorName, string> = {
   BadTrancheMint: 'That is not one of the pool’s two share tokens (senior or junior).',
   InvalidTrancheParams: 'The tranche settings are out of range.',
   InvalidTerm: 'The loan term must be between 10 seconds and 30 days.',
+  ClaimWindowClosed: 'The 2-day window to claim this withdrawal has closed. Cancel it to get your shares back, then ask again.',
+  LoanOverdue: 'Your loan is past its due date. Pay it back before you borrow again.',
+  WalletIdentityPinned: 'This wallet is already tied to a different mobile-money account. One wallet can use only one account.',
+  DepositTooSmall: 'The first deposit into an empty pool share must be at least 1 USDC.',
+  DustSupply: 'That would leave a tiny amount of shares behind. Withdraw all of it, or leave at least 1 share.',
+  NotLegacyRequest: 'This withdrawal request is already up to date. Nothing to change.',
 };
 
 export interface FriendlyError {
@@ -116,7 +123,7 @@ export function explainError(e: unknown): FriendlyError {
   if (/failed to fetch|networkerror|load failed|econnrefused/.test(lower)) {
     return { code: 'Network', message: 'Could not reach the server. Check your connection and the configured URLs.', raw };
   }
-  return { code: 'Unknown', message: 'Something went wrong. Open “real error” to see exactly what the network said.', raw };
+  return { code: 'Unknown', message: 'Something went wrong. Open “Show the real error” to see exactly what the network said.', raw };
 }
 
 /** Enclave refusals (DKIM, duplicate email, no income found) in plain English. */

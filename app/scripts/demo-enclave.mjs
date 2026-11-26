@@ -19,6 +19,10 @@ import { makeUnderwriter, makeServer, fixtures, readEnv } from './enclave-lib.mj
 import { InboxedUnderwriter } from '../../enclave/test/fixtures/inboxed.js';
 import { llmConfigFromEnv } from '../../enclave/src/llm-extract.js';
 import { pepperOrExit } from '../../enclave/src/pepper.js';
+import { Inbox } from '../../enclave/src/inbox.js';
+import { createStoreFromEnv } from '../../enclave/src/store.js';
+import { createAuthFromEnv } from '../../enclave/src/supabase-auth.js';
+import crypto from 'node:crypto';
 
 // A secret pepper is required (NOTCH_ID_PEPPER, `openssl rand -hex 32`): without it the phone-number hash on chain can be
 // brute-forced. For a local rehearsal ONLY, NOTCH_INSECURE_NO_PEPPER=1 starts without one and prints a loud warning.
@@ -42,9 +46,14 @@ const llm = process.env.NOTCH_LLM === 'off' ? null : llmConfigFromEnv({ ...readE
 // DEMO ONLY: the frozen UI's "MTN MoMo payment" button posts a fixture statement straight to /underwrite. A real enclave refuses that
 // (statements only through the inbox, audit #3); this local demo server treats its own fixtures as delivered to the fixtures' inbox.
 const u = makeUnderwriter(process.env.NOTCH_KEY_FILE, { llm, idPepper, cls: InboxedUnderwriter });
-const server = makeServer(u);
+// The statement inbox, as on the real enclave. Status rows go to memory, or to Supabase when NOTCH_STORE=supabase and
+// SUPABASE_* are set (then the app can watch them live over Realtime). The inbound secret is random per start: only this
+// process (its demo mailer) can deliver, there is no mail worker in a local demo.
+const inbox = new Inbox({ domain: process.env.NOTCH_INBOX_DOMAIN || 'inbox.notch.invalid', secret: crypto.randomBytes(24).toString('hex'), store: createStoreFromEnv(), auth: createAuthFromEnv() });
+const server = makeServer(u, { inbox });
 const port = Number(process.env.PORT || 8787);
 server.listen(port, () => {
   console.log(`demo underwriter ${u.publicKey} on :${port} (reader: ${u.llm ? `AI ${u.llm.model}` : 'rules'}; fresh samples at /samples/{momo,deel,bank}.eml)`);
   console.log(`sample emails written to ${samplesDir}`);
+  console.log(`statement inbox: ${inbox.domain} (status store: ${inbox.store.kind || 'memory'}${inbox.auth ? ', Sign in with Solana on' : ''}); demo mailer at POST /demo/deliver`);
 });

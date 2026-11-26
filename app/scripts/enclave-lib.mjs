@@ -10,6 +10,7 @@ import { handleDevice } from '../../enclave/src/device-http.js';
 import { handleUnderwrite } from '../../enclave/src/underwrite-http.js';
 import * as fixtures from '../../enclave/test/fixtures/emails.js';
 import { createSampleLimiter, callerKey } from '../../enclave/src/sample-limit.js';
+import { handleInbox } from '../../enclave/src/inbox.js';
 
 export { fixtures };
 
@@ -30,7 +31,7 @@ export function makeServer(u, opts = {}) {
   const exemptLoopback = opts.samples?.exemptLoopback ?? true;
   return http.createServer(async (req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(obj)); };
-    if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-wallet, x-notch-device, x-notch-ts, x-notch-sig' }); return res.end(); }
+    if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, authorization, x-wallet, x-notch-device, x-notch-ts, x-notch-sig, x-notch-token' }); return res.end(); }
     if (await handleDevice(u, req, new URL(req.url, 'http://x'), send)) return;
     if (req.method === 'GET' && req.url === '/attestation') {
       return send(200, { underwriter: u.publicKey, mode: 'local-dev', extraction: u.llm ? { mode: 'llm', model: u.llm.model } : { mode: 'rules' }, note: 'demo underwriter with synthetic DKIM fixtures' });
@@ -59,6 +60,31 @@ export function makeServer(u, opts = {}) {
       const eml = await fixtures.signedEmail({ body: `${f.body}\r\nTransaction ID: ${crypto.randomUUID()}`, domain: f.domain, from: f.from, subject: f.subject });
       res.writeHead(200, { 'content-type': 'message/rfc822', 'access-control-allow-origin': '*' });
       return res.end(eml);
+    }
+    // The statement inbox (same handler as the real enclave), plus a DEMO-ONLY mailer: it emails a synthetic, freshly
+    // DKIM-signed MoMo statement to an inbox address through the same `receive` path the Cloudflare worker uses.
+    if (opts.inbox) {
+      const url = new URL(req.url, 'http://x');
+      if (req.method === 'POST' && url.pathname === '/demo/deliver') {
+        const key = (opts.samples?.keyOf ?? callerKey)(req);
+        const loopback = !req.headers['x-forwarded-for'] && /^(::1|127\.|::ffff:127\.)/.test(String(req.socket?.remoteAddress || ''));
+        const taken = exemptLoopback && loopback ? { ok: true } : samples.take(key);
+        if (!taken.ok) return send(429, { ok: false, reason: `demo samples are rate limited (demo only): try again in ${taken.retryAfterS} s` });
+        let body = '';
+        for await (const c of req) { body += c; if (body.length > 2048) return send(413, { ok: false, reason: 'too large' }); }
+        let address;
+        try { address = String(JSON.parse(body).address || '').trim().toLowerCase(); } catch { address = ''; }
+        if (!address.endsWith(`@${opts.inbox.domain}`)) return send(400, { ok: false, reason: 'send JSON {"address": "<your inbox address>"}' });
+        const eml = await fixtures.momoStatementEmail({ msisdn: fixtures.randomMsisdn(), to: address });
+        try {
+          const r = await opts.inbox.receive(u, { rcpt: address, eml, secret: opts.inbox.secret });
+          return send(r.status, r.body);
+        } catch (e) {
+          console.error('demo deliver error:', e.message);
+          return send(500, { ok: false, reason: 'could not process the message' });
+        }
+      }
+      if (await handleInbox(opts.inbox, u, req, url, send)) return;
     }
     if (await handleUnderwrite(u, req, new URL(req.url, 'http://x'), send, opts)) return;
     send(404, { ok: false, reason: 'not found' });
