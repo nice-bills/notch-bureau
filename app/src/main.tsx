@@ -9,6 +9,7 @@ import { WalletProvider } from './wallet';
 import { CHAIN_ID } from './config';
 import { isAndroid, isIOS } from './device';
 import { consumePhantomRedirect, linkedAddress, registerPhantomLink } from './phantom-link';
+import { registerWalletConnect } from './walletconnect';
 
 // Phantom's answer to a deeplink request arrives in the URL: read it before React renders.
 consumePhantomRedirect();
@@ -34,6 +35,9 @@ if (isIOS) {
     if (!injected || linkedAddress()) registerPhantomLink();
   }, linkedAddress() ? 0 : 350);
 }
+
+// WalletConnect: a list of wallet apps (iPhone Safari, desktop QR). Only with VITE_WC_PROJECT_ID; its code loads on tap.
+registerWalletConnect();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

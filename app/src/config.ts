@@ -14,6 +14,8 @@ export const LIVE_STATUS = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
 /** Pollar Google sign-in: the publishable key (client-side by design). VITE_POLLAR=off hides it. */
 export const POLLAR_KEY: string = env.VITE_POLLAR_KEY || '';
 export const POLLAR_ON = !!POLLAR_KEY && env.VITE_POLLAR !== 'off';
+/** WalletConnect (Reown) cloud project id. Unset: the WalletConnect option is hidden. */
+export const WC_PROJECT_ID: string = env.VITE_WC_PROJECT_ID || '';
 export const CLUSTER = 'devnet';
 export const CHAIN_ID = 'solana:devnet' as const;
 

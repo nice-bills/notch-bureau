@@ -11,6 +11,7 @@ import { googleLogin, pollarLogout, watchPollar, type PollarState } from './poll
 import { submitSigned } from './chain';
 import { explainError } from './errors';
 import { PHANTOM_LINK_NAME, takeError, takeSignedTransaction } from './phantom-link';
+import { WC_NAME } from './walletconnect';
 import { browseLinks, isPhone } from './device';
 import { FaucetButton } from './Faucet';
 // The everyday screens are in the main bundle: switching tabs must never wait for a download (on a phone through a
@@ -340,6 +341,7 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
 function walletLabel(name: string): [string, string] {
   if (name === 'Mobile Wallet Adapter') return ['Wallet app on this phone', 'Phantom, Solflare or Seed Vault opens to approve'];
   if (name === PHANTOM_LINK_NAME) return ['Phantom app', 'Opens Phantom to approve, then comes back here'];
+  if (name === WC_NAME) return isPhone ? ['Other wallet apps', 'Pick yours from a list. It opens to approve; then come back here.'] : ['WalletConnect', 'Scan a QR code with a wallet on your phone'];
   return [name, 'Self-custody wallet on devnet'];
 }
 
