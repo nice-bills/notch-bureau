@@ -82,7 +82,7 @@ test('perf probe (4x CPU, 390x844)', async ({ browser }) => {
   await cdp.send('Network.clearBrowserCache');
   const t0 = Date.now();
   await page.goto('/', { waitUntil: 'load' });
-  await page.getByRole('heading', { name: /Borrow against your income/ }).waitFor();
+  await page.getByRole('heading', { name: /Credit from the money history/ }).waitFor();
   const load = await page.evaluate(async () => {
     await new Promise((r) => setTimeout(r, 1500));
     const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;

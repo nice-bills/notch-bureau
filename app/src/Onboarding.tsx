@@ -2,7 +2,7 @@
 // then the wallet, at the moment it is needed. One question per screen, a tap answers it, Back always works and every
 // answer is kept on this phone (onboard.ts). The rest (inbox, waiting, the limit, the first loan) runs on the real
 // screens with the same progress bar.
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useUi, Banners } from './App';
 import { envelope, stamp, type Ink, type Motif } from './art';
 import { depositNeededFor, feeFor, payoffFor } from './notch';
@@ -93,18 +93,38 @@ function Pitch() {
     return html;
   }, []);
   const env = useMemo(() => envelope(), []);
+  const mark = useMemo(() => stamp(88, 104, { ink: 'verm', motif: 'kente', num: '120', cap: 'USDC', top: 'NOTCH', numSize: 30 }), []);
+  // Interactive hero: the envelope leans toward the finger (the stamp wall drifts the other way), and a tap stamps an
+  // example limit on it. Plain CSS variables, no re-render per move.
+  const root = useRef<HTMLElement>(null);
+  const [stamped, setStamped] = useState(false);
+  const lean = (e: React.PointerEvent) => {
+    const el = root.current;
+    if (!el || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const r = el.getBoundingClientRect();
+    const x = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width) * 2 - 1));
+    const y = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height) * 2 - 1));
+    el.style.setProperty('--lx', x.toFixed(3));
+    el.style.setProperty('--ly', y.toFixed(3));
+  };
+  const settle = () => { root.current?.style.setProperty('--lx', '0'); root.current?.style.setProperty('--ly', '0'); };
+  const press = () => { setStamped((v) => !v); buzz(stamped ? 6 : 18); };
   return (
-    <section className="welcome" aria-labelledby="p-h" data-step={0}>
+    <section ref={root} className={cx('welcome', 'welcome-live', stamped && 'is-stamped')} aria-labelledby="p-h" data-step={0} onPointerMove={lean} onPointerLeave={settle} onPointerUp={(e) => { if (e.pointerType !== 'mouse') settle(); }}>
       <div className="brandpill glass lens">
         <svg viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="8" fill="#111A33" /><path d="M8.5 18V8.5l9 9V8" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
         notch
       </div>
       <Banners />
       <div className="lede">
-        <h1 id="p-h">Borrow against your income, without showing it.</h1>
-        <p>Your provider emails a statement to your own Notch inbox. A sealed computer reads it, and only a signed limit comes back.</p>
+        <h1 id="p-h">Credit from the money history you already have.</h1>
+        <p>No bank account, no credit score, no land or car to pledge. Your money statement is the proof.</p>
       </div>
-      <div className="hero" aria-hidden="true"><svg viewBox="0 0 312 204" dangerouslySetInnerHTML={{ __html: env }} /></div>
+      <button type="button" className="hero" onClick={press} aria-pressed={stamped} aria-label={stamped ? 'Example limit stamped. Tap to clear.' : 'Tap the envelope to see an example limit'}>
+        <svg viewBox="0 0 312 204" aria-hidden="true" dangerouslySetInnerHTML={{ __html: env }} />
+        <span className="hero-mark" aria-hidden="true"><svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: mark }} /></span>
+      </button>
+      <p className="hero-hint" aria-live="polite">{stamped ? '120 USDC to borrow (example). Yours comes from your statement.' : 'Tap the envelope'}</p>
       <div className="wall" aria-hidden="true"><div className="rows" dangerouslySetInnerHTML={{ __html: wall }} /></div>
       <div className="foot">
         <Btn onClick={() => goStep(STEP.goal)}>Get started</Btn>

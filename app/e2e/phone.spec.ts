@@ -48,7 +48,7 @@ test.describe('Phone review fixes', () => {
     const { page } = s;
     try {
       await page.goto('/');
-      await expect(page.getByRole('heading', { name: 'Borrow against your income, without showing it.' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Credit from the money history you already have.' })).toBeVisible();
       await expect(page.getByRole('navigation', { name: 'Sections' })).toHaveCount(0); // the tab bar covered "Get started"
       await connectWallet(page, w);
       await expect(page.getByRole('navigation', { name: 'Sections' })).toBeVisible();

@@ -659,3 +659,15 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .h p.works-today{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:6px 12px;border-radius:14px;background:var(--green-tint);color:var(--green);font-size:14px;font-weight:600;max-width:none}
 .h p.works-today .ic{width:16px;height:16px}
 .onb-honest{margin-top:16px}
+
+/* Interactive welcome: the envelope leans toward the finger, the stamp wall drifts the other way, a tap stamps a limit */
+.welcome-live{--lx:0;--ly:0}
+.welcome-live .hero{display:block;border:0;padding:0;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent;transform:perspective(700px) rotate(-4deg) rotateY(calc(var(--lx) * 9deg)) rotateX(calc(var(--ly) * -7deg));transition:transform .5s cubic-bezier(.2,.8,.2,1)}
+.welcome-live .hero:active{transform:perspective(700px) rotate(-4deg) scale(.97)}
+.welcome-live .hero:focus-visible{outline:2px solid var(--ultra);outline-offset:6px;border-radius:10px}
+.welcome-live .wall .rows{transform:rotate(-7deg) translate(calc(var(--lx) * -10px),calc(var(--ly) * -6px));transition:transform .7s cubic-bezier(.2,.8,.2,1)}
+.hero-mark{position:absolute;left:42%;top:8%;width:22%;opacity:0;transform:scale(1.7) rotate(-14deg);pointer-events:none;filter:drop-shadow(0 6px 8px rgba(17,26,51,.25))}
+.hero-mark svg{display:block;width:100%;height:auto;filter:none}
+.is-stamped .hero-mark{opacity:1;transform:scale(1) rotate(-8deg);transition:transform .22s cubic-bezier(.3,1.4,.5,1),opacity .12s ease-out}
+.hero-hint{position:relative;z-index:3;margin:14px auto 0;max-width:30ch;text-align:center;font-size:13px;color:#5A6070;min-height:2.6em}
+@media (prefers-reduced-motion:reduce){.welcome-live .hero,.welcome-live .wall .rows,.is-stamped .hero-mark{transition:none}}
