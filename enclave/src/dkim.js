@@ -1,16 +1,53 @@
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
 import { dkimVerify } from 'mailauth';
+
+// DKIM key lookup: the system resolver first, then DNS over HTTPS. Plain DNS (UDP port 53) is often slow or blocked on
+// phone hotspots and cloud hosts, and a lookup that times out must not turn a genuine statement into a refusal.
+const DOH = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
+const TYPES = { TXT: 16, MX: 15, A: 1, AAAA: 28, CNAME: 5 };
+const dnsErr = (code) => Object.assign(new Error(`DNS ${code}`), { code });
+async function dohResolve(name, rrtype, fetchImpl = fetch) {
+  let last = dnsErr('ETIMEOUT');
+  for (const base of DOH) {
+    try {
+      const r = await fetchImpl(`${base}?name=${encodeURIComponent(name)}&type=${rrtype}`, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(5000) });
+      if (!r.ok) { last = dnsErr('ESERVFAIL'); continue; }
+      const j = await r.json();
+      if (j.Status === 3) throw dnsErr('ENOTFOUND');
+      if (j.Status !== 0) { last = dnsErr('ESERVFAIL'); continue; }
+      const rows = (j.Answer || []).filter((a) => a.type === TYPES[rrtype]).map((a) => String(a.data));
+      if (!rows.length) throw dnsErr('ENODATA');
+      // TXT data comes as one or more quoted chunks: "v=DKIM1; k=rsa; " "p=MIIB..."
+      return rrtype === 'TXT' ? rows.map((d) => (d.match(/"((?:[^"\\]|\\.)*)"/g) || [d]).map((c) => c.replace(/^"|"$/g, '').replace(/\\(.)/g, '$1'))) : rows;
+    } catch (e) {
+      if (e.code === 'ENOTFOUND' || e.code === 'ENODATA') throw e;
+      last = e.code ? e : dnsErr('ETIMEOUT');
+    }
+  }
+  throw last;
+}
+export async function fallbackResolver(name, rrtype, { system = (n, t) => dns.resolve(n, t), fetchImpl } = {}) {
+  try { return await system(name, rrtype); } catch (e) {
+    if (e.code === 'ENOTFOUND' || e.code === 'ENODATA') throw e; // a real answer: the record does not exist
+    return dohResolve(name, rrtype, fetchImpl);
+  }
+}
 
 // Verify the DKIM signatures on a raw .eml and return the passing one we trust.
 // `trusted` is a list of signing domains whose emails count as income evidence.
 export async function verifyEmail(eml, { trusted, resolver } = {}) {
-  const res = await dkimVerify(eml, resolver ? { resolver } : {});
+  const res = await dkimVerify(eml, { resolver: resolver ?? fallbackResolver });
   const passing = (res.results || []).filter((r) => r.status?.result === 'pass');
   // With several trusted signatures, take one that covers To: the strict recipient rule applies whenever To IS signed.
   const ours = passing.filter((r) => isTrusted(r.signingDomain, trusted));
   const hit = ours.find((r) => signedNames(r).includes('to')) ?? ours[0];
   if (!hit) {
     const seen = (res.results || []).map((r) => `${r.signingDomain}:${r.status?.result}`).join(', ');
+    // The signer's key could not be fetched right now: not the email's fault, so the inbox keeps the address open and retries.
+    if (!passing.length && (res.results || []).some((r) => r.status?.result === 'temperror' && isTrusted(r.signingDomain, trusted))) {
+      return { ok: false, retry: true, reason: `could not fetch the sender's signing key right now (${seen}); it will be retried` };
+    }
     return { ok: false, reason: passing.length ? `untrusted signer (${seen})` : `no passing DKIM signature (${seen || 'none'})` };
   }
   // Everything below is read from what the VERIFIER saw: its split of the header block (res.headers) and the list of

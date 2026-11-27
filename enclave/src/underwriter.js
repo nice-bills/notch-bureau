@@ -121,7 +121,7 @@ export class Underwriter {
   async submit(eml, wallet, { recipient, issuedAt, device, deviceProven = false, dkim } = {}) {
     bs58.decode(wallet); // throws on a bad address
     const v = await verifyEmail(eml, dkim ?? { trusted: this.trusted, resolver: this.resolver });
-    if (!v.ok) return { ok: false, reason: v.reason };
+    if (!v.ok) return { ok: false, reason: v.reason, ...(v.retry ? { retry: true } : {}) };
     if (recipient) {
       const why = recipientRefusal(v, recipient, { issuedAt, now: this.now() });
       if (why) return { ok: false, reason: why };
