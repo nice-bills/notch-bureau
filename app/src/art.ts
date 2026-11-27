@@ -3,7 +3,7 @@
 export type Ink = 'verm' | 'ultra' | 'ochre' | 'sea';
 const INK: Record<Ink, string> = { verm: '#D23F26', ultra: '#2B46C2', ochre: '#B97A14', sea: '#1C6E5C' };
 const PAPER: Record<Ink, string> = { verm: '#FFF8F1', ultra: '#F6F7FF', ochre: '#FFFAEC', sea: '#F3FAF6' };
-export type Motif = 'bank' | 'sun' | 'waves' | 'kente' | 'horn';
+export type Motif = 'bank' | 'sun' | 'waves' | 'kente' | 'horn' | 'shop' | 'cap' | 'bolt' | 'bill' | 'phone' | 'both';
 
 let n = 0;
 /** A perforated sheet edge: circles masked out of every side. */
@@ -24,6 +24,16 @@ function motif(kind: Motif, cx: number, cy: number, s: number, ink: string): str
   if (kind === 'kente') {
     const zig = (dy: number) => `M${cx - 24 * s} ${cy + dy}` + Array.from({ length: 4 }, () => `l${6 * s} ${-8 * s} ${6 * s} ${8 * s}`).join(' ');
     return g(`<path d="M${cx - 24 * s} ${cy - 12 * s}h${48 * s}M${cx - 24 * s} ${cy + 12 * s}h${48 * s}"/><path d="${zig(0)}"/><path d="${zig(6 * s)}" opacity=".45"/>`);
+  }
+  // the onboarding answers: a market stall, a mortarboard, a lightning bolt, a bill, a phone, and phone + bank
+  if (kind === 'shop') return g(`<path d="M${cx - 22 * s} ${cy - 6 * s}l${4 * s} ${-12 * s}h${36 * s}l${4 * s} ${12 * s}z"/>${[-11, 0, 11].map((x) => `<path d="M${cx + (x - 5.5) * s} ${cy - 6 * s}q${5.5 * s} ${7 * s} ${11 * s} 0"/>`).join('')}<path d="M${cx - 18 * s} ${cy - 2 * s}v${22 * s}h${36 * s}v${-22 * s}M${cx - 5 * s} ${cy + 20 * s}v${-11 * s}h${10 * s}v${11 * s}"/>`);
+  if (kind === 'cap') return g(`<path d="M${cx} ${cy - 16 * s}l${26 * s} ${10 * s}-${26 * s} ${10 * s}-${26 * s}-${10 * s}z"/><path d="M${cx - 15 * s} ${cy - 1 * s}v${11 * s}c${8 * s} ${7 * s} ${22 * s} ${7 * s} ${30 * s} 0v${-11 * s}M${cx + 22 * s} ${cy - 4 * s}v${14 * s}"/><circle cx="${cx + 22 * s}" cy="${cy + 12 * s}" r="${2 * s}"/>`);
+  if (kind === 'bolt') return g(`<path d="M${cx + 4 * s} ${cy - 22 * s}l${-16 * s} ${24 * s}h${12 * s}l${-4 * s} ${20 * s}l${16 * s} ${-24 * s}h${-12 * s}z"/><path d="M${cx - 22 * s} ${cy - 10 * s}l${-4 * s} ${-3 * s}M${cx + 20 * s} ${cy + 8 * s}l${4 * s} ${3 * s}M${cx - 20 * s} ${cy + 12 * s}h${-5 * s}M${cx + 20 * s} ${cy - 12 * s}h${5 * s}"/>`);
+  if (kind === 'bill') return g(`<path d="M${cx - 14 * s} ${cy - 20 * s}h${28 * s}v${40 * s}l${-4.7 * s} ${-3 * s}-${4.7 * s} ${3 * s}-${4.7 * s}-${3 * s}-${4.7 * s} ${3 * s}-${4.7 * s}-${3 * s}-${4.7 * s} ${3 * s}z"/>${[-12, -5, 2].map((y) => `<path d="M${cx - 8 * s} ${cy + y * s}h${16 * s}"/>`).join('')}<path d="M${cx - 8 * s} ${cy + 10 * s}h${8 * s}"/>`);
+  if (kind === 'phone') return g(`<rect x="${cx - 11 * s}" y="${cy - 21 * s}" width="${22 * s}" height="${42 * s}" rx="${4 * s}"/><path d="M${cx - 3 * s} ${cy + 16 * s}h${6 * s}"/><path d="M${cx - 6 * s} ${cy - 4 * s}l${4 * s} ${4 * s} ${8 * s}-${8 * s}"/><path d="M${cx + 16 * s} ${cy - 12 * s}a${8 * s} ${8 * s} 0 0 1 0 ${12 * s}M${cx + 20 * s} ${cy - 16 * s}a${13 * s} ${13 * s} 0 0 1 0 ${20 * s}"/>`);
+  if (kind === 'both') {
+    const k = s * 0.62;
+    return motif('phone', cx - 13 * s, cy, k, ink) + motif('bank', cx + 12 * s, cy + 1 * s, k * 0.82, ink) + g(`<path d="M${cx - 1 * s} ${cy - 18 * s}v${36 * s}" stroke-dasharray="${2 * s} ${3 * s}"/>`);
   }
   return g(`<path d="M${cx - 20 * s} ${cy + 2 * s}c0 ${-14 * s} ${22 * s} ${-16 * s} ${26 * s} ${-4 * s}c${3 * s} ${9 * s} ${-8 * s} ${14 * s} ${-14 * s} ${8 * s}c${-5 * s} ${-5 * s} 0 ${-12 * s} ${7 * s} ${-10 * s}"/><path d="M${cx + 6 * s} ${cy - 2 * s}l${16 * s} ${-10 * s}v${22 * s}z"/>`);
 }

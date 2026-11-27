@@ -599,7 +599,7 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .onb-top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:16px;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 12px;background:var(--bg)}
 .native .onb-top{padding-top:calc(12px + var(--safe-area-inset-top,env(safe-area-inset-top,0px)))}
 .onb-bar{flex:1;height:6px;border-radius:3px;background:rgba(14,15,19,.08);overflow:hidden}
-.onb-bar i{display:block;height:100%;border-radius:3px;background:var(--ink);transform-origin:left;transition:transform .35s var(--ease-out)}
+.onb-bar i{display:block;height:100%;border-radius:3px;background:var(--ink);transform-origin:left;transition:transform .55s var(--ease-out)}
 .nav.with-bar{flex-wrap:wrap;row-gap:10px}
 .nav.with-bar .onb-bar{flex:1 0 100%;height:4px}
 .onb-body{padding:8px 24px 0;display:flex;flex-direction:column;flex:1}
@@ -611,7 +611,7 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .onb-links{display:flex;justify-content:center;gap:4px;flex-wrap:wrap}
 .onb-links .textlink{margin:4px 0 0}
 /* the answers: big rows, a tap picks and moves on */
-.choices{margin-top:auto;padding:24px 0 calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:8px}
+.choices{margin-top:20px;display:flex;flex-direction:column;gap:8px}
 .choice{display:flex;align-items:center;gap:16px;min-height:64px;padding:12px 16px;border-radius:20px;background:var(--paper);text-align:left;width:100%;
   box-shadow:0 1px 2px rgba(14,15,19,.04),0 8px 24px -16px rgba(14,15,19,.14),inset 0 0 0 1.5px transparent;transition:box-shadow .2s,transform .2s var(--spring)}
 .choice:active{transform:scale(.98)}
@@ -621,10 +621,15 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .choice-ico{width:44px;height:44px;border-radius:50%;background:var(--lilac-tint);color:var(--lilac);display:grid;place-items:center;flex:none}
 .choice-ico .ic{width:22px;height:22px}
 .choice-ck{width:24px;height:24px;border-radius:50%;border:1.5px solid rgba(17,26,51,.2);display:grid;place-items:center;flex:none;transition:background-color .15s,border-color .15s}
-.choice-ck .ic{width:14px;height:14px;stroke:#fff;stroke-width:3;opacity:0;transform:scale(.4);transition:opacity .15s,transform .25s var(--spring)}
+.choice-ck svg{width:14px;height:14px;fill:none;stroke:#fff;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.choice-ck path{stroke-dasharray:1;stroke-dashoffset:1;transition:stroke-dashoffset .26s var(--ease-out) .05s}
 .choice.on{box-shadow:0 1px 2px rgba(14,15,19,.04),0 8px 24px -16px rgba(14,15,19,.14),inset 0 0 0 1.5px var(--ink)}
 .choice.on .choice-ck{background:var(--ink);border-color:var(--ink)}
-.choice.on .choice-ck .ic{opacity:1;transform:none}
+.choice.on .choice-ck path{stroke-dashoffset:0}
+.choice.on .choice-ck{animation:ck-pop .32s var(--spring)}
+.choice.on .choice-ico{animation:ico-pop .42s var(--spring)}
+@keyframes ck-pop{from{transform:scale(.6)}}
+@keyframes ico-pop{40%{transform:scale(1.14) rotate(-6deg)}}
 /* belief screens */
 .onb-facts{list-style:none;padding:0;margin:24px 0 0}
 .onb-facts .fact{background:var(--paper);box-shadow:0 1px 2px rgba(14,15,19,.04)}
@@ -655,7 +660,7 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .for-goal{margin:0 0 4px;font-size:12px;font-weight:600;color:var(--lilac);letter-spacing:.08em;text-transform:uppercase}
 /* a step being checked: a still ring (no spinner that could turn forever) */
 .log li.live .ck{animation:none;border-color:var(--ultra);border-width:2px;box-shadow:inset 0 0 0 4px var(--bg),inset 0 0 0 12px var(--ultra)}
-@media (prefers-reduced-motion:reduce){.onb-bar i,.choice,.choice-ck .ic{transition:none}}
+@media (prefers-reduced-motion:reduce){.onb-bar i,.choice,.choice-ck path{transition:none}}
 .h p.works-today{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:6px 12px;border-radius:14px;background:var(--green-tint);color:var(--green);font-size:14px;font-weight:600;max-width:none}
 .h p.works-today .ic{width:16px;height:16px}
 .onb-honest{margin-top:16px}
@@ -691,3 +696,143 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .welcome-dev{margin:2px 0 0;text-align:center;font-size:11px;color:var(--soft)}
 @media (max-height:760px){.welcome-live h1{font-size:clamp(34px,10vw,44px)}.welcome-live .hero{margin-top:18px}}
 @media (prefers-reduced-motion:reduce){.st,.welcome-live .hero,.welcome-live .wall .rows{transition:none;animation:none}.is-stamped .hero-mark{animation:none}}
+
+
+/* ---------- onboarding, alive (Onboarding.tsx): no empty bands, every screen shows its idea moving ---------- */
+/* The steps fill the small viewport (Safari's bars showing), the main button stays stuck above the browser bar. */
+.app:has(.onb[data-step]){padding-bottom:0}
+.app:has(.onb[data-step]) > footer.help{display:none}
+.onb[data-step]{min-height:100vh;min-height:100svh}
+.onb-screen{flex:1;display:flex;flex-direction:column;min-height:0}
+.onb-screen .onb-body{padding-bottom:16px}
+.onb-screen .onb-foot{padding-top:16px}
+.onb-foot .welcome-dev{margin-top:6px}
+.onb-facts{margin-top:14px;gap:6px}
+.onb-facts .fact{padding:10px 16px}
+.onb-facts .fact small{font-size:14px}
+
+/* screens slide in the way you are going: forward from the right, Back from the left */
+.onb-screen[data-dir=fwd] .onb-body{animation:onb-fwd .34s var(--ease-out) backwards}
+.onb-screen[data-dir=back] .onb-body{animation:onb-back .34s var(--ease-out) backwards}
+@keyframes onb-fwd{from{opacity:0;transform:translateX(28px)}}
+@keyframes onb-back{from{opacity:0;transform:translateX(-28px)}}
+/* the cards and rows deal in one after another (backwards fill only, so press feedback still works after) */
+.onb-screen .choice,.onb-screen .onb-facts .fact,.onb-screen .onb-steps li{animation:onb-up .42s var(--ease-out) backwards;animation-delay:calc(110ms + var(--i,0) * 60ms)}
+@keyframes onb-up{from{opacity:0;transform:translateY(12px)}}
+.choice{transition:box-shadow .2s,transform .16s var(--ease-out)}
+.choice:active{transform:scale(.97)}
+
+/* the illustration under the content: postal paper with a faint cancel-dot grid; it takes the rest of the screen */
+.onb-stage{position:relative;flex:1 1 auto;margin-top:20px;border-radius:24px;background-color:#FBFAF6;
+  background-image:radial-gradient(rgba(17,26,51,.075) 1px,transparent 1.3px);background-size:14px 14px;box-shadow:inset 0 0 0 1px rgba(17,26,51,.05);
+  -webkit-tap-highlight-color:transparent}
+.onb-stage svg{overflow:visible}
+
+/* 1, 2: the stamp fan; the picked one thuds to the front and gets a postmark */
+.sfan{min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;overflow:hidden;padding:24px 0 16px}
+.sf-row{position:relative;width:clamp(84px,min(28vw,15vh),116px);aspect-ratio:88/104}
+.sf{position:absolute;inset:0;transition:transform .5s var(--spring),opacity .3s var(--ease-out)}
+.sf.off{opacity:.55}
+.sf-in{position:relative;display:block;width:100%;height:100%;animation:sf-deal .5s var(--ease-out) backwards;animation-delay:calc(160ms + var(--i,0) * 70ms)}
+@keyframes sf-deal{from{opacity:0;transform:translateY(36px) rotate(-8deg) scale(.9)}}
+.sf-svg{display:block;width:100%;height:100%;filter:drop-shadow(0 4px 6px rgba(17,26,51,.16))}
+.sf.on .sf-svg{filter:drop-shadow(0 12px 14px rgba(17,26,51,.26))}
+.pm{position:absolute;left:-22%;top:50%;width:112%;height:auto;transform:rotate(-9deg);fill:none;stroke:rgba(17,26,51,.6);stroke-width:1.5;stroke-linecap:round;pointer-events:none;mix-blend-mode:multiply}
+.pm circle,.pm path{stroke-dasharray:1;stroke-dashoffset:1;animation:pm-draw .42s var(--ease-out) .24s forwards}
+.pm path:nth-of-type(2){animation-delay:.3s}.pm path:nth-of-type(3){animation-delay:.36s}.pm path:nth-of-type(4){animation-delay:.42s}
+.pm text{fill:rgba(17,26,51,.62);stroke:none;font:700 7px var(--sans,Inter),sans-serif;letter-spacing:.12em;opacity:0;animation:pm-ink .2s ease-out .4s forwards}
+@keyframes pm-draw{to{stroke-dashoffset:0}}
+@keyframes pm-ink{to{opacity:1}}
+.sf-cap{margin:0;font-size:14px;font-weight:600;color:var(--soft);text-align:center;animation:onb-up .3s var(--ease-out) backwards}
+.sfan.picked .sf-cap{color:var(--ink)}
+
+/* 3: the statement goes into the sealed box; only the limit stamp comes out */
+.pv{min-height:132px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px 8px 10px;cursor:pointer}
+.pv-lane{position:relative;display:flex;align-items:center;gap:14px}
+.pv-slot{position:relative;width:64px;height:80px}
+.pv-doc{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;gap:6px;padding:9px 8px;border-radius:6px;background:#fff;box-shadow:0 1px 2px rgba(14,15,19,.08),0 8px 16px -10px rgba(14,15,19,.3);
+  opacity:0;transform:translateX(90px) scale(.5);animation:pv-doc 1.5s var(--ease-in-out) .15s backwards}
+.pv-doc b{font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--soft)}
+.pv-doc i{display:block;height:5px;border-radius:3px;background:rgba(17,26,51,.12)}
+@keyframes pv-doc{0%{opacity:0;transform:translateY(10px)}16%{opacity:1;transform:none}50%{opacity:1;transform:none}88%{opacity:1;transform:translateX(90px) scale(.55)}100%{opacity:0;transform:translateX(90px) scale(.5)}}
+.pv-ghost{position:absolute;inset:0;display:grid;place-items:center;border:1.5px dashed rgba(17,26,51,.2);border-radius:6px;font-size:11px;font-weight:600;color:var(--faint);animation:pm-in .4s var(--ease-out) 2.3s backwards}
+@keyframes pm-in{from{opacity:0}}
+.pv-box{position:relative;z-index:2;width:88px;height:88px;border-radius:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;overflow:hidden;color:#fff;
+  background:repeating-linear-gradient(45deg,rgba(255,255,255,.05) 0 2px,transparent 2px 6px),#111A33;box-shadow:0 14px 24px -14px rgba(17,26,51,.6),inset 0 1px 0 rgba(255,255,255,.12);
+  animation:pv-gulp .36s var(--ease-out) 1.38s}
+@keyframes pv-gulp{40%{transform:scale(1.06,.96)}}
+.pv-box small{font-size:9px;font-weight:700;letter-spacing:.16em;opacity:.8}
+.pv-lock{width:30px;height:30px;fill:none;stroke:#fff;stroke-width:1.8;stroke-linecap:round}
+.pv-shackle{animation:pv-shut .2s var(--ease-out) 1.3s backwards}
+@keyframes pv-shut{from{transform:translateY(-3px)}}
+.pv-scan{position:absolute;left:0;right:0;top:0;height:34%;background:linear-gradient(transparent,rgba(157,138,230,.6),transparent);opacity:0;animation:pv-scan .6s var(--ease-in-out) 1.45s}
+@keyframes pv-scan{from{opacity:1;transform:translateY(-100%)}to{opacity:1;transform:translateY(300%)}}
+.pv-out{width:58px;height:68px;transform:rotate(-6deg);animation:pv-out .5s var(--ease-out) 1.95s backwards}
+.pv-out svg{display:block;width:100%;height:100%;filter:drop-shadow(0 8px 10px rgba(17,26,51,.25))}
+@keyframes pv-out{0%{opacity:0;transform:translateX(-54px) scale(.5)}60%{opacity:1;transform:translateX(4px) scale(1.14) rotate(-11deg)}100%{transform:rotate(-6deg)}}
+.pv-legend{display:grid;grid-template-columns:64px 88px 58px;gap:14px;white-space:nowrap;text-align:center;font-size:11px;font-weight:600;color:var(--soft)}
+.pv-legend span{animation:pm-in .3s var(--ease-out) backwards}
+.pv-legend span:nth-child(2){animation-delay:1.35s}.pv-legend span:nth-child(3){animation-delay:2.1s}
+
+/* 4: the cost as stamps landing in order, the deposit flying back at the end */
+.cs{min-height:128px;display:flex;flex-direction:column;justify-content:center;padding:16px 12px 12px;cursor:pointer}
+.cs-row{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;width:100%;max-width:360px;margin:0 auto}
+.cs-st{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0;animation:cs-thud .42s var(--ease-out) backwards;animation-delay:calc(180ms + var(--i,0) * 280ms)}
+.cs-st svg{display:block;width:100%;max-width:72px;height:auto;aspect-ratio:88/104;filter:drop-shadow(0 4px 6px rgba(17,26,51,.18))}
+.cs-st small{font-size:10.5px;font-weight:600;color:var(--soft);white-space:nowrap}
+.cs-st.back small{color:var(--green)}
+.cs-st.back{animation:cs-back .72s var(--ease-in-out) 1.32s backwards}
+@keyframes cs-thud{0%{opacity:0;transform:translateY(-22px) scale(1.4) rotate(-8deg)}60%{opacity:1;transform:scale(.94) rotate(1deg)}100%{transform:none}}
+@keyframes cs-back{0%{opacity:0;transform:translateX(calc(-300% - 18px)) scale(.8)}15%{opacity:1}55%{transform:translate(calc(-150% - 9px),-42%) rotate(10deg) scale(1.06)}100%{transform:none}}
+.onb-screen .onb-rcpt .r{animation:onb-up .36s var(--ease-out) backwards;animation-delay:calc(300ms + var(--i,0) * 280ms)}
+
+/* 5: the wallet's two asks, played once on a small phone */
+.wp{min-height:220px;display:grid;place-items:center;padding:16px;cursor:pointer;overflow:hidden}
+.wp-phone{position:relative;width:164px;height:196px;border-radius:30px;background:var(--well);overflow:hidden;box-shadow:inset 0 0 0 6px #111A33,0 20px 32px -20px rgba(17,26,51,.5)}
+.wp-phone::before{content:"";position:absolute;left:50%;top:12px;width:44px;height:6px;margin-left:-22px;border-radius:3px;background:#111A33}
+.wp-sheet{position:absolute;left:12px;right:12px;bottom:12px;display:flex;flex-direction:column;gap:7px;padding:12px;border-radius:18px;background:#fff;box-shadow:0 -6px 18px -10px rgba(17,26,51,.3)}
+.wp-sheet b{font-size:12px;font-weight:650}
+.wp-sheet em{display:block;height:5px;width:90%;border-radius:3px;background:rgba(17,26,51,.1)}
+.wp-a{transform:translateY(120%);animation:wp-a 2.1s var(--ease-out) .25s backwards}
+@keyframes wp-a{0%{transform:translateY(120%)}16%{transform:none}84%{transform:none}100%{transform:translateY(120%)}}
+.wp-row{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:10px}
+.wp-row i{width:18px;height:18px;border-radius:50%;flex:none}
+.wp-row em{flex:1;width:auto}
+.wp-row svg{width:14px;height:14px;fill:none;stroke:var(--green);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.wp-row path{stroke-dasharray:1;stroke-dashoffset:1}
+.wp-row.hit{background:var(--lilac-tint);animation:wp-hit .3s var(--ease-out) 1.05s backwards}
+.wp-row.hit path{stroke-dashoffset:0;animation:wp-tick .3s var(--ease-out) 1.2s backwards}
+@keyframes wp-hit{0%{background:transparent;transform:none}50%{transform:scale(.95)}}
+@keyframes wp-tick{from{stroke-dashoffset:1}}
+.wp-b{animation:wp-b .45s var(--ease-out) 2.3s backwards}
+@keyframes wp-b{from{transform:translateY(120%)}}
+.wp-free{align-self:flex-start;margin-top:2px;padding:3px 8px;border-radius:8px;background:var(--green-tint);color:var(--green);font-size:10px;font-weight:650}
+.wp-sign{margin-top:2px;padding:7px 0;border-radius:12px;background:#111A33;color:#fff;font-size:11px;font-weight:650;text-align:center;animation:wp-press .26s var(--ease-out) 2.95s}
+@keyframes wp-press{50%{transform:scale(.94)}}
+.wp-seal{position:absolute;right:-6px;top:-22px;width:46px;height:54px;transform:rotate(9deg);animation:wp-seal .42s var(--ease-out) 3.15s backwards}
+.wp-seal svg{display:block;width:100%;height:100%;filter:drop-shadow(0 6px 8px rgba(17,26,51,.25))}
+@keyframes wp-seal{0%{opacity:0;transform:translateY(-20px) scale(1.7) rotate(-14deg)}60%{opacity:1;transform:scale(.94) rotate(11deg)}100%{transform:rotate(9deg)}}
+/* the matching step lights up as the phone plays it */
+.onb-steps .n{animation:n-pop .4s var(--spring) .4s}
+.onb-steps li:nth-child(2) .n{animation-delay:2.35s}
+@keyframes n-pop{50%{transform:scale(1.3);box-shadow:0 0 0 6px var(--lilac-tint)}}
+
+@media (max-height:700px){.sfan{min-height:170px;padding-top:16px}.wp{min-height:180px;padding:10px}.wp-phone{zoom:.86}}
+/* tall phones: the pictures grow with the room they get, so the card never looks empty */
+@media (min-height:820px){
+  .pv-lane,.pv-legend{zoom:1.35}
+  .wp-phone{zoom:1.3}
+  .cs-row{grid-template-columns:repeat(3,1fr);row-gap:14px;column-gap:10px;max-width:320px}
+  .cs-st svg{max-width:96px}
+  .cs-st small{font-size:12px}
+  /* the deposit drops back down from the "Down" stamp to the slot right under it */
+  .cs-st.back{animation-name:cs-back-tall}
+}
+@keyframes cs-back-tall{0%{opacity:0;transform:translateY(calc(-100% - 14px)) scale(.8)}15%{opacity:1}55%{transform:translate(34%,-48%) rotate(10deg) scale(1.06)}100%{transform:none}}
+@media (min-height:900px) and (min-width:400px){.pv-lane,.pv-legend{zoom:1.4}.wp-phone{zoom:1.45}}
+@media (prefers-reduced-motion:reduce){
+  .onb-screen[data-dir] .onb-body{animation:pm-in .2s ease-out backwards}
+  .onb-screen .choice,.onb-screen .onb-facts .fact,.onb-screen .onb-steps li,.onb-screen .onb-rcpt .r,.onb-stage *,.onb-steps .n,.choice.on .choice-ck,.choice.on .choice-ico{animation:none!important}
+  .pm circle,.pm path{stroke-dashoffset:0}.pm text{opacity:1}
+  .sf{transition:opacity .2s}
+}

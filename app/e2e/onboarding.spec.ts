@@ -16,6 +16,11 @@ const NARROW = { width: 360, height: 740 };
 async function shot(page: Page, n: number, name: string) {
   fs.mkdirSync(screensDir, { recursive: true });
   await page.waitForTimeout(400); // let the step settle (progress bar, stamp drop)
+  // and let the one-shot illustrations finish (nothing on these screens loops, so this always ends)
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))),
+    new Promise((r) => setTimeout(r, 6000)),
+  ]));
   await page.screenshot({ path: path.join(screensDir, `onboarding-${String(n).padStart(2, '0')}-${name}.png`) });
 }
 async function rules(page: Page) {
@@ -26,6 +31,12 @@ async function rules(page: Page) {
   await expect(page.getByText(/✏|✎|^Edit$/)).toHaveCount(0);
   const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(sw, 'page scrolls sideways').toBeLessThanOrEqual(cw);
+  // nothing on the pitch and question screens moves forever (the waiting screen's breathing dot is its own, still, signal)
+  const forever = await page.evaluate(() => document.getAnimations().filter((a) => {
+    const el = (a.effect as KeyframeEffect | null)?.target;
+    return a.effect?.getComputedTiming().iterations === Infinity && !!el?.closest('.onb[data-step], .welcome-live');
+  }).length);
+  expect(forever, 'an endless animation').toBe(0);
 }
 
 test.describe('First-run onboarding', () => {

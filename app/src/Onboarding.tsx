@@ -11,12 +11,20 @@ import { Btn, Icon, cx } from './ui';
 import { GOALS, PAID, STEP, STEPS, forGoal, getOnboard, setOnboard, useOnboard, type Goal, type Paid } from './onboard';
 import { buzz } from './glass';
 
-/** The progress bar: always the same ten steps, from the promise to the first loan. */
+/** The progress bar: always the same ten steps, from the promise to the first loan. It remembers where it last stood,
+ * so moving to the next step (even onto a different screen, like Get your limit) fills from there instead of jumping. */
+let lastAt = -1;
 export function Progress({ at }: { at: number }) {
-  const pct = Math.round(((at + 1) / STEPS) * 100);
+  const [shown, setShown] = useState(() => (lastAt >= 0 && lastAt !== at ? lastAt : at));
+  useEffect(() => {
+    lastAt = at;
+    if (shown === at) return;
+    const f = requestAnimationFrame(() => requestAnimationFrame(() => setShown(at)));
+    return () => cancelAnimationFrame(f);
+  }, [at, shown]);
   return (
     <div className="onb-bar" role="progressbar" aria-label="Getting started" aria-valuemin={1} aria-valuemax={STEPS} aria-valuenow={at + 1} aria-valuetext={`Step ${at + 1} of ${STEPS}`}>
-      <i style={{ transform: `scaleX(${pct / 100})` }} />
+      <i style={{ transform: `scaleX(${(shown + 1) / STEPS})` }} />
     </div>
   );
 }
@@ -35,6 +43,13 @@ function backStep(from: number) {
   try { history.replaceState({ notchOnb: to }, ''); } catch { /* ignore */ }
 }
 
+const still = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+const LABEL: Record<number, string> = {
+  [STEP.goal]: 'What’s the money for?', [STEP.paid]: 'How does your money come in?', [STEP.private]: 'Your statement stays private',
+  [STEP.costs]: 'What it costs', [STEP.prime]: 'Connect your wallet',
+};
+
 export function Onboarding() {
   const o = useOnboard();
   // Browser or Android Back between questions.
@@ -50,28 +65,45 @@ export function Onboarding() {
   let step = Math.min(o.step, STEP.prime);
   if (step > STEP.goal && !o.goal) step = STEP.goal;
   if (step > STEP.paid && !o.paid) step = STEP.paid;
+  // which way we moved: forward slides in from the right, Back from the left
+  const prev = useRef(step);
+  const dir = step < prev.current ? 'back' : 'fwd';
+  useEffect(() => { prev.current = step; }, [step]);
 
+  if (step === STEP.promise) return <Pitch />;
+  let screen: ReactNode;
   switch (step) {
-    case STEP.promise: return <Pitch />;
-    case STEP.goal: return <Choose step={step} title="What’s the money for?" sub="Pick one. We set things up around it." options={GOALS.map((g) => ({ ...g, sub: undefined }))} value={o.goal} onPick={(g) => setOnboard({ goal: g as Goal })} />;
-    case STEP.paid: return <Choose step={step} title="How does your money come in?" sub="So we ask for the right statement." options={PAID} value={o.paid} onPick={(p) => setOnboard({ paid: p as Paid })} />;
-    case STEP.private: return <Private goal={o.goal} />;
-    case STEP.costs: return <Costs goal={o.goal} />;
-    default: return <Prime paid={o.paid} />;
+    case STEP.goal: screen = <Choose step={step} title="What’s the money for?" sub="Pick one. We set things up around it." options={GOALS.map((g) => ({ ...g, sub: undefined }))} art={GOAL_ART} value={o.goal} onPick={(g) => setOnboard({ goal: g as Goal })} caption={(id) => `For ${forGoal(id as Goal)}`} />; break;
+    case STEP.paid: screen = <Choose step={step} title="How does your money come in?" sub="So we ask for the right statement." options={PAID} art={PAID_ART} value={o.paid} onPick={(p) => setOnboard({ paid: p as Paid })} caption={(id) => PAID.find((x) => x.id === id)?.sub ?? ''} />; break;
+    case STEP.private: screen = <Private goal={o.goal} />; break;
+    case STEP.costs: screen = <Costs goal={o.goal} />; break;
+    default: screen = <Prime paid={o.paid} />;
   }
-}
-
-function Frame({ step, children, foot, label }: { step: number; children: ReactNode; foot?: ReactNode; label: string }) {
   return (
-    <section className="onb" aria-label={label} data-step={step}>
+    <section className="onb" aria-label={LABEL[step]} data-step={step}>
       <div className="onb-top">
         <button type="button" className="circ glass lens tap" onClick={() => backStep(step)} aria-label="Back" data-onb-back><Icon name="back" /></button>
         <Progress at={step} />
       </div>
-      <div className="onb-body">{children}</div>
-      {foot && <div className="onb-foot">{foot}</div>}
+      <div key={step} className="onb-screen" data-dir={dir}>{screen}</div>
     </section>
   );
+}
+
+/** One onboarding screen: the content, then (if any) the main button, kept in reach above the browser bar. */
+function Frame({ children, foot }: { children: ReactNode; foot?: ReactNode }) {
+  return (
+    <>
+      <div className="onb-body">{children}</div>
+      {foot && <div className="onb-foot">{foot}<p className="welcome-dev">Solana devnet only. Test money, no real funds.</p></div>}
+    </>
+  );
+}
+
+/** Replays a one-shot illustration when tapped (the sequence never loops on its own). */
+function useReplay() {
+  const [n, setN] = useState(0);
+  return [n, () => { if (!still()) { setN((x) => x + 1); buzz(6); } }] as const;
 }
 
 // ---- 0. the promise: a full-page stamp wall you can play with ----------------------------------------------------
@@ -201,65 +233,182 @@ function Pitch() {
 }
 
 // ---- 1, 2. one question, tap to answer -----------------------------------------------------------------------------
+// The answers sit right under the question; below them, a fan of stamps, one per answer. Picking one thuds its stamp
+// down in front and postmarks it, then the next question slides in.
 type Opt = { id: string; label: string; sub?: string; icon: Parameters<typeof Icon>[0]['name'] };
-function Choose({ step, title, sub, options, value, onPick }: { step: number; title: string; sub: string; options: Opt[]; value?: string; onPick: (id: string) => void }) {
+type Art = Record<string, { ink: Ink; motif: Motif; cap: string }>;
+const GOAL_ART: Art = {
+  stock: { ink: 'ochre', motif: 'shop', cap: 'SHOP' },
+  school: { ink: 'ultra', motif: 'cap', cap: 'SCHOOL' },
+  emergency: { ink: 'verm', motif: 'bolt', cap: 'URGENT' },
+  bills: { ink: 'sea', motif: 'bill', cap: 'BILLS' },
+};
+const PAID_ART: Art = {
+  momo: { ink: 'ochre', motif: 'phone', cap: 'MOMO' },
+  bank: { ink: 'ultra', motif: 'bank', cap: 'BANK' },
+  both: { ink: 'sea', motif: 'both', cap: 'BOTH' },
+};
+
+function Choose({ step, title, sub, options, art, value, onPick, caption }: { step: number; title: string; sub: string; options: Opt[]; art: Art; value?: string; onPick: (id: string) => void; caption: (id: string) => string }) {
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
+  const [thud, setThud] = useState(0);
   const pick = (id: string) => {
     onPick(id);
     buzz(8);
+    setThud((n) => n + 1);
     clearTimeout(timer.current);
-    // a beat to see the tick, then on to the next screen
-    timer.current = setTimeout(() => { if (getOnboard().step === step) goStep(step + 1); }, 240);
+    // a beat to see the stamp land, then on to the next screen
+    timer.current = setTimeout(() => { if (getOnboard().step === step) goStep(step + 1); }, still() ? 240 : 620);
   };
   return (
-    <Frame step={step} label={title}>
+    <Frame>
       <h1 className="onb-h">{title}</h1>
       <p className="onb-p">{sub}</p>
       <div className="choices" role="radiogroup" aria-label={title}>
-        {options.map((x) => (
-          <button key={x.id} type="button" role="radio" aria-checked={value === x.id} className={cx('choice tap', value === x.id && 'on')} onClick={() => pick(x.id)}>
+        {options.map((x, i) => (
+          <button key={x.id} type="button" role="radio" aria-checked={value === x.id} className={cx('choice tap', value === x.id && 'on')} style={{ '--i': i } as React.CSSProperties} onClick={() => pick(x.id)}>
             <span className="choice-ico"><Icon name={x.icon} /></span>
             <span className="t"><b>{x.label}</b>{x.sub && <small>{x.sub}</small>}</span>
-            <span className="choice-ck" aria-hidden="true"><Icon name="check" /></span>
+            <span className="choice-ck" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" pathLength={1} /></svg></span>
           </button>
         ))}
       </div>
+      <StampFan ids={options.map((x) => x.id)} art={art} value={value} thud={thud} caption={value ? caption(value) : 'Pick one above'} />
     </Frame>
   );
 }
 
+/** The stamps, fanned out. The picked one comes to the front with a thud, a postmark and a puff of ink. */
+function StampFan({ ids, art, value, thud, caption }: { ids: string[]; art: Art; value?: string; thud: number; caption: string }) {
+  const svgs = useMemo(() => Object.fromEntries(ids.map((id) => [id, stamp(88, 104, { ...art[id], num: '', top: 'NOTCH', ms: 0.92 })])), [ids, art]);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!thud || still() || !value) return;
+    const el = box.current?.querySelector<HTMLElement>(`[data-id="${value}"] .sf-in`);
+    if (!el?.animate) return;
+    el.animate([
+      { transform: 'translateY(-46px) scale(1.5) rotate(-10deg)', opacity: 0.4, filter: 'drop-shadow(0 26px 18px rgba(17,26,51,.25))' },
+      { transform: 'translateY(0) scale(.94) rotate(1deg)', opacity: 1, offset: 0.62 },
+      { transform: 'none', opacity: 1 },
+    ], { duration: 420, easing: 'cubic-bezier(.23,1,.32,1)' });
+    // the paper under it gives a little on impact
+    box.current?.animate([{ transform: 'none' }, { transform: 'translateY(3px) scale(.99)', offset: 0.6 }, { transform: 'none' }], { duration: 420, easing: 'ease-out' });
+    const t = setTimeout(() => buzz(14), 260);
+    return () => clearTimeout(t);
+  }, [thud, value]);
+  const n = ids.length, p = value ? ids.indexOf(value) : -1;
+  return (
+    <div ref={box} className={cx('onb-stage sfan', p >= 0 && 'picked')} aria-hidden="true">
+      <div className="sf-row">
+        {ids.map((id, i) => {
+          const c = i - (n - 1) / 2;
+          // picked: the others close up into a hand of cards behind it
+          const k = (p >= 0 ? (i < p ? i : i - 1) : 0) - (n - 2) / 2;
+          const tf = p < 0
+            ? `translate(${c * 58}%, ${Math.abs(c) * 7}%) rotate(${c * 9}deg)`
+            : i === p
+              ? 'translate(0, -2%) rotate(-4deg) scale(1.22)'
+              : `translate(${k * 72}%, ${6 + Math.abs(k) * 6}%) rotate(${k * 13}deg) scale(.84)`;
+          return (
+            <span key={id} data-id={id} className={cx('sf', i === p && 'on', p >= 0 && i !== p && 'off')} style={{ transform: tf, zIndex: i === p ? 9 : 5 - Math.abs(Math.round(c)) }}>
+              <span className="sf-in" style={{ '--i': i } as React.CSSProperties}>
+                <svg className="sf-svg" viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: svgs[id] }} />
+                {i === p && <Postmark key={thud} />}
+              </span>
+            </span>
+          );
+        })}
+      </div>
+      <p className="sf-cap" key={caption}>{caption}</p>
+    </div>
+  );
+}
+
+/** A round postmark with wavy cancel lines that draw themselves over a stamp. */
+function Postmark() {
+  return (
+    <svg className="pm" viewBox="0 0 120 70">
+      <circle cx="34" cy="35" r="24" pathLength={1} />
+      <circle cx="34" cy="35" r="18.5" pathLength={1} />
+      <text x="34" y="32" textAnchor="middle">NOTCH</text>
+      <text x="34" y="44" textAnchor="middle">ACCRA</text>
+      {[22, 32, 42, 52].map((y) => <path key={y} d={`M62 ${y}q7-6 14 0t14 0t14 0t14 0`} pathLength={1} />)}
+    </svg>
+  );
+}
+
 // ---- 3. belief: it stays private (true facts only) -----------------------------------------------------------------
+// The statement slides into a sealed box; only a limit stamp comes out; where the statement was, an empty outline.
 function Private({ goal }: { goal?: Goal }) {
   const what = 'statement';
+  const [run, replay] = useReplay();
+  const out = useMemo(() => stamp(88, 104, { ink: 'verm', motif: 'kente', num: '#', cap: 'LIMIT', top: 'ONE NUMBER' }), []);
   return (
-    <Frame step={STEP.private} label="Your statement stays private" foot={<Btn onClick={() => goStep(STEP.costs)}>Next</Btn>}>
+    <Frame foot={<Btn onClick={() => goStep(STEP.costs)}>Next</Btn>}>
       <p className="onb-eyebrow">For {forGoal(goal)}</p>
       <h1 className="onb-h">Your {what} stays private.</h1>
+      <div className="onb-stage pv" key={run} onClick={replay} aria-hidden="true">
+        <div className="pv-lane">
+          <div className="pv-slot">
+            <span className="pv-ghost">deleted</span>
+            <div className="pv-doc">
+              <b>Statement</b>
+              {[0.9, 0.7, 0.82, 0.6, 0.76].map((w, i) => <i key={i} style={{ width: `${w * 100}%` }} />)}
+            </div>
+          </div>
+          <div className="pv-box">
+            <span className="pv-scan" />
+            <svg viewBox="0 0 24 24" className="pv-lock"><path className="pv-shackle" d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" /><rect x="5" y="10.5" width="14" height="10" rx="2.5" /></svg>
+            <small>SEALED</small>
+          </div>
+          <div className="pv-out"><svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: out }} /></div>
+        </div>
+        <div className="pv-legend"><span>your payments</span><span>read here</span><span>your limit</span></div>
+      </div>
       <ul className="facts onb-facts">
-        <li className="fact"><Icon name="lock" /><span><b>Read inside sealed hardware</b><small>Your transaction history is read there. Nobody can look inside, not even us.</small></span></li>
-        <li className="fact"><Icon name="shield" /><span><b>Only one number leaves</b><small>Your limit. Not your name, not your payments.</small></span></li>
-        <li className="fact"><Icon name="check" /><span><b>Nothing is kept</b><small>The {what} is deleted once it is read.</small></span></li>
+        <li className="fact" style={{ '--i': 0 } as React.CSSProperties}><Icon name="lock" /><span><b>Read inside sealed hardware</b><small>Your transaction history is read there. Nobody can look inside, not even us.</small></span></li>
+        <li className="fact" style={{ '--i': 1 } as React.CSSProperties}><Icon name="shield" /><span><b>Only one number leaves</b><small>Your limit. Not your name, not your payments.</small></span></li>
+        <li className="fact" style={{ '--i': 2 } as React.CSSProperties}><Icon name="check" /><span><b>Nothing is kept</b><small>The {what} is deleted once it is read.</small></span></li>
       </ul>
     </Frame>
   );
 }
 
 // ---- 4. belief: the cost, before anything is asked -----------------------------------------------------------------
+// The example as a row of stamps, landing in order: borrow 50, put 10 down, a 1 fee, pay 51 back, and the 10 flies back.
 const EG = 50_000_000n;
 function Costs({ goal }: { goal?: Goal }) {
   const dep = depositNeededFor(EG), fee = feeFor(EG), pay = payoffFor(EG);
   const f = (v: bigint) => formatUsdc(v).replace(/\.00$/, '');
+  const [run, replay] = useReplay();
+  const row = useMemo(() => ([
+    { num: f(EG), cap: 'BORROW', ink: 'ultra', motif: 'bank', label: 'Borrow' },
+    { num: f(dep), cap: 'DOWN', ink: 'ochre', motif: 'kente', label: 'Down' },
+    { num: f(fee), cap: 'FEE', ink: 'verm', motif: 'sun', label: 'Fee' },
+    { num: f(pay), cap: 'PAID', ink: 'ultra', motif: 'waves', label: 'Pay back' },
+    { num: `+${f(dep)}`, cap: 'BACK', ink: 'sea', motif: 'kente', label: 'Back' },
+  ] as const).map((x) => ({ ...x, svg: stamp(88, 104, { ink: x.ink, motif: x.motif, num: x.num, cap: x.cap, numSize: x.num.length > 2 ? 26 : 30 }) })), [dep, fee, pay]);
   return (
-    <Frame step={STEP.costs} label="What it costs" foot={<Btn onClick={() => goStep(STEP.prime)}>Next</Btn>}>
+    <Frame foot={<Btn onClick={() => goStep(STEP.prime)}>Next</Btn>}>
       <p className="onb-eyebrow">For {forGoal(goal)}</p>
       <h1 className="onb-h">The cost, up front.</h1>
       <p className="onb-p">Say you borrow {f(EG)} USDC:</p>
+      <div className="onb-stage cs" key={run} onClick={replay} aria-hidden="true">
+        <div className="cs-row">
+          {row.map((x, i) => (
+            <span key={x.cap} className={cx('cs-st', i === 4 && 'back')} style={{ '--i': i } as React.CSSProperties}>
+              <svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: x.svg }} />
+              <small>{x.label}</small>
+            </span>
+          ))}
+        </div>
+      </div>
       <div className="rcpt pcard onb-rcpt" data-testid="cost-example">
-        <div className="r"><span>You put down, 20%<small>Comes back when you pay</small></span><b>{f(dep)}</b></div>
-        <div className="r"><span>Fee, 2%</span><b>{f(fee)}</b></div>
-        <div className="r total"><span>You pay back</span><b>{f(pay)}</b></div>
-        <div className="r"><span>Deposit back</span><b style={{ color: 'var(--green)' }}>+{f(dep)}</b></div>
+        <div className="r" style={{ '--i': 1 } as React.CSSProperties}><span>You put down, 20%<small>Comes back when you pay</small></span><b>{f(dep)}</b></div>
+        <div className="r" style={{ '--i': 2 } as React.CSSProperties}><span>Fee, 2%</span><b>{f(fee)}</b></div>
+        <div className="r total" style={{ '--i': 3 } as React.CSSProperties}><span>You pay back</span><b>{f(pay)}</b></div>
+        <div className="r" style={{ '--i': 4 } as React.CSSProperties}><span>Deposit back</span><b style={{ color: 'var(--green)' }}>+{f(dep)}</b></div>
       </div>
       <p className="help onb-note"><Icon name="clock" />Your limit lasts 30 days. Pay back within 30 days.</p>
     </Frame>
@@ -267,11 +416,14 @@ function Costs({ goal }: { goal?: Goal }) {
 }
 
 // ---- 5. the wallet, primed: why, and what will pop up --------------------------------------------------------------
+// A small phone plays the two asks in order: pick your wallet from a list, then sign one message (a stamp seals it).
 function Prime({ paid }: { paid?: Paid }) {
   const { openSignIn, pollar } = useUi();
   const bank = paid === 'bank';
+  const [run, replay] = useReplay();
+  const seal = useMemo(() => stamp(88, 104, { ink: 'verm', motif: 'horn', num: '✓', cap: 'YOURS', top: 'INBOX', numSize: 28 }), []);
   return (
-    <Frame step={STEP.prime} label="Connect your wallet" foot={<><Btn onClick={openSignIn}>Connect wallet</Btn><p className="help" style={{ textAlign: 'center', margin: '4px 0 0' }}>Notch never asks for your seed phrase.</p></>}>
+    <Frame foot={<><Btn onClick={openSignIn}>Connect wallet</Btn><p className="help" style={{ textAlign: 'center', margin: '4px 0 0' }}>Notch never asks for your seed phrase.</p></>}>
       <h1 className="onb-h">Next: your private inbox.</h1>
       {bank && (
         <div className="notice notice-info onb-honest" role="note" data-testid="bank-honest">
@@ -280,9 +432,26 @@ function Prime({ paid }: { paid?: Paid }) {
         </div>
       )}
       <p className="onb-p">Your limit belongs to one wallet. Your wallet app opens and asks two things:</p>
+      <div className="onb-stage wp" key={run} onClick={replay} aria-hidden="true">
+        <div className="wp-phone">
+          <div className="wp-sheet wp-a">
+            <b>Connect</b>
+            {['#AB9FF2', '#F5A524', '#3D7BF7'].map((c, i) => (
+              <span key={c} className={cx('wp-row', i === 0 && 'hit')}><i style={{ background: c }} /><em /><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" pathLength={1} /></svg></span>
+            ))}
+          </div>
+          <div className="wp-sheet wp-b">
+            <b>Sign message</b>
+            <em /><em style={{ width: '70%' }} /><em style={{ width: '82%' }} />
+            <span className="wp-free">Moves no money</span>
+            <span className="wp-sign">Sign</span>
+            <span className="wp-seal"><svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: seal }} /></span>
+          </div>
+        </div>
+      </div>
       <ol className="steps3 onb-steps">
-        <li><span className="n">1</span><span><b>Connect</b><small className="eg">Pick your wallet from a list.</small></span></li>
-        <li><span className="n">2</span><span><b>Sign one short message</b><small className="eg">It proves the inbox is yours. It costs nothing and moves no money.</small></span></li>
+        <li style={{ '--i': 0 } as React.CSSProperties}><span className="n">1</span><span><b>Connect</b><small className="eg">Pick your wallet from a list.</small></span></li>
+        <li style={{ '--i': 1 } as React.CSSProperties}><span className="n">2</span><span><b>Sign one short message</b><small className="eg">It proves the inbox is yours. It costs nothing and moves no money.</small></span></li>
       </ol>
       {pollar?.step === 'authenticated' && (
         <div className="notice notice-info" role="status" style={{ marginTop: 16 }}>
