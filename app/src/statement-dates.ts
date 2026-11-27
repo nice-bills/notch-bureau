@@ -14,6 +14,17 @@ export const longDay = (d: Date, locale?: string) => d.toLocaleDateString(locale
 /** "28/08/2026" (or the phone's own numeric order): what a statement form usually asks for. */
 export const numericDay = (d: Date, locale?: string) => d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: 'numeric' });
 
+/** "28 11 2026": the exact format MTN MoMo's *170# statement request asks for ("Day Month Year"). */
+export const momoDay = (d: Date) => `${String(d.getDate()).padStart(2, '0')} ${String(d.getMonth() + 1).padStart(2, '0')} ${d.getFullYear()}`;
+
+/** "1:42" or "1:02:05" for a span of milliseconds. */
+export function clockSpan(ms: number): string {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const ss = String(s).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
 /** Copy text; falls back to a hidden textarea where the async clipboard is missing (older iOS, http pages). */
 export async function copyText(text: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back */ }

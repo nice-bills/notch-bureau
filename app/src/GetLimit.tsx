@@ -16,19 +16,36 @@ import { ActionStatus, Btn, Icon, Notice, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Ticket } from './Ticket';
 import { Restoring } from './Home';
-import { copyText, longDay, numericDay, statementRange } from './statement-dates';
+import { clockSpan, copyText, longDay, momoDay, statementRange } from './statement-dates';
 
 const SAMPLES = [
   { file: '/samples/deel.eml', label: 'Deel payout' },
   { file: '/samples/bank.eml', label: 'Bank statement' },
 ];
 
+/** The inbox as kept on this phone: `createdAt` (ms) lets the waiting clock survive a reload. */
+type StoredInbox = InboxAddress & { createdAt: number };
+
 const store = {
   key: (w: string) => `notch.inbox.${w}`,
-  get(w: string): InboxAddress | null {
-    try { const v = sessionStorage.getItem(this.key(w)); return v ? (JSON.parse(v) as InboxAddress) : null; } catch { return null; }
+  get(w: string): StoredInbox | null {
+    try {
+      const v = sessionStorage.getItem(this.key(w));
+      if (!v) return null;
+      const ib = JSON.parse(v) as InboxAddress & { createdAt?: number };
+      if (typeof ib.createdAt === 'number') return ib as StoredInbox;
+      const fixed = { ...ib, createdAt: Date.now() }; // saved before createdAt existed: start the clock now
+      this.set(w, fixed);
+      return fixed;
+    } catch { return null; }
   },
-  set(w: string, v: InboxAddress | null) {
+  /** Saves the inbox, stamping `createdAt` when it is new. */
+  set(w: string, v: (InboxAddress & { createdAt?: number }) | null): StoredInbox | null {
+    const ib = v ? { ...v, createdAt: v.createdAt ?? Date.now() } : null;
+    this.write(w, ib);
+    return ib;
+  },
+  write(w: string, v: StoredInbox | null) {
     try { if (v) sessionStorage.setItem(this.key(w), JSON.stringify(v)); else sessionStorage.removeItem(this.key(w)); } catch { /* private mode: keep it in memory only */ }
   },
 };
@@ -138,7 +155,7 @@ export { Nav };
 
 function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; signMessage: (m: Uint8Array) => Promise<Uint8Array>; onResult: (r: EnclaveOk) => void; localDemo: boolean }) {
   const { connected } = useWallet();
-  const [inbox, setInbox] = useState<InboxAddress | null>(() => store.get(wallet));
+  const [inbox, setInbox] = useState<StoredInbox | null>(() => store.get(wallet));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState<Live>('idle');
@@ -146,7 +163,12 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
   const [pollErr, setPollErr] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [copiedDate, setCopiedDate] = useState(false);
+  const [copiedDate, setCopiedDate] = useState<'start' | 'end' | null>(null);
+  // Signs of life while waiting: the last poll that got an answer, and when the polls started failing.
+  const [lastOk, setLastOk] = useState<number | null>(null);
+  const [failSince, setFailSince] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [arrived, setArrived] = useState(false);
   const range = useMemo(() => statementRange(), []);
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoErr, setDemoErr] = useState<string | null>(null);
@@ -160,7 +182,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
     if (!done) return;
     setBusy(true);
     newInbox(wallet, { signed: { ts: Number(done.message.slice(prefix.length)), signature: done.signature } })
-      .then((ib) => { store.set(wallet, ib); setInbox(ib); setLive('idle'); setRefusal(null); })
+      .then((ib) => { setInbox(store.set(wallet, ib)); setLive('idle'); setRefusal(null); })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
   }, [wallet]);
@@ -176,8 +198,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
         try { proof = { bearer: await signInWithSolana(wallet, signMessage) }; } catch { /* fall back to the wallet signature */ }
       }
       const ib = await newInbox(wallet, proof);
-      store.set(wallet, ib);
-      setInbox(ib);
+      setInbox(store.set(wallet, ib));
       setLive('idle');
       setRefusal(null);
     } catch (e) {
@@ -201,6 +222,8 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
       try {
         const r = await pollRecord(wallet, inbox.pollToken, ctl.signal);
         setPollErr(null);
+        setFailSince(null);
+        setLastOk(Date.now());
         if (r.status === 'ready') { done.current = true; setLive('done'); buzz(22); onResultRef.current(r.result); return; }
         if (r.status === 'refused' || r.status === 'locked') { setLive('refused'); setRefusal({ friendly: r.friendly, locked: r.status === 'locked' }); }
       } catch (e) {
@@ -208,12 +231,32 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
         const m = e instanceof Error ? e.message : String(e);
         if (/no longer known/.test(m)) { store.set(wallet, null); setInbox(null); setErr(m); return; }
         setPollErr(m);
+        setFailSince((f) => f ?? Date.now());
       }
       t = setTimeout(tick, 2500);
     };
     void tick();
     return () => { ctl.abort(); clearTimeout(t); };
   }, [inbox, wallet]);
+
+  // A one-second clock for the waiting timer, only while there is something to wait for.
+  const waiting = !!inbox && live === 'idle';
+  useEffect(() => {
+    if (!waiting) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [waiting]);
+
+  // The email landed: mark the moment once (a short buzz on phones that support it).
+  const prevLive = useRef<Live>(live);
+  useEffect(() => {
+    if (prevLive.current === 'idle' && (live === 'received' || live === 'checking')) { setArrived(true); buzz(14); }
+    if (live === 'idle' || live === 'refused') setArrived(false);
+    prevLive.current = live;
+  }, [live]);
+
+  const newAddress = () => { store.set(wallet, null); setInbox(null); setLive('idle'); setRefusal(null); setLastOk(null); setFailSince(null); };
 
   // Live steps over Supabase Realtime, when configured.
   useEffect(() => {
@@ -293,14 +336,21 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
         <li><span className="n">1</span><span>In <b>your money app</b>, open <b>Statements</b> and ask for a statement.<small className="eg">On MTN MoMo, for example: dial <b translate="no">*170#</b> → My Wallet → Statements → Statement Request.</small></span></li>
         <li><span className="n">2</span><span>
           <span className="dates">
-            <span>Start date: <b data-testid="start-date">{longDay(range.start)}</b>{' '}
-              <button type="button" className="chip tap" data-testid="copy-start" onClick={() => { void copyText(numericDay(range.start)).then((ok) => { if (ok) { setCopiedDate(true); setTimeout(() => setCopiedDate(false), 1600); } }); }}>
-                <Icon name={copiedDate ? 'check' : 'copy'} />{copiedDate ? 'Copied' : numericDay(range.start)}
-              </button>
-            </span>
-            <span>End date: <b data-testid="end-date">today, {longDay(range.end)}</b></span>
+            {(['start', 'end'] as const).map((which) => {
+              const d = which === 'start' ? range.start : range.end;
+              const typed = momoDay(d);
+              return (
+                <span key={which} className="date-row">
+                  <span>{which === 'start' ? 'Start date' : 'End date'}: <b data-testid={`${which}-date`}>{which === 'end' ? `today, ${longDay(d)}` : longDay(d)}</b></span>
+                  <button type="button" className="chip tap" data-testid={`copy-${which}`} aria-label={copiedDate === which ? 'Copied' : `Copy ${which} date ${typed}`}
+                    onClick={() => { void copyText(typed).then((ok) => { if (ok) { setCopiedDate(which); setTimeout(() => setCopiedDate((c) => (c === which ? null : c)), 1600); } }); }}>
+                    <Icon name={copiedDate === which ? 'check' : 'copy'} /><span translate="no">{copiedDate === which ? 'Copied' : typed}</span>
+                  </button>
+                </span>
+              );
+            })}
           </span>
-          <small className="eg">That’s the last 3 months, counted from today.</small>
+          <small className="eg">That’s the last 3 months. Type each date the way MTN asks: day, month, year with spaces.</small>
         </span></li>
         <li><span className="n">3</span><span>Paste the address above and <b>send</b>.</span></li>
       </ol>
@@ -315,13 +365,43 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
           );
         })}
       </ul>
+      {waiting && (() => {
+        const waited = now - inbox.createdAt;
+        const ago = lastOk ? Math.max(0, Math.round((now - lastOk) / 1000)) : null;
+        const offline = failSince !== null && now - failSince > 20_000;
+        return (
+          <div className="wait-meta">
+            {/* ticks every second: kept out of the live region so screen readers are not flooded */}
+            <p className="wait-line">
+              <span className="pulse" aria-hidden="true" />
+              <span data-testid="waited">Waiting {clockSpan(waited)}</span>
+              <span className={cx('checked', offline && 'off')}>{offline ? 'Retrying…' : ago === null ? 'Checking…' : `Checked ${ago} s ago`}</span>
+            </p>
+            <p className="help">MTN usually sends it within 1–5 minutes. You can leave this page open or come back later; it picks up where you left off.</p>
+            {offline && <Notice tone="warn" title="Can’t reach the sealed computer, retrying">Your address still works. Mail that arrives meanwhile is kept.</Notice>}
+            {waited > 10 * 60_000 && (
+              <div className="notice notice-info still-nothing" role="status">
+                <strong>Still nothing?</strong>
+                <span>Check you typed the address exactly (with the + sign), and that MTN said the request was accepted.</span>
+                <Btn variant="ghost" small onClick={newAddress}>Get a new address</Btn>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+      {arrived && (live === 'received' || live === 'checking') && (
+        <div className="arrived pcard" role="status" data-testid="arrived">
+          <span className="arrived-ico" aria-hidden="true"><Icon name="mail" /></span>
+          <span><b>Email arrived</b><small>Checking it now. This takes a few seconds.</small></span>
+        </div>
+      )}
       <div className="pad">
         {refusal && (
           <Notice tone="bad" title="The sealed computer said no">
             {refusal.friendly} {refusal.locked ? '' : 'You can send another statement to the same address.'}
           </Notice>
         )}
-        {pollErr && <Notice tone="warn" title="Can’t reach the sealed computer">{pollErr}</Notice>}
+        {pollErr && !waiting && <Notice tone="warn" title="Can’t reach the sealed computer">{pollErr}</Notice>}
         {liveNote && <p className="help">{liveNote}</p>}
       </div>
       <div className="actions">
@@ -331,7 +411,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
           </Btn>
         )}
         {demoErr && <Notice tone="bad" title="The sample was not sent">{demoErr}</Notice>}
-        {(refusal?.locked || live === 'refused') && <Btn variant="ghost" onClick={() => { store.set(wallet, null); setInbox(null); setLive('idle'); setRefusal(null); }}>Get a new address</Btn>}
+        {(refusal?.locked || live === 'refused') && <Btn variant="ghost" onClick={newAddress}>Get a new address</Btn>}
       </div>
     </section>
   );

@@ -79,7 +79,8 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   const want = await page.evaluate(() => {
     const t = new Date(); const s = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 90);
     const o = { day: 'numeric', month: 'short', year: 'numeric' } as const;
-    return { start: s.toLocaleDateString(undefined, o), num: s.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric' }), end: t.toLocaleDateString(undefined, o) };
+    const momo = (d: Date) => `${String(d.getDate()).padStart(2, '0')} ${String(d.getMonth() + 1).padStart(2, '0')} ${d.getFullYear()}`; // MTN's "Day Month Year"
+    return { start: s.toLocaleDateString(undefined, o), num: momo(s), endNum: momo(t), end: t.toLocaleDateString(undefined, o) };
   });
   await expect(page.getByTestId('start-date')).toHaveText(want.start);
   await expect(page.getByTestId('end-date')).toHaveText(`today, ${want.end}`);
@@ -88,6 +89,10 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   await page.getByTestId('copy-start').click();
   await expect(page.getByTestId('copy-start')).toHaveText('Copied');
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(want.num);
+  await expect(page.getByTestId('copy-end')).toHaveText(want.endNum);
+  await page.getByTestId('copy-end').click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(want.endNum);
+  await expect(page.getByTestId('waited')).toHaveText(/^Waiting \d+:\d\d$/);
   await page.getByRole('button', { name: 'Copy', exact: true }).click();
   const addrText = await addr.innerText();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(addrText);
