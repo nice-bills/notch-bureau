@@ -65,7 +65,7 @@ export async function openTab(page: Page, tab: 'home' | 'lend' | 'pool') {
 
 /** Open the sign-in sheet, check the test wallet is listed like Phantom would be, pick it, wait until connected. */
 export async function connectWallet(page: Page, wallet: TestWallet) {
-  const open = page.getByRole('button', { name: /^(Connect wallet|Get started)$/ }).first();
+  const open = page.getByRole('button', { name: /^(Connect wallet|I already use Notch)$/ }).first();
   await open.click();
   const sheet = page.getByRole('dialog', { name: 'Sign in to start' });
   await expect(sheet).toBeVisible();

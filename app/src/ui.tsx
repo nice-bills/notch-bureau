@@ -31,6 +31,13 @@ const PATHS: Record<string, ReactNode> = {
   file: <><path d="M14 3.5H7.5A2 2 0 0 0 5.5 5.5v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z" /><path d="M14 3.5V8h4.5" /></>,
   warn: <><path d="M12 4l9 16H3z" /><path d="M12 10v4M12 17h.01" /></>,
   out: <><path d="M14 4h5v16h-5" /><path d="M10 12h10M6 8l-4 4 4 4" /></>,
+  shop: <><path d="M4 9.5l1.5-5h13l1.5 5" /><path d="M4 9.5a2.7 2.7 0 0 0 5.3 0 2.7 2.7 0 0 0 5.4 0 2.7 2.7 0 0 0 5.3 0" /><path d="M5.5 12v7.5h13V12M10 19.5V15h4v4.5" /></>,
+  school: <><path d="M2.5 9.5L12 5l9.5 4.5L12 14z" /><path d="M6.5 11.5V16c0 1.5 2.5 3 5.5 3s5.5-1.5 5.5-3v-4.5M21.5 9.5v5" /></>,
+  bolt: <path d="M13 3L5 13.5h6L10.5 21 19 10h-6z" />,
+  receipt: <><path d="M6 3.5h12v17l-2-1.3-2 1.3-2-1.3-2 1.3-2-1.3-2 1.3z" /><path d="M9 8.5h6M9 12h6M9 15.5h3" /></>,
+  phone: <><rect x="7" y="3" width="10" height="18" rx="2.5" /><path d="M11 17.5h2" /></>,
+  bank: <><path d="M3.5 9.5L12 4.5l8.5 5" /><path d="M5.5 10v7M10 10v7M14 10v7M18.5 10v7M3.5 19.5h17" /></>,
+  both: <><rect x="2.5" y="6" width="7" height="13" rx="2" /><path d="M12.5 10.5l4.5-3 4.5 3M13.5 11v6.5M20.5 11v6.5M12.5 19h9" /></>,
 };
 export type IconName = keyof typeof PATHS;
 export function Icon({ name, label }: { name: IconName; label?: string }) {

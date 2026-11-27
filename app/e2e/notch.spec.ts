@@ -47,7 +47,7 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   };
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Borrow against your income, without showing it.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Credit from the money history you already have.' })).toBeVisible();
   if (!o.shots) {
     // desktop: a centred phone-width column, not stretched
     const col = await page.locator('.app').boundingBox();

@@ -36,6 +36,8 @@ export async function setupNativeShell(awaitingAnswer: () => boolean) {
   if (launch?.url) open(launch.url);
   await App.addListener('backButton', () => {
     if (document.querySelector('.sheet')) { dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); return; }
+    // between onboarding questions: one question back
+    if (typeof (history.state as { notchOnb?: number } | null)?.notchOnb === 'number' && (history.state as { notchOnb: number }).notchOnb > 0) { history.back(); return; }
     const route = location.hash.slice(1);
     if (!route || route === 'home' || route === 'lend' || route === 'pool') { void App.minimizeApp(); return; }
     // a sub-screen: back to the tab it was opened from, or Home when it was the first thing shown

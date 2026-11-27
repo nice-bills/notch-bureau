@@ -16,6 +16,7 @@ import { browseLinks, isIOSOtherBrowser, isPhone } from './device';
 import { isNativeApp } from './native';
 import { FaucetButton } from './Faucet';
 import { claimLatest, newTabReturn, supersededByNewerTab } from './tabs';
+import { STEP, getOnboard, setOnboard } from './onboard';
 // The everyday screens are in the main bundle: switching tabs must never wait for a download (on a phone through a
 // tunnel that showed as a blank screen). Only the "Try to cheat it" lab (and its crypto library) loads on demand.
 import { Home } from './Home';
@@ -165,6 +166,16 @@ function Shell() {
   }, []);
   const ui = useMemo<Ui>(() => ({ route, go, openSignIn: () => setSheet('signin'), openAccount: () => setSheet('account'), att, pollar }), [route, go, att, pollar]);
   const { connected, restoring } = useWallet();
+  // The wallet just connected. From the onboarding's wallet screen: on to the inbox (the reason it was asked for).
+  // Anywhere else, with no onboarding behind it: a returning user, who never sees the questions.
+  const who = connected?.address;
+  useEffect(() => {
+    if (!who) return;
+    const o = getOnboard();
+    if (o.done) return;
+    if (!o.goal || o.step < STEP.prime) { setOnboard({ done: true }); return; }
+    if (o.step === STEP.prime) { setOnboard({ step: STEP.inbox }); if (fromHash() === 'home') go('limit'); }
+  }, [who, go]);
   // No tab bar on the welcome screen (it covered "Get started"); everywhere else it floats over a bottom inset.
   const welcome = route === 'home' && !connected && !restoring;
   const tabbed = TABS.some((t) => t.id === route) && !welcome;

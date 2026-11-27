@@ -14,6 +14,7 @@ import { FaucetButton } from './Faucet';
 import { lineAfterPost, postIxsFor, unposted } from './post';
 import { reportPosted } from './enclave';
 import { Restoring, lineState, withAta } from './Home';
+import { STEP, STEPS, forGoal, onboarding, setOnboard, useOnboard } from './onboard';
 
 const MOTIFS = ['kente', 'sun', 'horn'] as const;
 
@@ -29,9 +30,12 @@ export function Borrow() {
   const s = lineState(line);
   const idle = pool?.stats.idle ?? 0n;
   const cap = s.headroom < idle ? s.headroom : idle;
-  // null = not touched yet: the first paint already shows the 20 USDC preset (no "Pay back 0.00" frame first).
+  // First run: the amount starts at the whole limit they were just shown ("you can draw up to X"), said for their goal.
+  const onb = useOnboard();
+  const guided = onboarding(onb);
+  // null = not touched yet: the first paint already shows the preset (no "Pay back 0.00" frame first).
   const [typed, setAmtStr] = useState<string | null>(null);
-  const amtStr = typed ?? (s.live && pool ? toInput(cap > 20_000_000n ? 20_000_000n : cap) : '');
+  const amtStr = typed ?? (s.live && pool ? toInput(guided || cap < 20_000_000n ? cap : 20_000_000n) : '');
   const [done, setDone] = useState<{ draw: bigint; payoff: bigint; due: bigint } | null>(null);
 
   const draw = parseUsdc(amtStr);
@@ -141,10 +145,11 @@ export function Borrow() {
       if (pending) void reportPosted(signature);
       patch({ line: { drawn: (chainLine?.drawn ?? 0n) + draw, deposit: have + toAdd, ...(s.drawn === 0n ? { due: dueIfNow } : {}) }, usdc: usdc - toAdd + draw });
       setDone({ draw, payoff, due: dueIfNow });
+      if (guided) setOnboard({ done: true, step: STEPS });
       return { signature, note: `${formatUsdc(draw)} USDC sent to your wallet.` };
     });
 
-  const head = <><Nav title="Borrow" onBack={() => go('home')} /><Banners /></>;
+  const head = <><Nav title="Borrow" onBack={() => go('home')} progress={guided ? STEP.borrow : undefined} /><Banners /></>;
   if (!owner && restoring) return <>{head}<Restoring /></>;
   if (!owner) return <>{head}<Empty icon="wallet" title="Connect a wallet first" text="Borrowing uses your wallet’s limit." /></>;
   if (loading || (owner && !pool)) return <>{head}<div className="bamt"><label>Reading your line…</label><div className="v"><span className="skel" style={{ fontSize: 64 }}>00.00</span></div></div></>;
@@ -173,6 +178,7 @@ export function Borrow() {
     <div>
       {head}
       <div className="bamt">
+        {guided && <p className="for-goal" data-testid="for-goal">For {forGoal(onb.goal)}</p>}
         <label htmlFor="amt">How much do you want to borrow? <span style={{ color: 'var(--faint)' }}>Up to {formatUsdc(cap)}</span></label>
         <div className="v" onClick={() => amtRef.current?.focus()}>
           <input ref={amtRef} id="amt" name="amount" inputMode="decimal" autoComplete="off" enterKeyHint="done" value={amtStr} onChange={(e) => onType(e.target.value)}

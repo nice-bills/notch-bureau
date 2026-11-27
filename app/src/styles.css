@@ -592,3 +592,70 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
   .sbub span{animation:none}
   .sgrid.drag button{transition:none}
 }
+
+/* ---------- first run: onboarding (Onboarding.tsx) ---------- */
+/* One column, the answer buttons and the one main button low in the thumb zone. */
+.onb{position:relative;min-height:calc(100dvh - 120px);display:flex;flex-direction:column}
+.onb-top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:16px;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 12px;background:var(--bg)}
+.native .onb-top{padding-top:calc(12px + var(--safe-area-inset-top,env(safe-area-inset-top,0px)))}
+.onb-bar{flex:1;height:6px;border-radius:3px;background:rgba(14,15,19,.08);overflow:hidden}
+.onb-bar i{display:block;height:100%;border-radius:3px;background:var(--ink);transform-origin:left;transition:transform .35s var(--ease-out)}
+.nav.with-bar{flex-wrap:wrap;row-gap:10px}
+.nav.with-bar .onb-bar{flex:1 0 100%;height:4px}
+.onb-body{padding:8px 24px 0;display:flex;flex-direction:column;flex:1}
+.onb-h{margin:8px 0 0;font-weight:650;font-size:32px;line-height:1.06;letter-spacing:-.035em;text-wrap:balance}
+.onb-p{margin:10px 0 0;color:var(--soft);font-size:16px;line-height:1.45;max-width:34ch;text-wrap:pretty}
+.onb-eyebrow{margin:8px 0 0;font-size:12px;font-weight:600;color:var(--lilac);letter-spacing:.08em;text-transform:uppercase}
+.onb-foot{position:sticky;bottom:0;z-index:5;margin-top:auto;padding:24px 16px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:4px;
+  background:linear-gradient(rgba(241,241,244,0),var(--bg) 28%)}
+.onb-links{display:flex;justify-content:center;gap:4px;flex-wrap:wrap}
+.onb-links .textlink{margin:4px 0 0}
+/* the answers: big rows, a tap picks and moves on */
+.choices{margin-top:auto;padding:24px 0 calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:8px}
+.choice{display:flex;align-items:center;gap:16px;min-height:64px;padding:12px 16px;border-radius:20px;background:var(--paper);text-align:left;width:100%;
+  box-shadow:0 1px 2px rgba(14,15,19,.04),0 8px 24px -16px rgba(14,15,19,.14),inset 0 0 0 1.5px transparent;transition:box-shadow .2s,transform .2s var(--spring)}
+.choice:active{transform:scale(.98)}
+.choice .t{flex:1;min-width:0}
+.choice b{display:block;font-weight:600;font-size:17px;letter-spacing:-.01em}
+.choice small{display:block;color:var(--soft);font-size:14px;margin-top:2px}
+.choice-ico{width:44px;height:44px;border-radius:50%;background:var(--lilac-tint);color:var(--lilac);display:grid;place-items:center;flex:none}
+.choice-ico .ic{width:22px;height:22px}
+.choice-ck{width:24px;height:24px;border-radius:50%;border:1.5px solid rgba(17,26,51,.2);display:grid;place-items:center;flex:none;transition:background-color .15s,border-color .15s}
+.choice-ck .ic{width:14px;height:14px;stroke:#fff;stroke-width:3;opacity:0;transform:scale(.4);transition:opacity .15s,transform .25s var(--spring)}
+.choice.on{box-shadow:0 1px 2px rgba(14,15,19,.04),0 8px 24px -16px rgba(14,15,19,.14),inset 0 0 0 1.5px var(--ink)}
+.choice.on .choice-ck{background:var(--ink);border-color:var(--ink)}
+.choice.on .choice-ck .ic{opacity:1;transform:none}
+/* belief screens */
+.onb-facts{list-style:none;padding:0;margin:24px 0 0}
+.onb-facts .fact{background:var(--paper);box-shadow:0 1px 2px rgba(14,15,19,.04)}
+.onb-rcpt{margin:16px 0 0}
+.onb-note{display:flex;gap:8px;align-items:center;margin-top:16px}
+.onb-steps{margin:20px 0 0}
+.onb-steps small.eg{margin-top:2px}
+/* the promise: a phone showing the whole idea in three rows */
+.onb-promise .brandpill{margin-top:calc(16px + env(safe-area-inset-top,0px))}
+.onb-promise .onb-h{font-size:36px;line-height:1.02;letter-spacing:-.04em;max-width:12ch;margin-top:20px}
+.mock{position:relative;margin:24px auto 0;width:236px;max-width:100%}
+.mock-phone{padding:20px 14px 18px;border-radius:36px;background:var(--well);box-shadow:inset 0 0 0 6px #111A33,0 24px 40px -24px rgba(17,26,51,.45);display:flex;flex-direction:column;align-items:center;gap:10px}
+.mock-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:16px;width:100%;text-align:left}
+.mock-row b{display:block;font-size:13px;font-weight:600}
+.mock-row small{display:block;font-size:11px;color:var(--soft)}
+.mock-ico{width:30px;height:30px;border-radius:50%;background:var(--lilac-tint);color:var(--lilac);display:grid;place-items:center;flex:none}
+.mock-ico .ic{width:16px;height:16px}
+.mock-seal{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--soft)}
+.mock-seal .ic{width:14px;height:14px}
+.mock-stamp{width:84px;transform:rotate(-4deg);filter:drop-shadow(0 8px 10px rgba(17,26,51,.22))}
+.mock-stamp svg{display:block;width:100%;height:auto}
+.mock-cap{font-size:13px;color:var(--soft)}
+.mock-cap b{color:var(--ink)}
+.mock-eg{color:var(--faint);font-size:11px}
+@media (max-height:700px){.mock{width:200px;margin-top:16px}.mock-stamp{width:64px}.onb-promise .onb-h{font-size:32px}}
+/* reveal and borrow, said for their goal */
+.reveal h1{font-size:28px;line-height:1.1;padding:0 24px;text-wrap:balance}
+.for-goal{margin:0 0 4px;font-size:12px;font-weight:600;color:var(--lilac);letter-spacing:.08em;text-transform:uppercase}
+/* a step being checked: a still ring (no spinner that could turn forever) */
+.log li.live .ck{animation:none;border-color:var(--ultra);border-width:2px;box-shadow:inset 0 0 0 4px var(--bg),inset 0 0 0 12px var(--ultra)}
+@media (prefers-reduced-motion:reduce){.onb-bar i,.choice,.choice-ck .ic{transition:none}}
+.h p.works-today{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:6px 12px;border-radius:14px;background:var(--green-tint);color:var(--green);font-size:14px;font-weight:600;max-width:none}
+.h p.works-today .ic{width:16px;height:16px}
+.onb-honest{margin-top:16px}

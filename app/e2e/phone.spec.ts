@@ -48,7 +48,7 @@ test.describe('Phone review fixes', () => {
     const { page } = s;
     try {
       await page.goto('/');
-      await expect(page.getByRole('heading', { name: 'Borrow against your income, without showing it.' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Credit from the money history you already have.' })).toBeVisible();
       await expect(page.getByRole('navigation', { name: 'Sections' })).toHaveCount(0); // the tab bar covered "Get started"
       await connectWallet(page, w);
       await expect(page.getByRole('navigation', { name: 'Sections' })).toBeVisible();
@@ -73,12 +73,14 @@ test.describe('Phone review fixes', () => {
       await expect(page.getByRole('button', { name: 'Get started' })).toHaveCount(0);
       await expect(page.locator('.wallet-pill')).toBeVisible();
 
-      log('disconnect forgets the session: a reload shows the welcome again');
+      log('disconnect forgets the session: a reload shows "welcome back" (a returning user never sees the questions again)');
       await page.locator('.wallet-pill').click();
       await page.getByRole('button', { name: 'Disconnect wallet' }).click();
-      await expect(page.getByRole('button', { name: 'Get started' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Welcome back.' })).toBeVisible();
       await page.reload();
-      await expect(page.getByRole('button', { name: 'Get started' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Welcome back.' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Connect wallet' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Get started' })).toHaveCount(0);
       expect(s.pageErrors).toEqual([]);
     } catch (e) {
       await page.screenshot({ path: 'e2e/test-results/flow7-failure.png', fullPage: true }).catch(() => {});
@@ -159,7 +161,7 @@ test.describe('Phone review fixes', () => {
     page.on('pageerror', (e) => errors.push(e.message));
     try {
       await page.goto('/');
-      await page.getByRole('button', { name: 'Get started' }).click();
+      await page.getByRole('button', { name: 'I already use Notch' }).click();
       const sheet = page.getByRole('dialog', { name: 'Sign in to start' });
       await expect(sheet.getByRole('menuitem', { name: /Phantom app/ })).toBeVisible();
       await sheet.getByText('More ways to connect').click();
@@ -170,11 +172,11 @@ test.describe('Phone review fixes', () => {
       phantom.state.reject = true;
       await sheet.getByRole('menuitem', { name: /Phantom app/ }).click();
       await expect(page.locator('.return-banner.bad')).toContainText('You cancelled in Phantom. Nothing was signed.', { timeout: 30_000 });
-      await expect(page.getByRole('button', { name: 'Get started' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'I already use Notch' })).toBeVisible();
       phantom.state.reject = false;
 
       log('connect: to the Phantom app and back');
-      await page.getByRole('button', { name: 'Get started' }).click();
+      await page.getByRole('button', { name: 'I already use Notch' }).click();
       await sheet.getByRole('menuitem', { name: /Phantom app/ }).click();
       await expect(page.locator('.wallet-pill')).toHaveAccessibleName(`Your wallet ${w.address.slice(0, 4)}…${w.address.slice(-4)}`, { timeout: 30_000 });
       expect(new URL(page.url()).searchParams.has('phantom')).toBe(false); // the answer is cleaned out of the URL
@@ -217,7 +219,7 @@ test.describe('Phone review fixes', () => {
     const page = await context.newPage();
     try {
       await page.goto('/');
-      await page.getByRole('button', { name: 'Get started' }).click();
+      await page.getByRole('button', { name: 'I already use Notch' }).click();
       const sheet = page.getByRole('dialog', { name: 'Sign in to start' });
       await expect(sheet.getByRole('menuitem', { name: /Wallet app on this phone/ })).toBeVisible({ timeout: 15_000 });
       await expect(sheet).toContainText('Phantom, Solflare or Seed Vault opens to approve');
@@ -238,7 +240,7 @@ test.describe('Phone review fixes', () => {
     const page = await context.newPage();
     try {
       await page.goto('/');
-      await page.getByRole('button', { name: 'Get started' }).click();
+      await page.getByRole('button', { name: 'I already use Notch' }).click();
       const sheet = page.getByRole('dialog', { name: 'Sign in to start' });
       const wc = sheet.getByRole('menuitem', { name: /Other wallet apps/ });
       await expect(wc).toBeVisible({ timeout: 15_000 });
@@ -257,7 +259,7 @@ test.describe('Phone review fixes', () => {
       await expect(sheet.locator('.spinner')).toHaveCount(1);
       await page.keyboard.press('Escape');
       await page.locator('w3m-modal').evaluate((m) => m.remove()).catch(() => {}); // AppKit's own overlay, if it opened
-      await page.getByRole('button', { name: 'Get started' }).click();
+      await page.getByRole('button', { name: 'I already use Notch' }).click();
       await expect(sheet.locator('.spinner')).toHaveCount(0);
 
       // A remembered WalletConnect session: the app reconnects on load without downloading the WalletConnect code.
@@ -293,7 +295,7 @@ test.describe('Phone review fixes', () => {
     const page = await context.newPage();
     try {
       await page.goto('/');
-      await page.getByRole('button', { name: 'Get started' }).click();
+      await page.getByRole('button', { name: 'I already use Notch' }).click();
       await page.getByRole('dialog', { name: 'Sign in to start' }).getByRole('menuitem', { name: /Phantom app/ }).click();
       await expect.poll(() => phantom.state.lastBack).toContain('phantom=connect');
 
@@ -306,7 +308,7 @@ test.describe('Phone review fixes', () => {
       log('no older tab to take it: the new tab handles the answer itself and says the old one can go');
       await page.getByRole('button', { name: /^Your wallet / }).click();
       await page.getByRole('button', { name: 'Disconnect' }).click();
-      await page.getByRole('button', { name: 'Get started' }).click();
+      await page.getByRole('button', { name: 'Connect wallet' }).click();
       phantom.state.lastBack = '';
       await page.getByRole('dialog', { name: 'Sign in to start' }).getByRole('menuitem', { name: /Phantom app/ }).click();
       await expect.poll(() => phantom.state.lastBack).toContain('phantom=connect');

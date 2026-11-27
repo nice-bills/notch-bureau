@@ -5,11 +5,13 @@ import { useChain } from './data';
 import { useWallet } from './wallet';
 import { createAtaIdempotentIx, deriveAta, deriveLine, feeFor, payoffFor, repayIx, withdrawBorrowerIx, type NotchAddresses } from './notch';
 import { formatDate, formatUsdc, shortAddr, daysLeft } from './amount';
-import { envelope, foilCard, stamp, type Ink, type Motif } from './art';
+import { foilCard } from './art';
 import { ActionStatus, Btn, DoneView, Icon, Money, Sheet, Skel, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { MIN_FEE_LAMPORTS } from './chain';
 import { FaucetButton, NeedsTestMoney, useSticky } from './Faucet';
+import { Onboarding, WelcomeBack } from './Onboarding';
+import { useOnboard } from './onboard';
 
 /** Ata + idempotent create, so a wallet that never held test USDC still works. */
 export async function withAta(a: NotchAddresses, owner: ReturnType<typeof address>) {
@@ -56,54 +58,11 @@ export function Restoring() {
 
 export function Home() {
   const { connected, restoring } = useWallet();
+  const onb = useOnboard();
   if (restoring) return <Restoring />;
-  if (!connected) return <Welcome />;
+  // First run: the onboarding (the wallet comes late, when the inbox needs it). Returning and signed out: one button.
+  if (!connected) return onb.done ? <WelcomeBack /> : <Onboarding />;
   return <HomeConnected />;
-}
-
-const WALL: [Ink, Motif, string][] = [['verm', 'sun', '5'], ['ultra', 'bank', '10'], ['ochre', 'kente', '20'], ['sea', 'waves', '2'], ['verm', 'horn', '1'], ['ultra', 'waves', '50'], ['ochre', 'sun', '5'], ['sea', 'kente', '10']];
-const CAPS = ['GHANA', 'NOTCH', 'AIRMAIL', 'ACCRA', 'POSTE', 'KUMASI', 'TAMALE', 'CEDI'];
-
-function Welcome() {
-  const { openSignIn, go, pollar } = useUi();
-  const wall = useMemo(() => {
-    let html = '';
-    for (let r = 0; r < 3; r++) {
-      html += '<div class="row">';
-      for (let i = 0; i < 9; i++) {
-        const [ink, mo, num] = WALL[(i * 3 + r * 5) % WALL.length];
-        html += `<svg viewBox="0 0 88 104">${stamp(88, 104, { ink, motif: mo, num, cap: CAPS[(i + r * 2) % CAPS.length] })}</svg>`;
-      }
-      html += '</div>';
-    }
-    return html;
-  }, []);
-  const env = useMemo(() => envelope(), []);
-  return (
-    <section className="welcome" aria-labelledby="w-h">
-      <div className="brandpill glass lens">
-        <svg viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="8" fill="#111A33" /><path d="M8.5 18V8.5l9 9V8" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
-        notch
-      </div>
-      <Banners />
-      <div className="lede">
-        <h1 id="w-h">Borrow against your income, without showing it.</h1>
-        <p>Your provider emails a statement to your own Notch inbox. A sealed computer reads it, and only a signed limit comes back.</p>
-      </div>
-      <div className="hero" aria-hidden="true"><svg viewBox="0 0 312 204" dangerouslySetInnerHTML={{ __html: env }} /></div>
-      <div className="wall" aria-hidden="true"><div className="rows" dangerouslySetInnerHTML={{ __html: wall }} /></div>
-      <div className="foot">
-        {pollar?.step === 'authenticated' && (
-          <div className="notice notice-info" role="status">
-            <strong>Signed in with Google{pollar.solana ? ` · wallet ${shortAddr(pollar.solana)}` : ''}</strong>
-            <span>To post a limit and borrow, connect a self-custody wallet too. Pollar wallets can’t sign Notch’s transactions yet.</span>
-          </div>
-        )}
-        <Btn onClick={openSignIn}>Get started</Btn>
-        <Btn variant="ghost" onClick={() => go('lend')}>I want to lend instead</Btn>
-      </div>
-    </section>
-  );
 }
 
 function HomeConnected() {

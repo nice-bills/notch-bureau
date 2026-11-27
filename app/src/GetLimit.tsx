@@ -18,6 +18,8 @@ import { Ticket } from './Ticket';
 import { Restoring } from './Home';
 import { copyText, longDay, momoDay, statementRange, waitStage } from './statement-dates';
 import { askToNotify, notifyLimit } from './native';
+import { STEP, forGoal, onboarding, setOnboard, useOnboard, type Goal } from './onboard';
+import { Progress } from './Onboarding';
 
 const SAMPLES = [
   { file: '/samples/deel.eml', label: 'Deel payout' },
@@ -63,6 +65,11 @@ export function GetLimit() {
   // back from the Phantom app with the post signed: show the result, not the long form with the next step far below
   const [landed, setLanded] = useState(() => returnedWith === 'tx');
   const fromInbox = useRef(false);
+  // First run: the same progress bar as the questions, the person's answers said back, and the path they need first.
+  const onb = useOnboard();
+  const guided = onboarding(onb);
+  const [hasInbox, setHasInbox] = useState(false);
+  const progress = guided ? (signed ? STEP.reveal : hasInbox ? STEP.wait : STEP.inbox) : undefined;
 
   const postAct = useAction(async () => { await refresh(); });
   const uwKey = att && att !== 'down' ? att.underwriter : null;
@@ -95,10 +102,20 @@ export function GetLimit() {
   }
 
   if (landed && posted && signed) return <Landed signed={signed} onDone={() => go('home')} postAct={postAct} />;
+  if (guided && signed && !posted) return (
+    <div>
+      <Nav title="Your limit" onBack={() => go('home')} progress={progress} />
+      <Banners />
+      <Reveal signed={signed} goal={onb.goal} onNext={() => { setOnboard({ step: STEP.borrow }); go('borrow'); }} />
+    </div>
+  );
 
+  const inboxEl = <Inbox wallet={owner} signMessage={signMessage} onResult={(r) => { fromInbox.current = true; session.setSigned(r); }} localDemo={att !== null && att !== 'down' && att.mode === 'local-dev'} onInbox={setHasInbox} />;
+  // First run: one path, the one that works for most people today (the MoMo inbox). The payout-email upload stays for everyone else.
+  const uploadEl = guided ? null : <Upload wallet={owner} signMessage={signMessage} onResult={(r) => { fromInbox.current = false; session.setSigned(r); }} />;
   return (
     <div>
-      <Nav title="Get your limit" onBack={() => go('home')} />
+      <Nav title="Get your limit" onBack={() => go('home')} progress={progress} />
       <Banners />
       {signed ? (
         <section aria-labelledby="sig-h">
@@ -134,27 +151,25 @@ export function GetLimit() {
           </div>
         </section>
       ) : (
-        <>
-          <Inbox wallet={owner} signMessage={signMessage} onResult={(r) => { fromInbox.current = true; session.setSigned(r); }} localDemo={att !== null && att !== 'down' && att.mode === 'local-dev'} />
-          <Upload wallet={owner} signMessage={signMessage} onResult={(r) => { fromInbox.current = false; session.setSigned(r); }} />
-        </>
+        <>{inboxEl}{uploadEl}</>
       )}
     </div>
   );
 }
 
-function Nav({ title, onBack }: { title: string; onBack: () => void }) {
+function Nav({ title, onBack, progress }: { title: string; onBack: () => void; progress?: number }) {
   return (
-    <div className="nav">
+    <div className={cx('nav', progress !== undefined && 'with-bar')}>
       <button type="button" className="circ glass lens tap" onClick={onBack} aria-label="Back"><Icon name="back" /></button>
       <span className="ttl">{title}</span>
       <span style={{ width: 48 }} />
+      {progress !== undefined && <Progress at={progress} />}
     </div>
   );
 }
 export { Nav };
 
-function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; signMessage: (m: Uint8Array) => Promise<Uint8Array>; onResult: (r: EnclaveOk) => void; localDemo: boolean }) {
+function Inbox({ wallet, signMessage, onResult, localDemo, onInbox }: { wallet: string; signMessage: (m: Uint8Array) => Promise<Uint8Array>; onResult: (r: EnclaveOk) => void; localDemo: boolean; onInbox?: (has: boolean) => void }) {
   const { connected } = useWallet();
   const [inbox, setInbox] = useState<StoredInbox | null>(() => store.get(wallet));
   const [busy, setBusy] = useState(false);
@@ -174,6 +189,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
   const [demoErr, setDemoErr] = useState<string | null>(null);
 
   useEffect(() => { setInbox(store.get(wallet)); }, [wallet]);
+  useEffect(() => { onInbox?.(!!inbox); }, [inbox, onInbox]);
 
   // Back from the Phantom app with the inbox request signed: finish asking for the address.
   useEffect(() => {
@@ -290,7 +306,8 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
       <section aria-labelledby="ib-h">
         <div className="h">
           <h1 id="ib-h">Your own inbox</h1>
-          <p>Your mobile money provider emails your statement to an address made for this wallet. MTN MoMo is one example.</p>
+          <p>Your mobile money provider emails your statement to an address made for this wallet.</p>
+          <p className="works-today" data-testid="works-today"><Icon name="check" />Works with MTN MoMo today. Bank statements are next.</p>
         </div>
         <div className="env pcard" aria-hidden="true">
           <div className="row1"><div style={{ minWidth: 0 }}><div className="to">To</div><code>••••••••••@inbox</code></div><div className="slot"><Icon name="lock" /></div></div>
@@ -473,6 +490,35 @@ function Upload({ wallet, signMessage, onResult }: { wallet: string; signMessage
           <Btn variant="secondary" onClick={() => void send()} busy={busy} disabled={!eml}>Send to the sealed computer</Btn>
         </div>
         {err && <Notice tone="bad" title="The sealed computer said no">{err}</Notice>}
+      </div>
+    </section>
+  );
+}
+
+/** First run: the limit, said in the person's own words, and one button to their first loan. */
+function Reveal({ signed, goal, onNext }: { signed: EnclaveOk; goal?: Goal; onNext: () => void }) {
+  const rec = useMemo(() => decodeRecord(recordBytes(signed)), [signed]);
+  const amt = formatUsdc(rec.limitMicro, { max: 2 });
+  const short = amt.replace(/\.00$/, '');
+  const big = useMemo(() => stamp(256, 304, { foil: true, num: short, cap: 'USDC', motif: 'bank', numSize: short.length > 4 ? 16 : short.length > 3 ? 18 : 24, rosette: true, ms: 0.5 }), [short]);
+  const bg = useMemo(() => rosette(255, 300, 300, 90, '#8E7CC8', 0.1) + rosette(255, 300, 200, 72, '#7FA4E6', 0.1), []);
+  // the waiting screen was scrolled down to its buttons: the reveal starts at its headline
+  useEffect(() => { window.scrollTo({ top: 0 }); }, []);
+  return (
+    <section className="landed reveal" aria-labelledby="rv-h">
+      <div className="rosette" aria-hidden="true"><svg viewBox="0 0 510 700" preserveAspectRatio="xMidYMid slice" dangerouslySetInnerHTML={{ __html: bg }} /></div>
+      <div className="cap">Your limit is ready</div>
+      <h1 id="rv-h">For {forGoal(goal)}, you can draw up to <span data-testid="reveal-amount">{amt}</span> USDC</h1>
+      <div className="stampwrap" aria-hidden="true">
+        <div className="stamp drop"><svg viewBox="0 0 256 304" dangerouslySetInnerHTML={{ __html: big }} /></div>
+      </div>
+      <div className="landchips">
+        <span className="pill glass"><Icon name="clock" />Good until {formatDate(rec.expiry)}</span>
+        <span className="pill glass"><Icon name="shield" />Only this number left</span>
+      </div>
+      <div className="actions">
+        <Btn onClick={onNext}>Choose an amount</Btn>
+        <p className="help" style={{ textAlign: 'center', margin: '4px 0 0' }}>2% fee and a 20% deposit. You see both before you agree.</p>
       </div>
     </section>
   );
