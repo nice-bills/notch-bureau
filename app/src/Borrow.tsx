@@ -247,7 +247,7 @@ export function Borrow() {
 
       <div className="dock">
         {okAmount && usdc < toAdd ? (
-          <><p className="help warn" style={{ textAlign: 'center' }}>Your wallet has {formatUsdc(usdc)} test USDC. The deposit needs {formatUsdc(toAdd - usdc, { up: true })} more.</p><div style={{ display: 'flex', justifyContent: 'center' }}><FaucetButton /></div></>
+          <div className="dock-warn glass"><p className="help warn">Your wallet has {formatUsdc(usdc)} test USDC. The deposit needs {formatUsdc(toAdd - usdc, { up: true })} more.</p><FaucetButton /></div>
         ) : (
           <>
             <Slide label={okAmount ? `Slide to borrow ${formatUsdc(draw!)}` : 'Pick an amount'} aria={okAmount ? `Borrow ${formatUsdc(draw!)} USDC` : 'Borrow'} disabled={!okAmount || drawAct.busy} busy={drawAct.busy} onDone={onBorrow} />

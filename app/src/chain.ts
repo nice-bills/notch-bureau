@@ -150,8 +150,38 @@ export async function fetchSol(addr: Address): Promise<bigint> {
 // Transactions
 // ---------------------------------------------------------------------------
 
+// A recent blockhash kept warm. On iPhone the Phantom app opens on its own only while the tap that asked for it is
+// still "fresh" (about a second); every network wait before the hand-off eats into that, and past it Safari asks
+// "Open this page in Phantom?" instead. So the blockhash is fetched ahead of time, not after the tap.
+type Blockhash = Awaited<ReturnType<ReturnType<typeof rpc.getLatestBlockhash>['send']>>['value'];
+const BH_FRESH_MS = 30_000;
+let bh: { at: number; value: Blockhash } | null = null;
+let bhInFlight: Promise<Blockhash> | null = null;
+function refreshBlockhash(): Promise<Blockhash> {
+  bhInFlight ??= rpc.getLatestBlockhash({ commitment: 'confirmed' }).send()
+    .then(({ value }) => { bh = { at: Date.now(), value }; return value; })
+    .finally(() => { bhInFlight = null; });
+  return bhInFlight;
+}
+async function recentBlockhash(): Promise<Blockhash> {
+  if (bh && Date.now() - bh.at < BH_FRESH_MS) {
+    if (Date.now() - bh.at > BH_FRESH_MS / 2) void refreshBlockhash().catch(() => {});
+    return bh.value;
+  }
+  return refreshBlockhash();
+}
+/** Keep a blockhash warm while the page is open and visible (cheap: one small read every 20 s). */
+export function keepBlockhashWarm(): () => void {
+  if (typeof document === 'undefined') return () => {};
+  const tick = () => { if (document.visibilityState === 'visible') void refreshBlockhash().catch(() => {}); };
+  tick();
+  const id = setInterval(tick, 20_000);
+  document.addEventListener('visibilitychange', tick);
+  return () => { clearInterval(id); document.removeEventListener('visibilitychange', tick); };
+}
+
 async function compile(feePayer: Address, ixs: Instruction[]) {
-  const { value: blockhash } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
+  const blockhash = await recentBlockhash();
   const msg = pipe(
     createTransactionMessage({ version: 0 }),
     (m) => setTransactionMessageFeePayer(feePayer, m),
@@ -192,11 +222,11 @@ export async function sendTransaction(
   ixs: Instruction[],
   sign: (wire: Uint8Array, meta?: { lastValidBlockHeight: bigint }) => Promise<Uint8Array>,
 ): Promise<SendOutcome> {
-  await assertCanPayFees(feePayer);
-  const sim = await simulate(feePayer, ixs);
+  // One round of reads, side by side, then straight to the wallet (see recentBlockhash for why the wait matters).
+  const [, sim, compiled] = await Promise.all([assertCanPayFees(feePayer), simulate(feePayer, ixs), compile(feePayer, ixs)]);
   if (!sim.ok) throw new TxError(sim.err ?? 'simulation failed', sim.logs);
 
-  const { tx, blockhash } = await compile(feePayer, ixs);
+  const { tx, blockhash } = compiled;
   const wire = new Uint8Array(getTransactionEncoder().encode(tx));
   const signed = await sign(wire, { lastValidBlockHeight: blockhash.lastValidBlockHeight });
   return submitSigned(signed, blockhash.lastValidBlockHeight);

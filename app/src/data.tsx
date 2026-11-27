@@ -2,7 +2,7 @@
 // and refreshes right after any transaction.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { USDC_MINT } from './config';
-import { fetchEverything, type PoolView } from './chain';
+import { fetchEverything, type PoolView, keepBlockhashWarm } from './chain';
 import { deriveAddresses, type CreditLine, type NotchAddresses, type Tranche, type WithdrawRequest } from './notch';
 import { PROGRAM_ID } from './config';
 import { useWallet } from './wallet';
@@ -57,6 +57,8 @@ const liveSigned = (s: EnclaveOk | null) => (s && Number(s.expiry) > Date.now() 
 export function ChainProvider({ children }: { children: ReactNode }) {
   const { connected } = useWallet();
   const owner = connected?.address ?? null;
+  // a fresh blockhash ready before any tap, so the wallet opens right away (chain.ts recentBlockhash)
+  useEffect(() => (owner ? keepBlockhashWarm() : undefined), [owner]);
   const [addrs, setAddrs] = useState<NotchAddresses | null>(null);
   const [pool, setPool] = useState<PoolView | null>(() => load<PoolView>('notch.pool'));
   const [poolLoaded, setPoolLoaded] = useState(() => pool !== null);
