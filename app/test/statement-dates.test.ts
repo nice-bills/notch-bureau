@@ -3,11 +3,11 @@ import { longDay, momoDay, numericDay, statementRange, waitStage } from '../src/
 
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-describe('statementRange: last 90 days, ending today', () => {
+describe('statementRange: last 90 days, ending yesterday', () => {
   it('26 Nov 2026 -> 28 Aug 2026', () => {
     const r = statementRange(new Date(2026, 10, 26, 15, 30));
     expect(ymd(r.start)).toBe('2026-08-28');
-    expect(ymd(r.end)).toBe('2026-11-26');
+    expect(ymd(r.end)).toBe('2026-11-25'); // MTN refuses today as the end date
   });
   it('crosses a year and a leap day', () => {
     expect(ymd(statementRange(new Date(2028, 2, 1)).start)).toBe('2027-12-02'); // 2028 is a leap year
@@ -28,7 +28,7 @@ describe('statementRange: last 90 days, ending today', () => {
   it('MTN MoMo format: DD MM YYYY with spaces, whatever the locale', () => {
     const { start, end } = statementRange(new Date(2026, 10, 27));
     expect(momoDay(start)).toBe('29 08 2026');
-    expect(momoDay(end)).toBe('27 11 2026');
+    expect(momoDay(end)).toBe('26 11 2026');
     expect(momoDay(new Date(2027, 0, 5))).toBe('05 01 2027');
   });
 });

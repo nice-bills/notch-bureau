@@ -77,13 +77,13 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   await expect(page.getByLabel('Statement status')).toContainText('Waiting for the email');
   // the statement dates, spelled out (today minus 90 days, in the phone's format), and the *170# path as an example
   const want = await page.evaluate(() => {
-    const t = new Date(); const s = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 90);
+    const n = new Date(); const s = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 90); const t = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
     const o = { day: 'numeric', month: 'short', year: 'numeric' } as const;
     const momo = (d: Date) => `${String(d.getDate()).padStart(2, '0')} ${String(d.getMonth() + 1).padStart(2, '0')} ${d.getFullYear()}`; // MTN's "Day Month Year"
     return { start: s.toLocaleDateString(undefined, o), num: momo(s), endNum: momo(t), end: t.toLocaleDateString(undefined, o) };
   });
   await expect(page.getByTestId('start-date')).toHaveText(want.start);
-  await expect(page.getByTestId('end-date')).toHaveText(`today, ${want.end}`);
+  await expect(page.getByTestId('end-date')).toHaveText(`yesterday, ${want.end}`);
   await expect(page.locator('.steps3')).toContainText('*170# → My Wallet → Statements → Statement Request');
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByTestId('copy-start').click();

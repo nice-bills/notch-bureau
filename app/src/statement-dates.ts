@@ -1,11 +1,14 @@
-// The dates to type into a mobile-money statement request: the last 90 days, ending today (the phone's own calendar).
+// The dates to type into a mobile-money statement request: about the last 90 days, ending YESTERDAY (the phone's own calendar).
+// MTN's *170# refuses today as the end date, so the range stops the day before.
 // People picked "last 30 days" because they did not know which date was 3 months ago, so the app says it.
 
-/** Start (today minus `days` calendar days, local time) and end (today) of the statement to request. */
+/** Start (today minus `days` calendar days, local time) and end (yesterday) of the statement to request. */
 export function statementRange(now: Date = new Date(), days = 90): { start: Date; end: Date } {
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const start = new Date(end);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const start = new Date(today);
   start.setDate(start.getDate() - days); // calendar days, so a DST change never shifts it by one
+  const end = new Date(today);
+  end.setDate(end.getDate() - 1);
   return { start, end };
 }
 

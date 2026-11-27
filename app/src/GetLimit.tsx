@@ -339,7 +339,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
               const typed = momoDay(d);
               return (
                 <span key={which} className="date-row">
-                  <span>{which === 'start' ? 'Start date' : 'End date'}: <b data-testid={`${which}-date`}>{which === 'end' ? `today, ${longDay(d)}` : longDay(d)}</b></span>
+                  <span>{which === 'start' ? 'Start date' : 'End date'}: <b data-testid={`${which}-date`}>{which === 'end' ? `yesterday, ${longDay(d)}` : longDay(d)}</b></span>
                   <button type="button" className="chip tap" data-testid={`copy-${which}`} aria-label={copiedDate === which ? 'Copied' : `Copy ${which} date ${typed}`}
                     onClick={() => { void copyText(typed).then((ok) => { if (ok) { setCopiedDate(which); setTimeout(() => setCopiedDate((c) => (c === which ? null : c)), 1600); } }); }}>
                     <Icon name={copiedDate === which ? 'check' : 'copy'} /><span translate="no">{copiedDate === which ? 'Copied' : typed}</span>
@@ -354,7 +354,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
       </ol>
       <ul className="log pcard" aria-live="polite" aria-label="Statement status">
         {steps.map((s, i) => {
-          const state = live === 'refused' ? (i === 0 ? 'bad' : 'wait') : i < liveIdx ? 'done' : i === liveIdx && live !== 'idle' ? 'live' : i === 0 && live === 'idle' ? 'live' : 'wait';
+          const state = live === 'refused' ? (i === 0 ? 'bad' : 'wait') : i < liveIdx ? 'done' : i === liveIdx && live !== 'idle' ? 'live' : i === 0 && live === 'idle' ? 'now' : 'wait'; // waiting: a still ring (the pulse below is the one sign of life)
           return (
             <li key={s.title} className={state}>
               <span className="ck">{state === 'bad' ? <Icon name="x" /> : <Icon name="check" />}</span>

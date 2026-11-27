@@ -153,6 +153,7 @@ a{color:var(--ultra)}
 .log li.done .ck{background:var(--ink);border-color:var(--ink)}
 .log li.done .ck .ic{opacity:1;transform:none}
 .log li.live .ck{border-color:var(--ultra);border-right-color:transparent;animation:spin .8s linear infinite}
+.log li.now .ck{border-color:var(--ultra)}
 .log li.bad .ck{background:var(--verm);border-color:var(--verm)}
 .log b{display:block;font-weight:600;font-size:16px}
 .log small{display:block;color:var(--soft);font-size:14px}
