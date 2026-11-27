@@ -18,7 +18,7 @@ services:
       - key: VITE_ENCLAVE_URL
         value: https://0015f90bd03804232678c956ce789b09384f4b1d-8787.dstack-pha1-prod9.phala.network
       - key: VITE_FAUCET_URL
-        value: https://notch-bureau-faucet-jqfg.onrender.com
+        value: https://notch-bureau-faucet.onrender.com
       - key: VITE_RPC_URL
         value: https://api.devnet.solana.com
       - key: VITE_PROGRAM_ID
@@ -39,7 +39,7 @@ services:
   - type: web
     runtime: node
     name: notch-bureau-faucet
-    plan: free
+    plan: starter
     rootDir: app
     buildCommand: npx -y pnpm@12.21.0 install --frozen-lockfile --prod
     startCommand: node scripts/faucet-server.mjs
