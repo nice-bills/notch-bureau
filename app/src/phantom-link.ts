@@ -11,6 +11,7 @@ import nacl from 'tweetnacl';
 import { getBase58Decoder, getBase58Encoder } from '@solana/kit';
 import { getWallets } from '@wallet-standard/app';
 import { CHAIN_ID } from './config';
+import { isNativeApp, RETURN_URL } from './native';
 
 export const PHANTOM_LINK_NAME = 'Phantom app';
 const BASE = 'https://phantom.app/ul/v1';
@@ -46,10 +47,13 @@ const dappKeys = (s: Session) => nacl.box.keyPair.fromSecretKey(unb58(s.secret))
 const shared = (s: Session, phantomPub: string) => nacl.box.before(unb58(phantomPub), dappKeys(s).secretKey);
 
 export const linkedAddress = () => read<Session>(K_SESSION)?.address ?? null;
+/** A request went to Phantom and no answer has been read yet. */
+export const awaitingPhantom = () => read<Pending>(K_PENDING) !== null;
 export const forgetPhantomLink = () => { write(K_SESSION, null); write(K_PENDING, null); write(K_RESULT, null); };
 
 function redirectLink(action: string): string {
-  const u = new URL(location.href);
+  // The Android app's page is local to the app, so Phantom has to come back through the app's own link.
+  const u = new URL(isNativeApp ? `${RETURN_URL}${location.hash}` : location.href);
   u.searchParams.set('phantom', action);
   return u.toString();
 }

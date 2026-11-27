@@ -17,6 +17,7 @@ import { Banners, useUi } from './App';
 import { Ticket } from './Ticket';
 import { Restoring } from './Home';
 import { copyText, longDay, momoDay, statementRange, waitStage } from './statement-dates';
+import { askToNotify, notifyLimit } from './native';
 
 const SAMPLES = [
   { file: '/samples/deel.eml', label: 'Deel payout' },
@@ -200,6 +201,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
       setInbox(store.set(wallet, ib));
       setLive('idle');
       setRefusal(null);
+      void askToNotify();
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       setErr(/reject|declin|cancel/i.test(m) ? 'You cancelled the signature in your wallet. Nothing was sent.' : m);
@@ -222,7 +224,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
         const r = await pollRecord(wallet, inbox.pollToken, ctl.signal);
         setPollErr(null);
         setFailSince(null);
-        if (r.status === 'ready') { done.current = true; setLive('done'); buzz(22); onResultRef.current(r.result); return; }
+        if (r.status === 'ready') { done.current = true; setLive('done'); buzz(22); void notifyLimit(inbox.address, formatUsdc(decodeRecord(recordBytes(r.result)).limitMicro, { max: 2 })); onResultRef.current(r.result); return; }
         if (r.status === 'refused' || r.status === 'locked') { setLive('refused'); setRefusal({ friendly: r.friendly, locked: r.status === 'locked' }); }
       } catch (e) {
         if (ctl.signal.aborted) return;

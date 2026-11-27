@@ -13,6 +13,7 @@ import { explainError } from './errors';
 import { PHANTOM_LINK_NAME, linkedAddress, takeError, takeSignedTransaction } from './phantom-link';
 import { WC_NAME } from './walletconnect';
 import { browseLinks, isIOSOtherBrowser, isPhone } from './device';
+import { isNativeApp } from './native';
 import { FaucetButton } from './Faucet';
 import { claimLatest, newTabReturn, supersededByNewerTab } from './tabs';
 // The everyday screens are in the main bundle: switching tabs must never wait for a download (on a phone through a
@@ -347,7 +348,7 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
           const [title, sub] = walletLabel(w.name);
           return (
             <button key={w.name} type="button" role="menuitem" className="opt tap" aria-busy={connecting === w.name || undefined}
-              onClick={() => { setErr(null); connect(w).then(onClose).catch((e) => setErr(e instanceof Error ? e.message : String(e))); }}>
+              onClick={() => { setErr(null); connect(w).then(onClose).catch((e) => setErr(connectError(e))); }}>
               <span className="badge"><img src={w.icon} alt="" width={28} height={28} /></span>
               <span className="t"><b>{title}</b><small>{sub}</small></span>
               {connecting === w.name ? <span className="spinner chev" aria-hidden="true" /> : <span className="chev"><Icon name="chev" /></span>}
@@ -365,7 +366,8 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
         <p className="note-ios" role="note">On iPhone the Phantom app answers in Safari. Open this page in Safari to use it, or use “Open in Phantom’s browser” below.</p>
       )}
       {/* one obvious choice above; the other ways one tap away (on a small phone the full list needed scrolling) */}
-      <details className="more" open={!wallets.length || undefined}>
+      {/* Not in the Android app: wallet browsers cannot open its local page, and Google refuses sign-in inside a WebView. */}
+      {!isNativeApp && <details className="more" open={!wallets.length || undefined}>
         <summary>More ways to connect</summary>
       {isPhone && (
           <div className="stack" style={{ marginTop: 4 }} aria-label="Open in a wallet app">
@@ -393,13 +395,18 @@ function SignInSheet({ onClose, pollar, setPollar }: { onClose: () => void; poll
             <span className="t"><b>Continue with Google</b><small id="google-off">Not switched on for this app yet (needs a Pollar key).</small></span>
           </button>
         )}
-      </details>
+      </details>}
       {(err || pollar?.error) && <p className="field-hint err" role="alert">{err || pollar?.error}</p>}
       {pollar?.step === 'authenticated' && (
         <p className="help">Google wallets can sign in and hold USDC today. Posting a limit, borrowing and lending still need a self-custody wallet: Pollar does not sign other programs’ transactions yet.</p>
       )}
     </Sheet>
   );
+}
+
+function connectError(e: unknown) {
+  const m = e instanceof Error ? e.message : String(e);
+  return isNativeApp && /no installed wallet|wallet not found/i.test(m) ? 'No wallet app answered. Install Phantom or Solflare, set it to devnet, then try again.' : m;
 }
 
 /** Plain names for the wallets a phone browser shows. */

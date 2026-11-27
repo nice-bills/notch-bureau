@@ -1,0 +1,14 @@
+{
+  "appId": "app.notchbureau.mobile",
+  "appName": "Notch",
+  "webDir": "dist",
+  "server": { "hostname": "notch.internal" },
+  "android": {
+    "appendUserAgent": "Solana Mobile Web Shell",
+    "backgroundColor": "#E6E6EA"
+  },
+  "plugins": {
+    "SystemBars": { "insetsHandling": "css", "style": "LIGHT" },
+    "LocalNotifications": { "smallIcon": "ic_stat_notch", "iconColor": "#2A1636" }
+  }
+}

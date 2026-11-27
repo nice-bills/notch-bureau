@@ -9,6 +9,8 @@
 //  2. If no older tab answers in time (iOS freezes background tabs, or there is none), this tab handles the answer
 //     itself, as before, and says the older tab can be closed.
 //  3. An older tab that comes back into view after a newer one took over says so, with a one-tap close.
+import { isNativeApp } from './native';
+
 const PHANTOM_KEYS = ['phantom', 'phantom_encryption_public_key', 'nonce', 'data', 'errorCode', 'errorMessage'];
 const LATEST = 'notch.tab.latest';
 const TAKEN = 'notch.tab.taken';
@@ -41,7 +43,7 @@ export let newTabReturn = false;
  * only "done, close this tab" if it is still open), or 'here' to handle it in this tab.
  */
 export async function handOffPhantomReturn(): Promise<'handed' | 'here'> {
-  if (!isPhantomReturn()) return 'here';
+  if (!isPhantomReturn() || isNativeApp) return 'here'; // the Android app has one page: nothing to hand over
   try { if (sessionStorage.getItem(TAKEN)) { sessionStorage.removeItem(TAKEN); return 'here'; } } catch { /* private mode */ }
   const fresh = history.length <= 1; // a tab another app opened: one history entry, and closable by script
   if (!ch || !fresh) { newTabReturn = fresh; if (fresh) claimLatest(); return 'here'; }

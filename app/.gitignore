@@ -5,3 +5,10 @@ public/samples/
 e2e/.state/
 e2e/test-results/
 e2e/report/
+# the signed app is built output; its README and screenshots are committed
+*.apk
+*.jks
+*.keystore
+*keystore*.env
+android-release*.env
+tsconfig.tsbuildinfo

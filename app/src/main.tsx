@@ -8,7 +8,8 @@ import { App } from './App';
 import { WalletProvider } from './wallet';
 import { CHAIN_ID } from './config';
 import { isAndroid, isIOS, isIOSOtherBrowser } from './device';
-import { consumePhantomRedirect, linkedAddress, registerPhantomLink } from './phantom-link';
+import { isNativeApp, setupNativeShell } from './native';
+import { awaitingPhantom, consumePhantomRedirect, linkedAddress, registerPhantomLink } from './phantom-link';
 import { registerWalletConnect } from './walletconnect';
 import { handOffPhantomReturn } from './tabs';
 import { Btn } from './ui';
@@ -20,19 +21,26 @@ async function boot() {
 // then closes itself), otherwise read it here, before React renders.
 if ((await handOffPhantomReturn()) === 'handed') { showHanded(); return; }
 consumePhantomRedirect();
+void setupNativeShell(awaitingPhantom);
 
 if (isAndroid) {
   // Android Chrome: Solana Mobile Wallet Adapter. It registers as a Wallet Standard wallet, so the normal sign-in sheet
   // lists it, and tapping it opens the wallet app on the phone (Phantom, Solflare, Seed Vault on Seeker).
-  void import('@solana-mobile/wallet-standard-mobile').then(({ registerMwa, createDefaultAuthorizationCache, createDefaultChainSelector, createDefaultWalletNotFoundHandler }) =>
+  // The Android app too: its user agent carries "Solana Mobile Web Shell" (capacitor.config.json), which is how the
+  // library knows this WebView can open wallet apps.
+  const mwa = import('@solana-mobile/wallet-standard-mobile').then(({ registerMwa, createDefaultAuthorizationCache, createDefaultChainSelector, createDefaultWalletNotFoundHandler }) =>
     registerMwa({
       appIdentity: { name: 'Notch', uri: location.origin, icon: 'notch.svg' },
       authorizationCache: createDefaultAuthorizationCache(),
       chains: [CHAIN_ID],
       chainSelector: createDefaultChainSelector(),
-      onWalletNotFound: createDefaultWalletNotFoundHandler(),
+      // The library's own dialog says "browser not supported" in a WebView: the sign-in sheet says what to do instead.
+      onWalletNotFound: isNativeApp ? async () => {} : createDefaultWalletNotFoundHandler(),
     }),
   ).catch(() => { /* MWA unavailable: the sheet still offers "open in the wallet's browser" */ });
+  // The Android app has no "open in the wallet's browser", so Phantom deeplinks are its fallback. Added after Mobile Wallet
+  // Adapter so that one stays first in the list.
+  if (isNativeApp) void mwa.then(registerPhantomLink);
 }
 if (isIOS) {
   // iPhone outside a wallet's browser: Phantom deeplinks. Inside Phantom's browser Phantom injects itself, so wait a moment
