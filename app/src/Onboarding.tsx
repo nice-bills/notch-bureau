@@ -74,43 +74,106 @@ function Frame({ step, children, foot, label }: { step: number; children: ReactN
   );
 }
 
-// ---- 0. the promise: the original welcome (envelope + stamp wall) -------------------------------------------------
-const WALL: [Ink, Motif, string][] = [['verm', 'sun', '5'], ['ultra', 'bank', '10'], ['ochre', 'kente', '20'], ['sea', 'waves', '2'], ['verm', 'horn', '1'], ['ultra', 'waves', '50'], ['ochre', 'sun', '5'], ['sea', 'kente', '10']];
+// ---- 0. the promise: a full-page stamp wall you can play with ----------------------------------------------------
+// Each stamp on the wall is a payment from someone's money history. Tap one and it flies onto the envelope, and the
+// example limit on the envelope grows. Near the finger the stamps lift; the envelope leans toward it. It is the pitch
+// as a toy: your history becomes your limit.
+const WALL: [Ink, Motif, number][] = [['verm', 'sun', 5], ['ultra', 'bank', 10], ['ochre', 'kente', 20], ['sea', 'waves', 2], ['verm', 'horn', 1], ['ultra', 'waves', 50], ['ochre', 'sun', 5], ['sea', 'kente', 10]];
 const CAPS = ['GHANA', 'NOTCH', 'AIRMAIL', 'ACCRA', 'POSTE', 'KUMASI', 'TAMALE', 'CEDI'];
+const ROWS = 8, COLS = 7;
+const MAX_EXAMPLE = 500;
+// a limit is a slice of what moves through your account, never all of it
+const SHARE = 0.25;
 
 function Pitch() {
   const { openSignIn, go } = useUi();
   const wall = useMemo(() => {
     let html = '';
-    for (let r = 0; r < 3; r++) {
+    for (let r = 0; r < ROWS; r++) {
       html += '<div class="row">';
-      for (let i = 0; i < 9; i++) {
+      for (let i = 0; i < COLS; i++) {
         const [ink, mo, num] = WALL[(i * 3 + r * 5) % WALL.length];
-        html += `<svg viewBox="0 0 88 104">${stamp(88, 104, { ink, motif: mo, num, cap: CAPS[(i + r * 2) % CAPS.length] })}</svg>`;
+        html += `<span class="st" data-v="${num}" data-ink="${ink}" data-mo="${mo}" style="--d:${((i * 7 + r * 3) % 11) * 40}ms"><svg viewBox="0 0 88 104">${stamp(88, 104, { ink, motif: mo, num: String(num), cap: CAPS[(i + r * 2) % CAPS.length] })}</svg></span>`;
       }
       html += '</div>';
     }
     return html;
   }, []);
   const env = useMemo(() => envelope(), []);
-  const mark = useMemo(() => stamp(88, 104, { ink: 'verm', motif: 'kente', num: '120', cap: 'USDC', top: 'NOTCH', numSize: 30 }), []);
-  // Interactive hero: the envelope leans toward the finger (the stamp wall drifts the other way), and a tap stamps an
-  // example limit on it. Plain CSS variables, no re-render per move.
   const root = useRef<HTMLElement>(null);
-  const [stamped, setStamped] = useState(false);
+  const wallRef = useRef<HTMLDivElement>(null);
+  const markRef = useRef<HTMLSpanElement>(null);
+  const [got, setGot] = useState({ n: 0, sum: 0, total: 0 });
+  const [bump, setBump] = useState(0);
+  const mark = useMemo(() => stamp(88, 104, { ink: 'verm', motif: 'kente', num: String(got.total), cap: 'USDC', top: 'LIMIT', numSize: got.total >= 100 ? 26 : 30 }), [got.total]);
+  const still = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  // the stamps near the finger lift; the envelope leans toward it; the wall drifts the other way
+  const frame = useRef(0);
   const lean = (e: React.PointerEvent) => {
     const el = root.current;
-    if (!el || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-    const r = el.getBoundingClientRect();
-    const x = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width) * 2 - 1));
-    const y = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height) * 2 - 1));
-    el.style.setProperty('--lx', x.toFixed(3));
-    el.style.setProperty('--ly', y.toFixed(3));
+    if (!el || still()) return;
+    const { clientX: px, clientY: py } = e;
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => {
+      const r = el.getBoundingClientRect();
+      el.style.setProperty('--lx', Math.max(-1, Math.min(1, ((px - r.left) / r.width) * 2 - 1)).toFixed(3));
+      el.style.setProperty('--ly', Math.max(-1, Math.min(1, ((py - r.top) / r.height) * 2 - 1)).toFixed(3));
+      wallRef.current?.querySelectorAll<HTMLElement>('.st').forEach((s) => {
+        const b = s.getBoundingClientRect();
+        const d = Math.hypot(b.left + b.width / 2 - px, b.top + b.height / 2 - py);
+        const k = Math.max(0, 1 - d / 130);
+        s.style.setProperty('--k', k.toFixed(3));
+      });
+    });
   };
-  const settle = () => { root.current?.style.setProperty('--lx', '0'); root.current?.style.setProperty('--ly', '0'); };
-  const press = () => { setStamped((v) => !v); buzz(stamped ? 6 : 18); };
+  const settle = () => {
+    cancelAnimationFrame(frame.current);
+    root.current?.style.setProperty('--lx', '0');
+    root.current?.style.setProperty('--ly', '0');
+    wallRef.current?.querySelectorAll<HTMLElement>('.st').forEach((s) => s.style.setProperty('--k', '0'));
+  };
+
+  // tap a stamp: it flies onto the envelope and the example limit grows
+  const collect = (e: React.MouseEvent) => {
+    const s = (e.target as HTMLElement).closest<HTMLElement>('.st');
+    if (!s || s.classList.contains('used')) return;
+    const v = Number(s.dataset.v) || 0;
+    s.classList.add('used');
+    buzz(12);
+    const add = () => { setGot((g) => ({ n: g.n + 1, sum: g.sum + v, total: Math.min(MAX_EXAMPLE, Math.round((g.sum + v) * SHARE)) })); setBump((b) => b + 1); };
+    const to = markRef.current?.getBoundingClientRect();
+    const from = s.getBoundingClientRect();
+    if (!to || still() || !('animate' in document.body)) { add(); return; }
+    const fly = document.createElement('div');
+    fly.className = 'st-fly';
+    fly.innerHTML = s.innerHTML;
+    Object.assign(fly.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px` });
+    document.body.appendChild(fly);
+    const dx = to.left + to.width / 2 - (from.left + from.width / 2), dy = to.top + to.height / 2 - (from.top + from.height / 2);
+    const sc = to.width / from.width;
+    const anim = fly.animate([
+      { transform: 'translate(0,0) rotate(-7deg) scale(1)', offset: 0 },
+      { transform: `translate(${dx * 0.5}px,${dy * 0.5 - 60}px) rotate(8deg) scale(${(1 + sc) / 2 + 0.25})`, offset: 0.55 },
+      { transform: `translate(${dx}px,${dy}px) rotate(-8deg) scale(${sc})`, offset: 1 },
+    ], { duration: 520, easing: 'cubic-bezier(.3,.7,.3,1)' });
+    anim.onfinish = () => { fly.remove(); add(); };
+  };
+  const reset = () => {
+    if (!got.n) { root.current?.querySelector('.welcome-live .hero')?.animate([{ transform: 'rotate(-4deg) translateX(0)' }, { transform: 'rotate(-4deg) translateX(-6px)' }, { transform: 'rotate(-4deg) translateX(6px)' }, { transform: 'rotate(-4deg) translateX(0)' }], { duration: 260 }); buzz(6); return; }
+    wallRef.current?.querySelectorAll('.st.used').forEach((s) => s.classList.remove('used'));
+    setGot({ n: 0, sum: 0, total: 0 });
+    buzz(6);
+  };
+
+  const hint = got.n === 0
+    ? 'Tap the stamps. Each one is a payment in your money history.'
+    : `${got.n} payment${got.n === 1 ? '' : 's'} (${got.sum} in) → a ${got.total} USDC limit (example). Yours comes from your real statement.`;
+
   return (
-    <section ref={root} className={cx('welcome', 'welcome-live', stamped && 'is-stamped')} aria-labelledby="p-h" data-step={0} onPointerMove={lean} onPointerLeave={settle} onPointerUp={(e) => { if (e.pointerType !== 'mouse') settle(); }}>
+    <section ref={root} className={cx('welcome', 'welcome-live', got.n > 0 && 'is-stamped')} aria-labelledby="p-h" data-step={0} onPointerMove={lean} onPointerLeave={settle} onPointerUp={(e) => { if (e.pointerType !== 'mouse') settle(); }}>
+      <div ref={wallRef} className="wall" aria-hidden="true" onClick={collect}><div className="rows" dangerouslySetInnerHTML={{ __html: wall }} /></div>
+      <div className="wall-fade" aria-hidden="true" />
       <div className="brandpill glass lens">
         <svg viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="8" fill="#111A33" /><path d="M8.5 18V8.5l9 9V8" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
         notch
@@ -120,18 +183,18 @@ function Pitch() {
         <h1 id="p-h">Credit from the money history you already have.</h1>
         <p>No bank account, no credit score, no land or car to pledge. Your money statement is the proof.</p>
       </div>
-      <button type="button" className="hero" onClick={press} aria-pressed={stamped} aria-label={stamped ? 'Example limit stamped. Tap to clear.' : 'Tap the envelope to see an example limit'}>
+      <button type="button" className="hero" onClick={reset} aria-label={got.n ? `Example limit ${got.total} USDC. Tap to start over.` : 'Envelope. Tap the stamps around it to build an example limit.'}>
         <svg viewBox="0 0 312 204" aria-hidden="true" dangerouslySetInnerHTML={{ __html: env }} />
-        <span className="hero-mark" aria-hidden="true"><svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: mark }} /></span>
+        <span ref={markRef} key={bump} className="hero-mark" aria-hidden="true"><svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: mark }} /></span>
       </button>
-      <p className="hero-hint" aria-live="polite">{stamped ? '120 USDC to borrow (example). Yours comes from your statement.' : 'Tap the envelope'}</p>
-      <div className="wall" aria-hidden="true"><div className="rows" dangerouslySetInnerHTML={{ __html: wall }} /></div>
+      <p className="hero-hint glass" aria-live="polite">{hint}</p>
       <div className="foot">
         <Btn onClick={() => goStep(STEP.goal)}>Get started</Btn>
         <div className="onb-links">
           <button type="button" className="textlink" onClick={openSignIn}>I already use Notch</button>
           <button type="button" className="textlink" onClick={() => go('lend')}>I want to lend</button>
         </div>
+        <p className="welcome-dev">Solana devnet only. Test money, no real funds.</p>
       </div>
     </section>
   );

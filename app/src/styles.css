@@ -660,14 +660,34 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 .h p.works-today .ic{width:16px;height:16px}
 .onb-honest{margin-top:16px}
 
-/* Interactive welcome: the envelope leans toward the finger, the stamp wall drifts the other way, a tap stamps a limit */
-.welcome-live{--lx:0;--ly:0}
-.welcome-live .hero{display:block;border:0;padding:0;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent;transform:perspective(700px) rotate(-4deg) rotateY(calc(var(--lx) * 9deg)) rotateX(calc(var(--ly) * -7deg));transition:transform .5s cubic-bezier(.2,.8,.2,1)}
+/* Interactive welcome: a full-page stamp wall. Stamps lift near the finger and fly onto the envelope when tapped. */
+.app:has(.welcome-live){padding-bottom:0}
+.app:has(.welcome-live) > footer.help{display:none}
+.welcome-live{--lx:0;--ly:0;min-height:100dvh;isolation:isolate}
+.welcome-live .wall{position:absolute;inset:-20px -60px;height:auto;bottom:auto;z-index:0;pointer-events:auto;cursor:pointer;-webkit-mask-image:none;mask-image:none;touch-action:pan-y}
+.welcome-live .wall-fade{position:absolute;inset:0;z-index:1;pointer-events:none;background:linear-gradient(180deg,rgba(241,241,244,.9) 0%,rgba(241,241,244,.82) 30%,rgba(241,241,244,.3) 40%,rgba(241,241,244,0) 47%,rgba(241,241,244,0) 74%,rgba(241,241,244,.8) 84%,var(--bg) 94%)}
+.welcome-live .wall .rows{inset:0;padding-top:8px;transform:rotate(-7deg) translate(calc(var(--lx) * -12px),calc(var(--ly) * -8px));transition:transform .7s cubic-bezier(.2,.8,.2,1)}
+.welcome-live .wall .row{gap:6px;margin-bottom:6px}
+.welcome-live .wall .row:nth-child(even){margin-left:-46px}
+.st{--k:0;display:block;flex:none;width:88px;height:104px;transform:translateY(calc(var(--k) * -8px)) scale(calc(1 + var(--k) * .14)) rotate(calc(var(--k) * 4deg));transition:transform .25s cubic-bezier(.2,.8,.2,1),opacity .3s,filter .3s;animation:st-in .5s cubic-bezier(.2,.8,.2,1) var(--d) both}
+.st svg{display:block;width:100%;height:100%;filter:drop-shadow(0 calc(2px + var(--k) * 8px) calc(3px + var(--k) * 8px) rgba(17,26,51,calc(.14 + var(--k) * .12)))}
+.st.used{opacity:.18;filter:grayscale(1);transform:scale(.9)}
+@keyframes st-in{from{opacity:0;transform:translateY(14px) scale(.92)}}
+.st-fly{position:fixed;z-index:50;pointer-events:none;will-change:transform}
+.st-fly svg{display:block;width:100%;height:100%;filter:drop-shadow(0 12px 14px rgba(17,26,51,.3))}
+.welcome-live .brandpill,.welcome-live .lede,.welcome-live .foot,.welcome-live .hero-hint{position:relative;z-index:3}
+.welcome-live .lede{pointer-events:none}
+.welcome-live h1{max-width:none;font-size:clamp(40px,11.5vw,54px)}
+.welcome-live .lede p{margin-left:-12px;background:rgba(241,241,244,.72)}
+.welcome-live .hero{position:relative;z-index:2;display:block;border:0;padding:0;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent;margin-top:28px;transform:perspective(700px) rotate(-4deg) rotateY(calc(var(--lx) * 9deg)) rotateX(calc(var(--ly) * -7deg));transition:transform .5s cubic-bezier(.2,.8,.2,1)}
 .welcome-live .hero:active{transform:perspective(700px) rotate(-4deg) scale(.97)}
 .welcome-live .hero:focus-visible{outline:2px solid var(--ultra);outline-offset:6px;border-radius:10px}
-.welcome-live .wall .rows{transform:rotate(-7deg) translate(calc(var(--lx) * -10px),calc(var(--ly) * -6px));transition:transform .7s cubic-bezier(.2,.8,.2,1)}
 .hero-mark{position:absolute;left:42%;top:8%;width:22%;opacity:0;transform:scale(1.7) rotate(-14deg);pointer-events:none;filter:drop-shadow(0 6px 8px rgba(17,26,51,.25))}
 .hero-mark svg{display:block;width:100%;height:auto;filter:none}
-.is-stamped .hero-mark{opacity:1;transform:scale(1) rotate(-8deg);transition:transform .22s cubic-bezier(.3,1.4,.5,1),opacity .12s ease-out}
-.hero-hint{position:relative;z-index:3;margin:14px auto 0;max-width:30ch;text-align:center;font-size:13px;color:#5A6070;min-height:2.6em}
-@media (prefers-reduced-motion:reduce){.welcome-live .hero,.welcome-live .wall .rows,.is-stamped .hero-mark{transition:none}}
+.is-stamped .hero-mark{opacity:1;transform:scale(1) rotate(-8deg);animation:mark-thud .28s cubic-bezier(.3,1.4,.5,1)}
+@keyframes mark-thud{from{transform:scale(1.35) rotate(-12deg)}}
+.hero-hint{margin:18px auto 0;max-width:min(32ch,calc(100% - 48px));padding:8px 14px;border-radius:14px;text-align:center;font-size:13px;line-height:1.4;color:#3C3F48;pointer-events:none}
+.welcome-live .foot{margin-top:auto;padding-top:20px;background:linear-gradient(rgba(241,241,244,0),var(--bg) 30%)}
+.welcome-dev{margin:2px 0 0;text-align:center;font-size:11px;color:var(--soft)}
+@media (max-height:760px){.welcome-live h1{font-size:clamp(34px,10vw,44px)}.welcome-live .hero{margin-top:18px}}
+@media (prefers-reduced-motion:reduce){.st,.welcome-live .hero,.welcome-live .wall .rows{transition:none;animation:none}.is-stamped .hero-mark{animation:none}}
