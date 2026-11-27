@@ -60,7 +60,9 @@ export function bundleFiles() {
 
 export function buildBundle() {
   const obj = {};
-  for (const [k, p] of bundleFiles()) obj[k] = fs.readFileSync(p).toString('base64');
+  // Files as plain UTF-8 text (all are source/JSON): base64 inside gzip compresses far worse, and Phala caps the compose at 200 KB.
+  obj.__enc = 'utf8';
+  for (const [k, p] of bundleFiles()) obj[k] = fs.readFileSync(p, 'utf8');
   const json = JSON.stringify(obj); // keys already sorted
   // Dotted every 16 characters: Phala's deploy filter rejects some long random-looking alphanumeric runs
   // ("violates our terms of use"), and a gzip+base64 blob contains them by chance. The CVM strips the dots.
@@ -72,7 +74,8 @@ export function buildBundle() {
 const UNPACK = 'const z=require("zlib"),f=require("fs"),p=require("path");'
   + 'const e=process.env,n=Object.keys(e).filter(k=>/^NOTCH_BUNDLE_\\d+$/.test(k)).sort((a,b)=>a.slice(13)-b.slice(13));'
   + 'const b=JSON.parse(z.gunzipSync(Buffer.from(n.map(k=>e[k]).join("").replace(/\\./g,""),"base64")));'
-  + 'for(const[k,v]of Object.entries(b)){f.mkdirSync(p.dirname(k),{recursive:true});f.writeFileSync(k,Buffer.from(v,"base64"))}';
+  + 'const u=b.__enc==="utf8";delete b.__enc;'
+  + 'for(const[k,v]of Object.entries(b)){f.mkdirSync(p.dirname(k),{recursive:true});f.writeFileSync(k,u?v:Buffer.from(v,"base64"))}';
 export const START = `node -e '${UNPACK}' && npm ci --ignore-scripts --no-audit --no-fund && exec node enclave/src/cvm-server.js`;
 
 export const BUNDLE_PART = 100_000;

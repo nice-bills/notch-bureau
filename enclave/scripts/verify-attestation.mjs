@@ -143,9 +143,9 @@ export async function verifyAttestation(baseUrl, { expectComposeHash, expectPubk
         const diffs = [];
         for (const [name, p] of local) {
           if (!(name in bundle)) diffs.push(`${name} (missing in CVM)`);
-          else if (sha256(Buffer.from(bundle[name], 'base64')) !== sha256(fs.readFileSync(p))) diffs.push(`${name} (differs)`);
+          else if (sha256(Buffer.from(bundle[name], bundle.__enc === 'utf8' ? 'utf8' : 'base64')) !== sha256(fs.readFileSync(p))) diffs.push(`${name} (differs)`);
         }
-        for (const name of Object.keys(bundle)) if (!local.has(name)) diffs.push(`${name} (extra in CVM)`);
+        for (const name of Object.keys(bundle)) if (name !== '__enc' && !local.has(name)) diffs.push(`${name} (extra in CVM)`);
         check('code bundle inside the attested compose == this repo (enclave/src, fixtures, lockfile)', diffs.length === 0, diffs.length ? diffs.join(', ') : `${local.size} files byte-identical`);
         info.push(`rebuilt docker-compose.yml from this repo ${build.composeText() === compose ? 'is byte-identical to' : 'differs only in compression bytes from'} the attested one`);
       } catch (e) {
