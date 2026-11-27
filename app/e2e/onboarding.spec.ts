@@ -39,7 +39,7 @@ test.describe('First-run onboarding', () => {
 
       log('1. the promise: no sign-in wall, one main button');
       await expect(page.getByText(/MoMo/)).toHaveCount(0); // the outcome is the headline; MoMo is named on the input step
-      await expect(page.getByRole('heading', { name: 'Credit from the money history you already have.' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Borrow against your income, without showing it.' })).toBeVisible();
       await expect(page.getByRole('dialog')).toHaveCount(0);
       await expect(page.getByRole('navigation', { name: 'Sections' })).toHaveCount(0);
       await rules(page);

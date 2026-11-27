@@ -4,7 +4,7 @@
 // screens with the same progress bar.
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useUi, Banners } from './App';
-import { stamp } from './art';
+import { envelope, stamp, type Ink, type Motif } from './art';
 import { depositNeededFor, feeFor, payoffFor } from './notch';
 import { formatUsdc } from './amount';
 import { Btn, Icon, cx } from './ui';
@@ -74,30 +74,39 @@ function Frame({ step, children, foot, label }: { step: number; children: ReactN
   );
 }
 
-// ---- 0. the promise ------------------------------------------------------------------------------------------------
+// ---- 0. the promise: the original welcome (envelope + stamp wall) -------------------------------------------------
+const WALL: [Ink, Motif, string][] = [['verm', 'sun', '5'], ['ultra', 'bank', '10'], ['ochre', 'kente', '20'], ['sea', 'waves', '2'], ['verm', 'horn', '1'], ['ultra', 'waves', '50'], ['ochre', 'sun', '5'], ['sea', 'kente', '10']];
+const CAPS = ['GHANA', 'NOTCH', 'AIRMAIL', 'ACCRA', 'POSTE', 'KUMASI', 'TAMALE', 'CEDI'];
+
 function Pitch() {
   const { openSignIn, go } = useUi();
-  const art = useMemo(() => stamp(88, 104, { ink: 'verm', motif: 'kente', num: '120', cap: 'USDC', top: 'NOTCH', numSize: 30 }), []);
+  const wall = useMemo(() => {
+    let html = '';
+    for (let r = 0; r < 3; r++) {
+      html += '<div class="row">';
+      for (let i = 0; i < 9; i++) {
+        const [ink, mo, num] = WALL[(i * 3 + r * 5) % WALL.length];
+        html += `<svg viewBox="0 0 88 104">${stamp(88, 104, { ink, motif: mo, num, cap: CAPS[(i + r * 2) % CAPS.length] })}</svg>`;
+      }
+      html += '</div>';
+    }
+    return html;
+  }, []);
+  const env = useMemo(() => envelope(), []);
   return (
-    <section className="onb onb-promise" aria-labelledby="p-h" data-step={0}>
+    <section className="welcome" aria-labelledby="p-h" data-step={0}>
       <div className="brandpill glass lens">
         <svg viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="8" fill="#111A33" /><path d="M8.5 18V8.5l9 9V8" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
         notch
       </div>
       <Banners />
-      <div className="onb-body">
-        <h1 id="p-h" className="onb-h">Credit from the money history you already have.</h1>
-        <p className="onb-p">No bank account, no credit score, no land or car to pledge. Your money statement is the proof.</p>
-        <div className="mock" aria-hidden="true">
-          <div className="mock-phone">
-            <div className="mock-row pcard"><span className="mock-ico"><Icon name="mail" /></span><span><b>Your money statement</b><small>Sent to your Notch inbox</small></span></div>
-            <div className="mock-seal"><Icon name="lock" />Read in sealed hardware</div>
-            <div className="mock-stamp"><svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: art }} /></div>
-            <div className="mock-cap"><b>120 USDC</b> to borrow <span className="mock-eg">(example)</span></div>
-          </div>
-        </div>
+      <div className="lede">
+        <h1 id="p-h">Borrow against your income, without showing it.</h1>
+        <p>Your provider emails a statement to your own Notch inbox. A sealed computer reads it, and only a signed limit comes back.</p>
       </div>
-      <div className="onb-foot">
+      <div className="hero" aria-hidden="true"><svg viewBox="0 0 312 204" dangerouslySetInnerHTML={{ __html: env }} /></div>
+      <div className="wall" aria-hidden="true"><div className="rows" dangerouslySetInnerHTML={{ __html: wall }} /></div>
+      <div className="foot">
         <Btn onClick={() => goStep(STEP.goal)}>Get started</Btn>
         <div className="onb-links">
           <button type="button" className="textlink" onClick={openSignIn}>I already use Notch</button>
