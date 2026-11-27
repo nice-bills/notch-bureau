@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { sendTransaction } from './chain';
 import { useChain } from './data';
 import { useWallet } from './wallet';
 import { LOAN_TERM_SECONDS, depositBorrowerIx, depositNeededFor, deriveLine, drawIx, feeFor, payoffFor } from './notch';
 import { formatDate, formatUsdc, parseUsdc, toInput } from './amount';
 import { stamp } from './art';
+import { centsText, normalizeAmount } from './amount-input';
 import { buzz } from './glass';
 import { ActionStatus, Btn, DoneView, Icon, Sheet, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
@@ -58,6 +59,35 @@ export function Borrow() {
 
   const drawAct = useAction(refresh);
 
+  // A short neutral note when the field changed what was typed (rounded or clamped). Fades after 2.5 s.
+  const [note, setNote] = useState<{ text: string; k: number } | null>(null);
+  useEffect(() => { if (!note) return; const t = setTimeout(() => setNote(null), 2500); return () => clearTimeout(t); }, [note]);
+  const amtRef = useRef<HTMLInputElement>(null);
+  const overNote = (c: bigint) => cap < s.headroom ? `The pool has ${formatUsdc(c)} free right now` : s.drawn > 0n ? `You can borrow up to ${formatUsdc(c)} more` : `Your limit is ${formatUsdc(c)}`;
+  const onType = (raw: string) => {
+    const r = normalizeAmount(raw, cap, overNote);
+    setAmtStr(r.text);
+    if (r.note) setNote({ text: r.note, k: Date.now() });
+  };
+
+  // Slider in whole cents, 0..cap. While dragging it snaps to the quick amounts (with a buzz); arrow keys never snap.
+  const quick = [unit, unit * 2n, unit * 4n].filter((a) => a <= cap);
+  const capC = Number(cap / 10_000n);
+  const valC = draw ? Math.min(capC, Number(draw / 10_000n)) : 0;
+  const quickC = [...quick.map((a) => Number(a / 10_000n)), capC];
+  const dragging = useRef(false);
+  const onSlide = (raw: number) => {
+    let c = raw;
+    if (dragging.current) { const win = Math.max(1, Math.round(capC * 0.015)); const q = quickC.find((x) => Math.abs(x - c) <= win); if (q !== undefined) c = q; }
+    if (c === valC) return;
+    if (quickC.includes(c)) buzz(4);
+    setAmtStr(c === capC ? toInput(cap) : centsText(BigInt(c) * 10_000n));
+  };
+  // The last stamp torn off may be only partly used: show how much of it (a sliver at least, so 0.37 of 200 still shows).
+  const partI = pickN ? usedN + pickN - 1 : -1;
+  const partV = partI === count - 1 ? lastVal : unit;
+  const partF = draw && pickN ? Number(((draw - BigInt(pickN - 1) * unit) * 1000n) / partV) / 1000 : 1;
+
   // ONE approval: [post the limit] + [put down the 20% top-up] + borrow, in a single transaction (about 1.1 KB at
   // most, under Solana's 1232-byte cap). Only what is needed goes in: a draw that needs no top-up is just the draw.
   const onBorrow = () =>
@@ -109,25 +139,38 @@ export function Borrow() {
       {head}
       <div className="bamt">
         <label htmlFor="amt">How much do you want to borrow? <span style={{ color: 'var(--faint)' }}>Up to {formatUsdc(cap)}</span></label>
-        <div className="v">
-          <input id="amt" name="amount" inputMode="decimal" autoComplete="off" value={amtStr} onChange={(e) => setAmtStr(e.target.value)} aria-invalid={amtErr ? true : undefined} aria-describedby="amt-err" />
+        <div className="v" onClick={() => amtRef.current?.focus()}>
+          <input ref={amtRef} id="amt" name="amount" inputMode="decimal" autoComplete="off" enterKeyHint="done" value={amtStr} onChange={(e) => onType(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()} aria-invalid={amtErr ? true : undefined} aria-describedby="amt-hint amt-err" />
           <span className="u">USDC</span>
         </div>
+        <p className="amt-hint" id="amt-hint">Tap the amount to type any number</p>
+        <p className={cx('amt-note', note && 'show')} aria-live="polite" data-testid="amt-note">{note?.text ?? ''}</p>
         {amtErr ? <p className="field-err" id="amt-err" role="alert">{amtErr}</p> : <div className="back">Pay back <b>{formatUsdc(payoff, { up: true })}</b> by {formatDate(dueIfNow)}</div>}
       </div>
 
       <div className="seg glass" role="group" aria-label="Quick amounts">
-        {[unit, unit * 2n, unit * 4n].filter((a) => a <= cap).map((a) => (
+        {quick.map((a) => (
           <button key={String(a)} type="button" className={cx('tap', draw === a && 'on')} onClick={() => { setAmtStr(toInput(a)); buzz(4); }}>{formatUsdc(a).replace(/\.00$/, '')}</button>
         ))}
         <button type="button" className={cx('tap', draw === cap && 'on')} onClick={() => { setAmtStr(toInput(cap)); buzz(4); }} disabled={cap === 0n}>All</button>
+      </div>
+
+      <div className="amt-range">
+        <input type="range" min={0} max={capC} step={1} value={valC} aria-label="Amount to borrow" aria-valuetext={`${formatUsdc(BigInt(valC) * 10_000n)} USDC`}
+          style={{ '--p': `${capC ? (valC / capC) * 100 : 0}%` } as CSSProperties}
+          onPointerDown={() => { dragging.current = true; }} onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }}
+          onKeyDown={() => { dragging.current = false; }}
+          onChange={(e) => onSlide(Number(e.target.value))} />
+        <div className="ends" aria-hidden="true"><span>0</span><span>{formatUsdc(cap)}</span></div>
       </div>
 
       <div className="sheetwrap" aria-hidden="true">
         <div className="selv"><span>Notch · {formatUsdc(unit).replace(/\.00$/, '')} USDC each</span><span>{formatUsdc(draw && draw > 0n ? draw : 0n, { max: 2 })} of {formatUsdc(s.headroom, { max: 2 })} free</span></div>
         <div className="sgrid">
           {Array.from({ length: count }, (_, i) => (
-            <button key={i} type="button" tabIndex={-1} className={cx(i < usedN && 'gone', i >= usedN && i < usedN + pickN && 'pick')} disabled={i < usedN}
+            <button key={i} type="button" tabIndex={-1} className={cx(i < usedN && 'gone', i >= usedN && i < usedN + pickN && 'pick', i === partI && partF < 1 && 'part')} disabled={i < usedN}
+              style={i === partI && partF < 1 ? { '--f': `${Math.max(14, Math.round(partF * 100))}%` } as CSSProperties : undefined}
               onClick={() => { const a = i === count - 1 ? s.headroom : BigInt(i - usedN + 1) * unit; setAmtStr(toInput(a < cap ? a : cap)); buzz(4); }}>
               <svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: stampSvgs[i] }} />
             </button>
