@@ -105,7 +105,13 @@ export function consumePhantomRedirect(): Outcome | null {
   const kind = (pending?.kind ?? 'unknown') as Pending['kind'] | 'unknown';
   if (p.get('errorCode')) {
     const code = p.get('errorCode');
-    out = { kind: 'error', action: kind, message: code === '4001' ? 'You cancelled in Phantom. Nothing was signed.' : `Phantom said no: ${p.get('errorMessage') || `error ${code}`}.` };
+    if (code === '4001') out = { kind: 'error', action: kind, message: 'You cancelled in Phantom. Nothing was signed.' };
+    else {
+      // Any other refusal ("Unexpected error", unauthorized, disconnected) almost always means Phantom no longer knows this
+      // page's link: another account is active, or the app was reset. Drop the link so the next tap connects afresh.
+      forgetPhantomLink();
+      out = { kind: 'error', action: kind, message: `Phantom lost the link to this page (${p.get('errorMessage') || `error ${code}`}). Connect Phantom again, then try once more.` };
+    }
   } else if (!pending || pending.kind !== action) {
     out = { kind: 'error', action: kind, message: 'Phantom sent back an answer this page was not waiting for. Try again.' };
   } else {
