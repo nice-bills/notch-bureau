@@ -5,7 +5,7 @@ import { FaucetButton } from './Faucet';
 import { PHANTOM_LINK_NAME, takeSignedMessage, returnedWith, clearReturnedWith } from './phantom-link';
 import { useChain } from './data';
 import { useWallet } from './wallet';
-import { demoDeliver, inboxCode, newInbox, pollRecord, recordBytes, reportPosted, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
+import { demoDeliver, inboxCode, isDemoSealed, newInbox, pollRecord, recordBytes, reportPosted, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
 import { signInWithSolana, watchJobs, type JobRow } from './live';
 import { decodeRecord } from './notch';
 import { postIxsFor } from './post';
@@ -114,7 +114,7 @@ export function GetLimit() {
     </div>
   );
 
-  const inboxEl = <Inbox wallet={owner} signMessage={signMessage} onResult={(r) => { fromInbox.current = true; session.setSigned(r); }} localDemo={att !== null && att !== 'down' && att.mode === 'local-dev'} onInbox={setHasInbox} />;
+  const inboxEl = <Inbox wallet={owner} signMessage={signMessage} onResult={(r) => { fromInbox.current = true; session.setSigned(r); }} localDemo={att !== null && att !== 'down' && isDemoSealed(att)} onInbox={setHasInbox} />;
   // First run: one path, the one that works for most people today (the MoMo inbox). The payout-email upload stays for everyone else.
   const uploadEl = guided ? null : <Upload wallet={owner} signMessage={signMessage} onResult={(r) => { fromInbox.current = false; session.setSigned(r); }} />;
   return (

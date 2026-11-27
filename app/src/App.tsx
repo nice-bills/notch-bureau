@@ -1,7 +1,7 @@
 import { Component, Suspense, createContext, lazy, startTransition, useCallback, useContext, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
 import { ChainProvider, savedPrint, useChain } from './data';
 import { useWallet } from './wallet';
-import { getAttestation, type Attestation } from './enclave';
+import { getAttestation, sealedLabel, type Attestation } from './enclave';
 import { ENCLAVE_URL, POLLAR_ON, PROGRAM_ID, explorerAddress, explorerTx } from './config';
 import { shortAddr } from './amount';
 import { FX_DEFS } from './art';
@@ -452,7 +452,7 @@ function AccountSheet({ onClose, att, retryAtt, pollar, setPollar }: { onClose: 
             <b>Sealed computer</b>
             <small>
               {att === null ? 'Checking…' : att === 'down' ? <>Not answering at {ENCLAVE_URL}. <button type="button" onClick={retryAtt} style={{ textDecoration: 'underline' }}>Try again</button></> : (
-                <>{att.mode === 'local-dev' ? 'Local prototype, not yet in secure hardware' : att.mode} · key <span className="mono" translate="no">{shortAddr(att.underwriter, 5)}</span></>
+                <>{sealedLabel(att)} · key <span className="mono" translate="no">{shortAddr(att.underwriter, 5)}</span></>
               )}
             </small>
           </span>

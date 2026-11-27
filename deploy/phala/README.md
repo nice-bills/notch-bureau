@@ -32,12 +32,14 @@ compose is byte-identical to this repo. Pin `--expect-compose-hash` to detect a 
 ## Register on devnet, and switch back
 
 ```sh
-node deploy/phala/register-underwriter.mjs <cvm-url> --allow-demo   # verify, then set_underwriter(pubkey) (devnet, admin)
+node deploy/phala/register-underwriter.mjs <cvm-url> --allow-demo --days 60   # verify, then set_underwriter(pubkey) (devnet, admin)
 node deploy/phala/register-underwriter.mjs --local                  # restore the local demo key (.underwriter-key.json)
-node enclave/scripts/e2e-phala.mjs                                   # full e2e; registers, tests, then RESTORES the local key
+node enclave/scripts/e2e-phala.mjs                                   # full e2e; registers, tests, then restores the key it found
 ```
-The devnet program is left on the **local** demo key, because `app/scripts/e2e-devnet.mjs` signs with it.
-`e2e-phala.mjs` swaps the key for about a minute, then switches back (`--keep` leaves the Phala key registered).
+The devnet program is left on the **Phala** key, because the hosted demo needs it (set with `--days 60`; renew before
+it expires). The browser suite (`pnpm e2e:browser:devnet`) borrows the program for its run: it sets the local key and
+restores the recorded one afterwards (`app/e2e/rotation.ts`; the hosted demo shows "Key mismatch" meanwhile).
+`app/scripts/e2e-devnet.mjs` does NOT do this: register the local key (`--local`) before it and the Phala key after.
 
 ## Redeploy / operate
 

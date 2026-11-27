@@ -6,6 +6,12 @@
 
 This is a local prototype. The underwriter currently runs as a normal Node.js process, and its key is stored on disk. It is **not** a trusted enclave, production credit bureau, audited lending protocol, or live testnet deployment. The devnet entry in `Anchor.toml` is configuration only; it does not mean the program has been deployed there.
 
+## Hosted demo (devnet only)
+
+- App: `https://notch-bureau.onrender.com` (static site). Faucet: `https://notch-bureau-faucet.onrender.com`. Both in `render.yaml`.
+- Sealed computer: the Phala confidential VM (`deploy/phala/README.md`). The devnet program must trust its key; a restart of the VM makes a new key.
+- Faucet: `app/scripts/faucet-server.mjs`, a dedicated wallet that transfers 0.02 SOL + 100 test USDC per tap. Top up its SOL when it runs dry.
+
 ## What works locally
 
 - DKIM verification for trusted sender domains and income extraction from sample emails.

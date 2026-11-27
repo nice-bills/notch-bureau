@@ -4,7 +4,7 @@ import { useWallet } from './wallet';
 import { useChain } from './data';
 import { useUi } from './App';
 import { requestFaucet } from './enclave';
-import { explorerTx } from './config';
+import { explorerTx, FAUCET_URL } from './config';
 import { Btn } from './ui';
 import { MIN_FEE_LAMPORTS } from './chain';
 
@@ -15,7 +15,7 @@ export function FaucetButton({ label = 'Get test SOL and USDC', variant = 'secon
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string; sig?: string } | null>(null);
   if (!connected) return null;
-  const has = att && att !== 'down' && att.faucet;
+  const has = FAUCET_URL || (att && att !== 'down' && att.faucet);
   if (!has) {
     return <p className="help">Get free devnet SOL at <a href="https://faucet.solana.com" target="_blank" rel="noreferrer">faucet.solana.com</a> (choose Devnet, paste your address).</p>;
   }

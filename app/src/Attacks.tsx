@@ -25,10 +25,14 @@ interface Step {
 const DEMO_WALLET = '11111111111111111111111111111112';
 
 async function loadSampleEmail(): Promise<{ name: string; bytes: Uint8Array }> {
-  const r = await fetch(`${ENCLAVE_URL}/samples/momo.eml`);
+  // The confidential VM takes a MoMo statement through the inbox only, so a direct upload there needs the bank sample.
+  const att = await getAttestation().catch(() => null);
+  const name = att && typeof att.mode === 'object' ? 'bank.eml' : 'momo.eml';
+  const r = await fetch(`${ENCLAVE_URL}/samples/${name}`);
   const t = await r.text();
+  if (r.status === 429) throw new Error('Too many sample emails were asked for. Try again later.');
   if (!r.ok || !/DKIM-Signature/i.test(t)) throw new Error('No sample email to attack. Start the demo underwriter with "pnpm demo:enclave".');
-  return { name: 'momo.eml', bytes: new TextEncoder().encode(t) };
+  return { name, bytes: new TextEncoder().encode(t) };
 }
 
 /**

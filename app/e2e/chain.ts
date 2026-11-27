@@ -7,6 +7,7 @@ import {
   createKeyPairSignerFromBytes,
   createSolanaRpc,
   createTransactionMessage,
+  getAddressDecoder,
   getBase64EncodedWireTransaction,
   lamports,
   pipe,
@@ -145,13 +146,20 @@ export async function readPool(): Promise<PoolSnapshot> {
   if (!p || !s) throw new Error('pool is not initialised on this network');
   return { stats: decodePool(p), shareSupply: decodeMintSupply(s), vault: v ? decodeTokenAmount(v) : 0n };
 }
-export async function readUnderwriter(): Promise<string> {
+export interface UnderwriterConfig { admin: string; underwriter: string; expiry: bigint }
+/** Config account: discriminator 8, admin 32, mint 32, underwriter 32, expiry i64. */
+export async function readUnderwriterConfig(): Promise<UnderwriterConfig> {
   const { A } = await chainContext();
   const c = await accountBytes(A.config);
   if (!c) throw new Error('program is not initialised on this network (no config account)');
-  const { getAddressDecoder } = await import('@solana/kit');
-  return getAddressDecoder().decode(c.subarray(72, 104));
+  return {
+    admin: getAddressDecoder().decode(c.subarray(8, 40)),
+    underwriter: getAddressDecoder().decode(c.subarray(72, 104)),
+    expiry: new DataView(c.buffer, c.byteOffset, c.byteLength).getBigInt64(104, true),
+  };
 }
+
+export const readUnderwriter = async (): Promise<string> => (await readUnderwriterConfig()).underwriter;
 
 /** Poll until `read` satisfies `ok` (devnet reads can lag the confirmation the browser saw by a moment). */
 export async function waitFor<T>(what: string, read: () => Promise<T>, ok: (v: T) => boolean, timeoutMs = 45_000): Promise<T> {

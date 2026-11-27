@@ -10,7 +10,7 @@
 // 3  register the attested key on devnet (set_underwriter, admin = ~/.config/solana/id.json)
 // 4  post_limit with the CVM-signed record (Ed25519 verify ix + program) and read the CreditLine back
 // 5  negative: a record signed by the OLD local demo key is refused by the program (WrongUnderwriter)
-// 6  ALWAYS restore the local demo key (register-underwriter.mjs --local) so the other devnet e2e keeps working
+// 6  ALWAYS restore the key the program trusted before the run (the hosted demo may depend on it)
 //    (--keep leaves the Phala key registered instead)
 //
 // Safety: devnet only (genesis hash checked). Reads app/src/notch.ts without editing it.
@@ -21,11 +21,11 @@ import { fileURLToPath } from 'node:url';
 import nacl from 'tweetnacl';
 import { address, generateKeyPairSigner, getAddressDecoder, getAddressEncoder } from '@solana/kit';
 import { signUnderwrite } from '../src/underwrite-http.js';
-import { decodeLine, decodeRecord, deriveDedupe, deriveIdentity, deriveLine, ed25519VerifyIx, postLimitIxs, base64ToBytes } from '../../app/src/notch.ts';
+import { decodeLine, decodeRecord, deriveDedupe, deriveIdentity, deriveLine, ed25519VerifyIx, postLimitIxs, base64ToBytes, setUnderwriterIx } from '../../app/src/notch.ts';
 import { signRecord } from '../src/record.js';
 import { verifyAttestation } from './verify-attestation.mjs';
 import { LOCAL_KEY_FILE, accountBytes, connect, readUnderwriter, send } from '../../deploy/phala/chain.mjs';
-import { localUnderwriterPubkey, registerAttested, registerLocal } from '../../deploy/phala/register-underwriter.mjs';
+import { localUnderwriterPubkey, registerAttested } from '../../deploy/phala/register-underwriter.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const stateFile = path.join(here, '..', '..', 'deploy', 'phala', '.deploy-state.json');
@@ -59,12 +59,13 @@ function expectProgramError(label, res, name) {
 }
 
 let ctx;
+let start;
 let registeredPhala = false;
 let failure = null;
 try {
   ctx = await connect();
   console.log(`cvm         ${url}\nprogram     ${ctx.program}\nadmin       ${ctx.admin.address}`);
-  const start = await readUnderwriter(ctx.rpc, ctx.A);
+  start = await readUnderwriter(ctx.rpc, ctx.A);
   const localPub = localUnderwriterPubkey();
   console.log(`on-chain underwriter at start: ${start.underwriter}  (local demo key: ${localPub})`);
 
@@ -173,17 +174,17 @@ try {
 } finally {
   // ---- 6 restore
   if (ctx && registeredPhala && !keep) {
-    step('6', 'restore the local demo key (the other devnet e2e depends on it)');
+    step('6', 'restore the key the program trusted before this run (the hosted demo may depend on it)');
     try {
-      await registerLocal({ ctx });
+      await send(ctx, `set_underwriter ${start.underwriter}`, ctx.admin, [setUnderwriterIx(ctx.A, ctx.admin.address, address(start.underwriter), start.expiry)]);
       const now = await readUnderwriter(ctx.rpc, ctx.A);
-      check('program trusts the local demo key again', now.underwriter === localUnderwriterPubkey(), now.underwriter);
+      check('program trusts the starting key again', now.underwriter === start.underwriter, now.underwriter);
     } catch (e) {
-      console.error(`RESTORE FAILED: ${e.message}\nRun: node deploy/phala/register-underwriter.mjs --local`);
+      console.error(`RESTORE FAILED: ${e.message}\nThe starting key was ${start.underwriter} (expiry ${start.expiry}).`);
       failure ||= e;
     }
   } else if (keep && registeredPhala) {
-    console.log('\n--keep: the Phala key is still registered. Restore with: node deploy/phala/register-underwriter.mjs --local');
+    console.log(`\n--keep: the Phala key is still registered (before this run: ${start.underwriter}).`);
   }
 }
 

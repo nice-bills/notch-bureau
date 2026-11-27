@@ -1,4 +1,4 @@
-import { ENCLAVE_URL } from './config';
+import { ENCLAVE_URL, FAUCET_URL } from './config';
 import { explainEnclaveReason } from './errors';
 import { base64ToBytes } from './notch';
 
@@ -22,11 +22,24 @@ export type EnclaveResult = EnclaveOk | EnclaveRefusal;
 
 export interface Attestation {
   underwriter: string;
-  mode: string;
+  /** The local demo server says 'local-dev'; the confidential VM (Phala, Intel TDX) answers with an object. */
+  mode: string | { demo_fixtures?: boolean; extraction?: { mode: string; model?: string } };
+  /** Set by the confidential VM only. */
+  tee?: string;
   extraction?: { mode: string; model?: string };
   note?: string;
   /** The local demo server can send devnet SOL + test USDC (POST /demo/faucet). */
   faucet?: boolean;
+}
+
+/** A demo sealed computer (local, or the confidential VM's DEMO build): it can mail a sample statement. */
+export const isDemoSealed = (a: Attestation) => a.mode === 'local-dev' || (typeof a.mode === 'object' && !!a.mode.demo_fixtures);
+
+/** What the account sheet says about the sealed computer. The program does not verify the VM's quote, so neither does this line. */
+export function sealedLabel(a: Attestation): string {
+  if (a.mode === 'local-dev') return 'Local prototype, not yet in secure hardware';
+  if (typeof a.mode === 'string') return a.mode;
+  return `Secure hardware (Intel TDX)${a.mode.demo_fixtures ? ', demo build' : ''}`;
 }
 
 export async function getAttestation(signal?: AbortSignal): Promise<Attestation> {
@@ -216,10 +229,23 @@ export async function reportPosted(signature: string): Promise<void> {
   }
 }
 
-/** DEMO / DEVNET ONLY: ask the local demo server for a little devnet SOL and test USDC. */
+/** DEMO / DEVNET ONLY: ask for a little devnet SOL and test USDC, from the faucet service (VITE_FAUCET_URL) or else the local demo server. */
 export async function requestFaucet(wallet: string): Promise<{ sol: string; usdc: string; signature: string }> {
-  const r = await call('/demo/faucet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ wallet }) });
-  const j = await readJson(r);
+  const init: RequestInit = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ wallet }) };
+  let r: Response;
+  if (FAUCET_URL) {
+    try {
+      r = await fetch(`${FAUCET_URL}/demo/faucet`, init);
+    } catch {
+      throw new Error('Could not reach the test faucet. It may be waking up: try again in a minute.');
+    }
+  } else r = await call('/demo/faucet', init);
+  let j: Record<string, unknown>;
+  try {
+    j = await r.json();
+  } catch {
+    throw new Error(`The test faucet answered HTTP ${r.status}. Try again in a minute.`);
+  }
   if (!r.ok || !j.ok) throw new Error(String(j.reason ?? `The test faucet answered HTTP ${r.status}.`));
   return j as unknown as { sol: string; usdc: string; signature: string };
 }

@@ -45,6 +45,7 @@ export default defineConfig({
     {
       command: `pnpm exec vite --port ${appPort} --strictPort`,
       cwd: app,
+      env: { VITE_FAUCET_URL: '' }, // the tests use the demo server's own faucet, never a hosted one
       url: `http://localhost:${appPort}`,
       reuseExistingServer: !fresh,
       timeout: 60_000,

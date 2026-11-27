@@ -1,8 +1,18 @@
 import { createKeyPairSignerFromBytes } from '@solana/kit';
 import { chainContext, solBalance, sweep } from './chain.ts';
+import { restoreUnderwriter } from './rotation.ts';
 import { clearWallets, loadState, loadWallets } from './state.ts';
 
 export default async function globalTeardown() {
+  // First give the program back; a failure here still lets the sweep run, and fails the run.
+  try {
+    await restoreUnderwriter();
+  } finally {
+    await sweepWallets();
+  }
+}
+
+async function sweepWallets() {
   const { admin } = await chainContext();
   let swept = 0n;
   for (const sk of loadWallets()) {
