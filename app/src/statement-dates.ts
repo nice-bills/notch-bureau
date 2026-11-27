@@ -17,12 +17,11 @@ export const numericDay = (d: Date, locale?: string) => d.toLocaleDateString(loc
 /** "28 11 2026": the exact format MTN MoMo's *170# statement request asks for ("Day Month Year"). */
 export const momoDay = (d: Date) => `${String(d.getDate()).padStart(2, '0')} ${String(d.getMonth() + 1).padStart(2, '0')} ${d.getFullYear()}`;
 
-/** "1:42" or "1:02:05" for a span of milliseconds. */
-export function clockSpan(ms: number): string {
-  const t = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
-  const ss = String(s).padStart(2, '0');
-  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+export type WaitStage = 'preparing' | 'usually' | 'stuck';
+
+/** Which waiting message to show after `ms` of waiting: under 2 min, 2-10 min, then 10 min and over. */
+export function waitStage(ms: number): WaitStage {
+  return ms < 2 * 60_000 ? 'preparing' : ms < 10 * 60_000 ? 'usually' : 'stuck';
 }
 
 /** Copy text; falls back to a hidden textarea where the async clipboard is missing (older iOS, http pages). */

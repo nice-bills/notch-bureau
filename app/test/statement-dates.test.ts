@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clockSpan, longDay, momoDay, numericDay, statementRange } from '../src/statement-dates';
+import { longDay, momoDay, numericDay, statementRange, waitStage } from '../src/statement-dates';
 
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
@@ -33,11 +33,14 @@ describe('statementRange: last 90 days, ending today', () => {
   });
 });
 
-describe('clockSpan', () => {
-  it('formats elapsed waiting time', () => {
-    expect(clockSpan(0)).toBe('0:00');
-    expect(clockSpan(102_400)).toBe('1:42');
-    expect(clockSpan(3_725_000)).toBe('1:02:05');
-    expect(clockSpan(-5)).toBe('0:00');
+describe('waitStage', () => {
+  it('picks the waiting message from elapsed time', () => {
+    expect(waitStage(0)).toBe('preparing');
+    expect(waitStage(-5)).toBe('preparing');
+    expect(waitStage(119_999)).toBe('preparing');
+    expect(waitStage(120_000)).toBe('usually');
+    expect(waitStage(599_999)).toBe('usually');
+    expect(waitStage(600_000)).toBe('stuck');
+    expect(waitStage(3 * 3_600_000)).toBe('stuck');
   });
 });

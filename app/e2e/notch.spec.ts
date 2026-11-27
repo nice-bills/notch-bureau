@@ -92,7 +92,9 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   await expect(page.getByTestId('copy-end')).toHaveText(want.endNum);
   await page.getByTestId('copy-end').click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(want.endNum);
-  await expect(page.getByTestId('waited')).toHaveText(/^Waiting \d+:\d\d$/);
+  await expect(page.getByTestId('checking')).toHaveText('Checking for your email…');
+  await expect(page.getByTestId('wait-stage')).toHaveText('MTN is preparing your statement.');
+  await expect(page.getByText(/^\d+:\d\d$/)).toHaveCount(0); // no visible elapsed timer
   await page.getByRole('button', { name: 'Copy', exact: true }).click();
   const addrText = await addr.innerText();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(addrText);

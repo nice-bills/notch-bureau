@@ -16,7 +16,7 @@ import { ActionStatus, Btn, Icon, Notice, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
 import { Ticket } from './Ticket';
 import { Restoring } from './Home';
-import { clockSpan, copyText, longDay, momoDay, statementRange } from './statement-dates';
+import { copyText, longDay, momoDay, statementRange, waitStage } from './statement-dates';
 
 const SAMPLES = [
   { file: '/samples/deel.eml', label: 'Deel payout' },
@@ -164,8 +164,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
   const [liveNote, setLiveNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copiedDate, setCopiedDate] = useState<'start' | 'end' | null>(null);
-  // Signs of life while waiting: the last poll that got an answer, and when the polls started failing.
-  const [lastOk, setLastOk] = useState<number | null>(null);
+  // When the polls started failing (null while they get answers).
   const [failSince, setFailSince] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [arrived, setArrived] = useState(false);
@@ -223,7 +222,6 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
         const r = await pollRecord(wallet, inbox.pollToken, ctl.signal);
         setPollErr(null);
         setFailSince(null);
-        setLastOk(Date.now());
         if (r.status === 'ready') { done.current = true; setLive('done'); buzz(22); onResultRef.current(r.result); return; }
         if (r.status === 'refused' || r.status === 'locked') { setLive('refused'); setRefusal({ friendly: r.friendly, locked: r.status === 'locked' }); }
       } catch (e) {
@@ -239,7 +237,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
     return () => { ctl.abort(); clearTimeout(t); };
   }, [inbox, wallet]);
 
-  // A one-second clock for the waiting timer, only while there is something to wait for.
+  // A one-second clock (never shown: it picks the waiting message and spots failing polls), only while there is something to wait for.
   const waiting = !!inbox && live === 'idle';
   useEffect(() => {
     if (!waiting) return;
@@ -256,7 +254,7 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
     prevLive.current = live;
   }, [live]);
 
-  const newAddress = () => { store.set(wallet, null); setInbox(null); setLive('idle'); setRefusal(null); setLastOk(null); setFailSince(null); };
+  const newAddress = () => { store.set(wallet, null); setInbox(null); setLive('idle'); setRefusal(null); setFailSince(null); };
 
   // Live steps over Supabase Realtime, when configured.
   useEffect(() => {
@@ -366,26 +364,30 @@ function Inbox({ wallet, signMessage, onResult, localDemo }: { wallet: string; s
         })}
       </ul>
       {waiting && (() => {
-        const waited = now - inbox.createdAt;
-        const ago = lastOk ? Math.max(0, Math.round((now - lastOk) / 1000)) : null;
+        // Elapsed time is tracked but never shown; it only picks the message.
+        const stage = waitStage(now - inbox.createdAt);
         const offline = failSince !== null && now - failSince > 20_000;
         return (
           <div className="wait-meta">
-            {/* ticks every second: kept out of the live region so screen readers are not flooded */}
-            <p className="wait-line">
+            <p className={cx('wait-line', offline && 'off')} data-testid="checking">
               <span className="pulse" aria-hidden="true" />
-              <span data-testid="waited">Waiting {clockSpan(waited)}</span>
-              <span className={cx('checked', offline && 'off')}>{offline ? 'Retrying…' : ago === null ? 'Checking…' : `Checked ${ago} s ago`}</span>
+              <span>{offline ? 'Retrying…' : 'Checking for your email…'}</span>
             </p>
-            <p className="help">MTN usually sends it within 1–5 minutes. You can leave this page open or come back later; it picks up where you left off.</p>
+            <div aria-live="polite">
+              {stage === 'stuck' ? (
+                <div className="notice notice-info still-nothing" role="status">
+                  <strong>Still nothing?</strong>
+                  <span>Check you typed the address exactly (with the + sign), and that MTN said the request was accepted.</span>
+                  <Btn variant="ghost" small onClick={newAddress}>Get a new address</Btn>
+                </div>
+              ) : (
+                <p key={stage} className="wait-stage" data-testid="wait-stage">
+                  {stage === 'preparing' ? 'MTN is preparing your statement.' : 'This usually takes a few minutes.'}
+                </p>
+              )}
+            </div>
             {offline && <Notice tone="warn" title="Can’t reach the sealed computer, retrying">Your address still works. Mail that arrives meanwhile is kept.</Notice>}
-            {waited > 10 * 60_000 && (
-              <div className="notice notice-info still-nothing" role="status">
-                <strong>Still nothing?</strong>
-                <span>Check you typed the address exactly (with the + sign), and that MTN said the request was accepted.</span>
-                <Btn variant="ghost" small onClick={newAddress}>Get a new address</Btn>
-              </div>
-            )}
+            <p className="help">You can close this. It picks up where you left off when you come back.</p>
           </div>
         );
       })()}
