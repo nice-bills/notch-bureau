@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { address } from '@solana/kit';
 import { sendTransaction } from './chain';
 import { useChain } from './data';
+import { startNewStatement } from './GetLimit';
 import { useWallet } from './wallet';
 import { createAtaIdempotentIx, deriveAta, deriveLine, feeFor, payoffFor, repayIx, withdrawBorrowerIx, type NotchAddresses } from './notch';
 import { formatDate, formatUsdc, shortAddr, daysLeft } from './amount';
@@ -170,7 +171,7 @@ function HomeConnected() {
             <li className="item"><span className="ico"><Icon name="shield" /></span><span className="t"><b>Deposit held</b><small>20% of what you owe, comes back when you pay</small></span><span className="v" data-testid="deposit">{formatUsdc(line.deposit, { max: 2 })}</span></li>
             <li className="item"><span className="ico"><Icon name="check" /></span><span className="t"><b>Repaid on time</b><small>{line.repaidLate ? `${line.repaidLate} late · ` : ''}Loans of 5+ USDC kept 7+ days count</small></span><span className="v" data-testid="on-time">{line.repaidOnTime}</span></li>
             <li className="item"><span className="ico"><Icon name="wallet" /></span><span className="t"><b>In your wallet</b><small>Test USDC on devnet</small></span><span className="v" data-testid="wallet-usdc">{formatUsdc(usdc, { max: 2 })}</span></li>
-            {s.live && <li><button type="button" className="item tap" onClick={() => go('limit')}><span className="ico"><Icon name="mail" /></span><span className="t"><b>Send a new statement</b><small>Get a fresh stamp any time</small></span><span className="chev"><Icon name="chev" /></span></button></li>}
+            {s.live && <li><button type="button" className="item tap" onClick={() => { if (connected) startNewStatement(connected.address); session.setSigned(null); go('limit'); }}><span className="ico"><Icon name="mail" /></span><span className="t"><b>Send a new statement</b><small>Get a fresh stamp any time</small></span><span className="chev"><Icon name="chev" /></span></button></li>}
           </ul>
         </>
       )}

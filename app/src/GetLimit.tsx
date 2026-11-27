@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ENCLAVE_URL, LIVE_STATUS } from './config';
 import { MIN_FEE_LAMPORTS, sendTransaction } from './chain';
 import { FaucetButton } from './Faucet';
-import { PHANTOM_LINK_NAME, takeSignedMessage, returnedWith } from './phantom-link';
+import { PHANTOM_LINK_NAME, takeSignedMessage, returnedWith, clearReturnedWith } from './phantom-link';
 import { useChain } from './data';
 import { useWallet } from './wallet';
 import { demoDeliver, inboxCode, newInbox, pollRecord, recordBytes, reportPosted, underwrite, type EnclaveOk, type InboxAddress } from './enclave';
@@ -55,6 +55,9 @@ const store = {
 
 type Live = 'idle' | 'received' | 'checking' | 'done' | 'refused';
 
+/** "Send a new statement": forget the last inbox address and limit on this phone, so the form starts clean. */
+export function startNewStatement(wallet: string) { store.set(wallet, null); }
+
 export function GetLimit() {
   const { connected, signMessage, signTransaction, restoring } = useWallet();
   const { addrs, line, refresh, session, sol } = useChain();
@@ -64,6 +67,7 @@ export function GetLimit() {
   const posted = !!(signed && line && line.lastNonce >= BigInt(signed.nonce));
   // back from the Phantom app with the post signed: show the result, not the long form with the next step far below
   const [landed, setLanded] = useState(() => returnedWith === 'tx');
+  useEffect(() => () => clearReturnedWith(), []);
   const fromInbox = useRef(false);
   // First run: the same progress bar as the questions, the person's answers said back, and the path they need first.
   const onb = useOnboard();

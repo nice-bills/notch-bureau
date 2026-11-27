@@ -93,6 +93,8 @@ export function signMessageInPhantom(message: Uint8Array): Promise<never> {
 
 /** What this page load came back from Phantom with (screens use it to show the result, not the form). */
 export let returnedWith: Outcome['kind'] | null = null;
+/** The return has been shown; later visits to a screen are not "just back from Phantom". */
+export const clearReturnedWith = () => { returnedWith = null; };
 
 /** On page load: read Phantom's answer from the URL (if any), store the outcome, clean the URL. */
 export function consumePhantomRedirect(): Outcome | null {

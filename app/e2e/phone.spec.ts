@@ -199,6 +199,12 @@ test.describe('Phone review fixes', () => {
       expect(drop, 'the dropped reads happened').toBe(0);
       await page.getByRole('button', { name: 'Start borrowing' }).click();
       await expect(page.getByTestId('available')).toBeVisible({ timeout: 30_000 });
+
+      log('send a new statement: a clean form, not the last "limit is on Solana" screen');
+      await page.getByRole('link', { name: 'Home' }).click();
+      await page.getByRole('button', { name: /Send a new statement/ }).click();
+      await expect(page.getByRole('button', { name: 'Get my inbox address' })).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByText('Your limit is on Solana')).toHaveCount(0);
       expect(phantom.calls).toEqual(['connect', 'connect', 'signMessage', 'signTransaction']);
       expect(errors).toEqual([]);
     } catch (e) {
