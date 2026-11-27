@@ -185,6 +185,25 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
 
   // --- choose an amount: one approval does [post +] deposit 20% + borrow ----------------------------------
   log(`borrow ${usdFull(draw)}, putting down ${usdFull(needed)}${bundle ? ', posting the limit too' : ''}`);
+  // The stamp sheet is the slider: press on the first stamp, drag across into the second row, the amount follows.
+  const sheet = page.getByTestId('stamp-slider');
+  await sheet.scrollIntoViewIfNeeded();
+  const before = await page.locator('#amt').inputValue();
+  const g = (await sheet.boundingBox())!;
+  const rows = Math.ceil((await sheet.locator('button').count()) / 4);
+  const rowH = g.height / rows, y1 = g.y + rowH / 2;
+  await page.mouse.move(g.x + 4, y1);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(g.x + 4 + ((g.width * 0.95) * i) / 10, y1);
+  await page.mouse.move(g.x + g.width * 0.4, y1 + rowH);
+  await expect(page.locator('#amt')).not.toHaveValue(before);
+  await expect(page.locator('.sbub span')).toBeVisible();
+  await page.screenshot({ path: `e2e/test-results/stamp-drag${o.shots ? '-phone' : ''}.png` });
+  await page.mouse.up();
+  const dragged = Number(await page.locator('#amt').inputValue());
+  expect(dragged).toBeGreaterThan(0);
+  await expect(sheet).toHaveAttribute('aria-valuenow', String(dragged));
+  await expect(page.locator('.sbub')).toHaveCount(0);
   await page.locator('#amt').fill(plain(draw));
   await expect(page.getByTestId('dep-needed')).toHaveText(up2(needed));
   await expect(page.getByTestId('dep-add')).toHaveText(up2(needed));

@@ -244,16 +244,6 @@ details.raw pre,details.real-error pre{margin:8px 0 0;padding:12px;background:va
 .amt-hint{margin:8px 2px 0;font-size:13px;color:var(--faint)}
 .amt-note{margin:4px 2px 0;min-height:18px;font-size:13px;font-weight:500;color:var(--soft);opacity:0;transition:opacity .3s var(--ease-out)}
 .amt-note.show{opacity:1}
-.amt-range{margin:16px 24px 0}
-.amt-range input{-webkit-appearance:none;appearance:none;display:block;width:100%;height:44px;margin:0;background:transparent;touch-action:pan-y;cursor:pointer}
-.amt-range input::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--ink) var(--p),rgba(14,15,19,.12) var(--p))}
-.amt-range input::-moz-range-track{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--ink) var(--p),rgba(14,15,19,.12) var(--p))}
-.amt-range input::-webkit-slider-thumb{-webkit-appearance:none;width:30px;height:30px;margin-top:-12px;border-radius:50%;background:var(--paper);border:0;box-shadow:0 0 0 .5px rgba(14,15,19,.12),0 4px 12px -2px rgba(17,26,51,.3)}
-.amt-range input::-moz-range-thumb{width:30px;height:30px;border-radius:50%;background:var(--paper);border:0;box-shadow:0 0 0 .5px rgba(14,15,19,.12),0 4px 12px -2px rgba(17,26,51,.3)}
-.amt-range input:focus-visible{outline:none}
-.amt-range input:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px var(--lilac),0 4px 12px -2px rgba(17,26,51,.3)}
-.amt-range input:focus-visible::-moz-range-thumb{box-shadow:0 0 0 3px var(--lilac),0 4px 12px -2px rgba(17,26,51,.3)}
-.amt-range .ends{display:flex;justify-content:space-between;margin-top:-4px;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
 .bamt .u{font-size:20px;color:var(--soft);font-weight:500;flex:none}
 .bamt .back{margin-top:8px;font-size:16px;color:var(--soft)}
 .bamt .back b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
@@ -265,7 +255,15 @@ details.raw pre,details.real-error pre{margin:8px 0 0;padding:12px;background:va
 .sheetwrap{margin:20px 24px 0;background:#FCF8F0;border-radius:4px;padding:16px 16px 8px;box-shadow:0 0 0 .5px rgba(17,26,51,.08),0 18px 30px -18px rgba(17,26,51,.3);position:relative}
 .selv{display:flex;justify-content:space-between;font-size:12px;font-weight:600;letter-spacing:.1em;color:var(--verm);text-transform:uppercase;margin-bottom:8px;font-variant-numeric:tabular-nums}
 .selv span:last-child{color:var(--soft)}
-.sgrid{display:grid;grid-template-columns:repeat(4,1fr)}
+.sgrid{display:grid;grid-template-columns:repeat(4,1fr);position:relative;touch-action:pan-y;cursor:pointer;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;border-radius:4px}
+.sgrid.drag{touch-action:none;cursor:grabbing}
+.sgrid:focus-visible{outline:2px solid var(--lilac);outline-offset:6px}
+.sgrid button.gone{pointer-events:none}
+/* Value bubble above the finger while dragging the sheet. */
+.sbub{position:absolute;left:0;top:0;z-index:5;pointer-events:none;will-change:transform}
+.sbub span{position:absolute;bottom:34px;left:0;transform:translateX(-50%);padding:6px 11px;border-radius:12px;background:#0E0F13;color:#fff;font-size:15px;font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums;white-space:nowrap;box-shadow:0 8px 18px -6px rgba(17,26,51,.45),inset 0 1px 1px rgba(255,255,255,.18);animation:sbub-in .14s var(--ease-out)}
+.sbub span::after{content:"";position:absolute;left:50%;bottom:-4px;width:8px;height:8px;margin-left:-4px;background:#0E0F13;transform:rotate(45deg);border-radius:0 0 2px 0}
+@keyframes sbub-in{from{opacity:0;transform:translateX(-50%) translateY(4px) scale(.9)}}
 .sgrid button{display:block;aspect-ratio:88/104;position:relative;transition:transform .22s var(--spring),opacity .2s}
 .sgrid svg{width:100%;height:100%;display:block}
 .sgrid button.pick{transform:translateY(-6px) rotate(-3deg);z-index:2}
@@ -587,4 +585,8 @@ html{scroll-padding-bottom:calc(120px + env(safe-area-inset-bottom,0px))}
 @keyframes arrive-ico{0%{transform:scale(.4) rotate(-12deg)}60%{transform:scale(1.12) rotate(4deg)}100%{transform:none}}
 @media (prefers-reduced-motion:reduce){
   .wait-line .pulse,.wait-stage,.arrived,.arrived-ico{animation:none}
+}
+@media (prefers-reduced-motion:reduce){
+  .sbub span{animation:none}
+  .sgrid.drag button{transition:none}
 }

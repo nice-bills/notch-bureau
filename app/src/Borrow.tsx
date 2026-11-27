@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { sendTransaction } from './chain';
 import { useChain } from './data';
 import { useWallet } from './wallet';
 import { LOAN_TERM_SECONDS, depositBorrowerIx, depositNeededFor, deriveLine, drawIx, feeFor, payoffFor } from './notch';
 import { formatDate, formatUsdc, parseUsdc, toInput } from './amount';
 import { stamp } from './art';
-import { centsText, normalizeAmount } from './amount-input';
+import { amountAtStamp, cellAt, normalizeAmount, stampUnit } from './amount-input';
 import { buzz } from './glass';
 import { ActionStatus, Btn, DoneView, Icon, Sheet, cx, useAction } from './ui';
 import { Banners, useUi } from './App';
@@ -15,7 +15,6 @@ import { lineAfterPost, postIxsFor, unposted } from './post';
 import { reportPosted } from './enclave';
 import { Restoring, lineState, withAta } from './Home';
 
-const UNITS = [1n, 2n, 5n, 10n, 20n, 50n, 100n, 200n, 500n, 1000n, 5000n].map((u) => u * 1_000_000n);
 const MOTIFS = ['kente', 'sun', 'horn'] as const;
 
 export function Borrow() {
@@ -46,7 +45,7 @@ export function Borrow() {
   const amtErr = amtStr && draw === null ? 'Enter a number like 25 or 12.5' : draw && draw > s.headroom ? `Your limit leaves ${formatUsdc(s.headroom)} USDC.` : draw && draw > idle ? `The pool only has ${formatUsdc(idle)} USDC free right now.` : null;
   const okAmount = !!draw && draw > 0n && !amtErr;
 
-  const unit = useMemo(() => UNITS.find((u) => (s.limit + u - 1n) / u <= 12n) ?? UNITS[UNITS.length - 1], [s.limit]);
+  const unit = useMemo(() => stampUnit(s.limit), [s.limit]);
   const count = Number((s.limit + unit - 1n) / unit);
   const usedN = Number((s.drawn + unit - 1n) / unit);
   const pickN = draw ? Number((draw + unit - 1n) / unit) : 0;
@@ -70,22 +69,58 @@ export function Borrow() {
     if (r.note) setNote({ text: r.note, k: Date.now() });
   };
 
-  // Slider in whole cents, 0..cap. While dragging it snaps to the quick amounts (with a buzz); arrow keys never snap.
   const quick = [unit, unit * 2n, unit * 4n].filter((a) => a <= cap);
-  const capC = Number(cap / 10_000n);
-  const valC = draw ? Math.min(capC, Number(draw / 10_000n)) : 0;
-  const quickC = [...quick.map((a) => Number(a / 10_000n)), capC];
-  const dragging = useRef(false);
-  const onSlide = (raw: number) => {
-    let c = raw;
-    if (dragging.current) { const win = Math.max(1, Math.round(capC * 0.015)); const q = quickC.find((x) => Math.abs(x - c) <= win); if (q !== undefined) c = q; }
-    if (c === valC) return;
-    if (quickC.includes(c)) buzz(4);
-    setAmtStr(c === capC ? toInput(cap) : centsText(BigInt(c) * 10_000n));
+
+  // The stamp sheet is the slider: press and drag across the stamps in reading order. Full stamps before the finger
+  // plus the share of the one under it (by how far across it the finger is), to the cent, snapping near stamp edges.
+  // A touch that starts mostly vertical is left to the page so it still scrolls; a tap tears off up to a stamp.
+  const gridEl = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<{ id: number; x0: number; y0: number; touch: boolean; on: boolean; r: DOMRect; last: bigint } | null>(null);
+  const skipClick = useRef(false);
+  const [bubble, setBubble] = useState<{ x: number; y: number } | null>(null);
+  // iOS Safari can still start a scroll mid-drag; once the drag is ours, its touchmoves are too.
+  const stopScroll = useCallback((e: TouchEvent) => { if (drag.current?.on) e.preventDefault(); }, []);
+  const gridRef = useCallback((el: HTMLDivElement | null) => {
+    gridEl.current?.removeEventListener('touchmove', stopScroll);
+    gridEl.current = el;
+    el?.addEventListener('touchmove', stopScroll, { passive: false });
+  }, [stopScroll]);
+  const freeN = count - usedN;
+  const setAmount = (v: bigint) => setAmtStr(toInput(v));
+  const dragTo = (e: PointerEvent<HTMLDivElement>) => {
+    const d = drag.current!;
+    const x = e.clientX - d.r.left, y = e.clientY - d.r.top;
+    const c = cellAt(x, y, d.r.width, d.r.height, 4, count);
+    const v = amountAtStamp(c.index - usedN, c.frac, unit, freeN, s.headroom, cap);
+    if (v !== d.last) {
+      if (v / unit !== d.last / unit) buzz(4);
+      d.last = v;
+      setAmount(v);
+    }
+    setBubble({ x: Math.min(d.r.width - 28, Math.max(28, x)), y: Math.max(0, Math.min(d.r.height, y)) });
+  };
+  const endDrag = (e: PointerEvent<HTMLDivElement>, cancelled: boolean) => {
+    const d = drag.current;
+    if (!d || d.id !== e.pointerId) return;
+    if (d.on && !cancelled) skipClick.current = true;
+    drag.current = null;
+    setBubble(null);
+  };
+  const onSheetKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const cur = draw ? (draw > cap ? cap : draw) : 0n;
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 10_000n : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -10_000n : e.key === 'PageUp' ? unit : e.key === 'PageDown' ? -unit : null;
+    let v: bigint;
+    if (step !== null) v = cur + step;
+    else if (e.key === 'Home') v = 0n;
+    else if (e.key === 'End') v = cap;
+    else return;
+    e.preventDefault();
+    v = v < 0n ? 0n : v > cap ? cap : v;
+    if (v !== cur) { if (v / unit !== cur / unit) buzz(4); setAmount(v); }
   };
   // The last stamp torn off may be only partly used: show how much of it (a sliver at least, so 0.37 of 200 still shows).
   const partI = pickN ? usedN + pickN - 1 : -1;
-  const partV = partI === count - 1 ? lastVal : unit;
+  const partV = partI === count - 1 ? s.headroom - BigInt(pickN - 1) * unit : unit;
   const partF = draw && pickN ? Number(((draw - BigInt(pickN - 1) * unit) * 1000n) / partV) / 1000 : 1;
 
   // ONE approval: [post the limit] + [put down the 20% top-up] + borrow, in a single transaction (about 1.1 KB at
@@ -156,27 +191,41 @@ export function Borrow() {
         <button type="button" className={cx('tap', draw === cap && 'on')} onClick={() => { setAmtStr(toInput(cap)); buzz(4); }} disabled={cap === 0n}>All</button>
       </div>
 
-      <div className="amt-range">
-        <input type="range" min={0} max={capC} step={1} value={valC} aria-label="Amount to borrow" aria-valuetext={`${formatUsdc(BigInt(valC) * 10_000n)} USDC`}
-          style={{ '--p': `${capC ? (valC / capC) * 100 : 0}%` } as CSSProperties}
-          onPointerDown={() => { dragging.current = true; }} onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }}
-          onKeyDown={() => { dragging.current = false; }}
-          onChange={(e) => onSlide(Number(e.target.value))} />
-        <div className="ends" aria-hidden="true"><span>0</span><span>{formatUsdc(cap)}</span></div>
-      </div>
-
-      <div className="sheetwrap" aria-hidden="true">
-        <div className="selv"><span>Notch · {formatUsdc(unit).replace(/\.00$/, '')} USDC each</span><span>{formatUsdc(draw && draw > 0n ? draw : 0n, { max: 2 })} of {formatUsdc(s.headroom, { max: 2 })} free</span></div>
-        <div className="sgrid">
+      <div className="sheetwrap">
+        <div className="selv" aria-hidden="true"><span>Notch · {formatUsdc(unit).replace(/\.00$/, '')} USDC each</span><span>{formatUsdc(draw && draw > 0n ? draw : 0n, { max: 2 })} of {formatUsdc(s.headroom, { max: 2 })} free</span></div>
+        <div ref={gridRef} className={cx('sgrid', bubble && 'drag')} role="slider" tabIndex={0} aria-label="Amount to borrow" data-testid="stamp-slider"
+          aria-valuemin={0} aria-valuemax={Number(toInput(cap))} aria-valuenow={Number(toInput(draw && draw > 0n ? draw : 0n))}
+          aria-valuetext={`${formatUsdc(draw && draw > 0n ? draw : 0n, { max: 2 })} USDC`}
+          onKeyDown={onSheetKey}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            skipClick.current = false;
+            drag.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, touch: e.pointerType === 'touch', on: false, r: e.currentTarget.getBoundingClientRect(), last: draw && draw > 0n ? draw : 0n };
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current;
+            if (!d || d.id !== e.pointerId) return;
+            if (!d.on) {
+              const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+              if (Math.hypot(dx, dy) < (d.touch ? 8 : 4)) return;
+              if (d.touch && Math.abs(dy) > Math.abs(dx)) { drag.current = null; return; } // a scroll, not a drag
+              d.on = true;
+              e.currentTarget.setPointerCapture(e.pointerId);
+            }
+            dragTo(e);
+          }}
+          onPointerUp={(e) => endDrag(e, false)} onPointerCancel={(e) => endDrag(e, true)}
+          onClickCapture={(e) => { if (skipClick.current) { skipClick.current = false; e.stopPropagation(); e.preventDefault(); } }}>
           {Array.from({ length: count }, (_, i) => (
-            <button key={i} type="button" tabIndex={-1} className={cx(i < usedN && 'gone', i >= usedN && i < usedN + pickN && 'pick', i === partI && partF < 1 && 'part')} disabled={i < usedN}
+            <button key={i} type="button" tabIndex={-1} aria-hidden="true" className={cx(i < usedN && 'gone', i >= usedN && i < usedN + pickN && 'pick', i === partI && partF < 1 && 'part')} disabled={i < usedN}
               style={i === partI && partF < 1 ? { '--f': `${Math.max(14, Math.round(partF * 100))}%` } as CSSProperties : undefined}
               onClick={() => { const a = i === count - 1 ? s.headroom : BigInt(i - usedN + 1) * unit; setAmtStr(toInput(a < cap ? a : cap)); buzz(4); }}>
               <svg viewBox="0 0 88 104" dangerouslySetInnerHTML={{ __html: stampSvgs[i] }} />
             </button>
           ))}
+          {bubble && <span className="sbub" aria-hidden="true" style={{ transform: `translate(${bubble.x}px, ${bubble.y}px)` }}><span>{formatUsdc(draw && draw > 0n ? draw : 0n, { max: 2 })}</span></span>}
         </div>
-        <div className="selvb">Tap a stamp to tear off up to it</div>
+        <div className="selvb" aria-hidden="true">Drag across the stamps, or tap the amount to type it</div>
       </div>
 
       <div className="rcpt pcard" aria-label="What this costs">
