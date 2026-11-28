@@ -233,7 +233,7 @@ format has never been seen, and nothing below should be trusted for real money u
 | Source | Trusted `d=` | Reader | Evidence | Status |
 | --- | --- | --- | --- | --- |
 | MTN MoMo Ghana | `mtn.com` (**not** `mtn.com.gh`: no MX, no DMARC) | statement PDF, phone-number identity | monthly statement on request from `ServiceMMStatement.GH@mtn.com`, PDF `MomoStatementReport.pdf` (secondary sample, Scribd). DMARC `p=reject`. SPF includes Oracle email delivery, so the signer could be Oracle with `d=mtn.com` | layout **confirmed from a real PDF (Nov 23)**; the real `.eml` (signing domain, headers) is still unseen |
-| Superteam Earn | `superteam.fun` (configurable) | email amount + on-chain USDC proof | Earn queues payment emails through Resend; `resend._domainkey.superteam.fun` exists; DMARC only `p=none`; template wording unknown | unverified until a real sample |
+| Superteam Earn | `superteam.fun` (configurable) | email amount + on-chain USDC proof | Sender `hello@superteam.fun` via Resend, confirmed in Earn's open-source code (`src/features/emails/utils/fromEmails.ts`); DKIM key `resend._domainkey.superteam.fun` live; DMARC only `p=none`; payout email is rendered by a private worker, so wording is unknown | sender confirmed, wording unverified |
 | Wise | `wise.com` | email body | DMARC `p=reject`; selectors `google`, `s1`, `s2`, `mandrill`, `k1` | unverified until a real sample |
 | Payoneer | `payoneer.com` | email body | DMARC `p=reject`; selectors `selector1/2`, `mandrill` | unverified until a real sample |
 | Deel | `deel.com` | email body | DMARC `p=reject`; selectors `s1`, `s2`, `google`, `mail` | unverified until a real sample |

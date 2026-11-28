@@ -7,10 +7,12 @@
 //
 // `status` is how far we trust our model of the provider (details and evidence: enclave/README.md SOURCES):
 //   modelled-from-secondary-sample  a real message was seen second-hand, no raw headers inspected
+//   sender-confirmed                sending address and DKIM key confirmed from the provider's own source code + DNS;
+//                                   email wording not public, so amounts fall back to the generic grammar
 //   unverified                      domain from DNS (DMARC/DKIM selectors), format never seen; confirm with a real sample
 export const SOURCES = Object.freeze([
   { domain: 'mtn.com', name: 'MTN MoMo Ghana', kind: 'statement-pdf', status: 'modelled-from-secondary-sample' },
-  { domain: 'superteam.fun', name: 'Superteam Earn', kind: 'earn-payout', status: 'unverified' },
+  { domain: 'superteam.fun', name: 'Superteam Earn', kind: 'earn-payout', status: 'sender-confirmed' },
   { domain: 'wise.com', name: 'Wise', kind: 'email-body', status: 'unverified' },
   { domain: 'payoneer.com', name: 'Payoneer', kind: 'email-body', status: 'unverified' },
   { domain: 'deel.com', name: 'Deel', kind: 'email-body', status: 'unverified' },
@@ -19,7 +21,8 @@ export const SOURCES = Object.freeze([
 
 export const DEFAULT_SUPERTEAM_DOMAIN = 'superteam.fun';
 
-// The Earn domain is configurable (NOTCH_SUPERTEAM_DOMAIN) because the real sending domain is unconfirmed.
+// Earn sends as `Superteam <hello@superteam.fun>` via Resend (SuperteamDAO/earn src/features/emails/utils/fromEmails.ts),
+// DKIM key at resend._domainkey.superteam.fun. Still configurable (NOTCH_SUPERTEAM_DOMAIN) in case Earn changes sender.
 export function sourceTable({ superteamDomain = DEFAULT_SUPERTEAM_DOMAIN } = {}) {
   return SOURCES.map((s) => (s.kind === 'earn-payout' ? { ...s, domain: superteamDomain.toLowerCase() } : s));
 }
