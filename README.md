@@ -1,82 +1,154 @@
+<div align="center">
+
+<img src="app/public/notch.svg" width="72" height="72" alt="Notch logo">
+
 # Notch
 
-**Private, portable income proofs for on-chain credit.** A student proves income from a signed payment email; Notch releases only a wallet-bound credit limit, never the email or employer details. A demo lending app shows how another Solana app can use that limit.
+**Credit from the money history you already have.**
 
-## Status
+No bank account, no credit score, no land or car to pledge. Your mobile money statement is the proof.
 
-This is a local prototype. The underwriter currently runs as a normal Node.js process, and its key is stored on disk. It is **not** a trusted enclave, production credit bureau, audited lending protocol, or live testnet deployment. The devnet entry in `Anchor.toml` is configuration only; it does not mean the program has been deployed there.
+[![Solana devnet](https://img.shields.io/badge/Solana-devnet-9945FF?logo=solana&logoColor=white)](https://explorer.solana.com/address/4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz?cluster=devnet)
+[![Live demo](https://img.shields.io/badge/live%20demo-notch--bureau.onrender.com-111A33)](https://notch-bureau.onrender.com)
+[![Sealed server](https://img.shields.io/badge/Phala-attestation-1C7A4F)](https://0015f90bd03804232678c956ce789b09384f4b1d-8787.dstack-pha1-prod9.phala.network/attestation)
+[![License](https://img.shields.io/badge/license-none%20yet-lightgrey)](#license)
 
-## Hosted demo (devnet only)
+### [Try it: notch-bureau.onrender.com](https://notch-bureau.onrender.com)
 
-- App: `https://notch-bureau.onrender.com` (static site). Faucet: `https://notch-bureau-faucet.onrender.com`. Both in `render.yaml`.
-- Sealed computer: the Phala confidential VM (`deploy/phala/README.md`). The devnet program must trust its key; a restart of the VM makes a new key.
-- Faucet: `app/scripts/faucet-server.mjs`, a dedicated wallet that transfers 0.02 SOL + 100 test USDC per tap. Top up its SOL when it runs dry.
+<sub>Devnet only. Test money, no real funds.</sub>
 
-## What works locally
+<img src="docs/img/desktop-landing.png" width="860" alt="Notch landing page on a laptop: the headline on the left, a wall of postage stamps and an airmail envelope on the right, and a QR code to open Notch on a phone">
 
-- DKIM verification for trusted sender domains and income extraction from sample emails.
-- Wallet-bound, signed credit records with email deduplication and per-wallet replay protection.
-- An Anchor program for limit posting, a lender pool with share mint (deposit, then a two-step withdraw: request, 3 day cooldown, claim at the request-day price, or the claim-day price if a loss made it lower), borrower first-loss deposits, draws, repayments with a 2% fee, and default marking.
-- LiteSVM transaction tests, including forged-signature, changed-record, replay, duplicate-email, wrong-wallet, over-limit, and default cases.
-- Exact DKIM signer-domain allowlisting; subdomains need their own explicit entry.
+</div>
 
-Repayment totals are recorded on-chain, but are **not yet read by the underwriter**. A repayment does not currently raise a later credit limit.
+## What it does
 
-## Run locally
+- **Get a limit.** Your mobile money provider emails your statement to a private Notch inbox. A sealed server checks the email's signature and turns it into a credit limit. It never keeps the statement.
+- **Borrow.** Put down 20%, take the rest in USDC, pay back with a flat 2% fee.
+- **Lend.** Put USDC in the pool. Pick **Safe** (paid first, smaller share of fees) or **Risky** (takes losses first, bigger share).
+- **Any app can check.** Other Solana programs call `check_credit` and get a yes or no plus a coarse band, never the exact limit.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="200"><img src="docs/img/onboarding-01-promise.png" width="180" alt="Phone landing: the headline over a stamp wall and an envelope"><br><sub><b>Landing.</b> Tap a stamp, the example limit grows.</sub></td>
+    <td align="center" width="200"><img src="docs/img/onboarding-04-private.png" width="180" alt="Onboarding step explaining that the statement stays private"><br><sub><b>Private.</b> The statement goes in, only a limit comes out.</sub></td>
+    <td align="center" width="200"><img src="docs/img/onboarding-09-reveal.png" width="180" alt="The limit reveal: a 27.76 USDC limit stamp"><br><sub><b>Your limit.</b> Said for what you need the money for.</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="200"><img src="docs/img/onboarding-10-borrow.png" width="180" alt="Borrow screen with the amount, the deposit and the fee"><br><sub><b>Borrow.</b> Amount, 20% deposit and fee, up front.</sub></td>
+    <td align="center" width="200"><img src="docs/img/phone-06-home-limit.png" width="180" alt="Home screen showing the credit line card"><br><sub><b>Home.</b> What you can borrow and what you owe.</sub></td>
+    <td align="center" width="200"><img src="docs/img/phone-20-lend.png" width="180" alt="Lend screen with the Safe and Risky shares"><br><sub><b>Lend.</b> Safe or Risky, in plain words.</sub></td>
+  </tr>
+</table>
+
+<p align="center"><img src="docs/img/desktop-lend.png" width="720" alt="The Lend screen on a laptop: a slim top bar with Home, Lend and Pool, and the app as one framed column"><br><sub><b>On a laptop.</b> A slim top bar and one framed column. The app is made for the phone.</sub></p>
+
+## How it works
+
+```mermaid
+flowchart LR
+  A["MoMo statement email"] --> B["Sealed server (Phala TEE)<br/>checks the DKIM signature"]
+  B --> C["Signed limit<br/>(no statement kept)"]
+  C --> D["Notch program<br/>on Solana devnet"]
+  D --> E["Borrow USDC<br/>20% deposit, 2% fee"]
+  F["Lenders: Safe share"] --> D
+  G["Lenders: Risky share<br/>(takes losses first)"] --> D
+```
+
+1. The borrower gets a one-time inbox address and asks MTN MoMo to email a statement there.
+2. The sealed server checks the email's DKIM signature, so an edited or forged email fails. It signs a limit for one wallet and deletes the email.
+3. The Solana program checks that signature, then lets the wallet draw up to the limit.
+4. A missed payment sends the borrower's deposit to lenders first. Any loss left hits Risky, then Safe.
+
+## On chain
+
+| | |
+|---|---|
+| Program (devnet) | [`4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz`](https://explorer.solana.com/address/4ucSsrca8WS9LxJvoQZdhFscYnZ8DGDKMYcBhmBNPLVz?cluster=devnet) |
+| Sealed server attestation | [Phala attestation](https://0015f90bd03804232678c956ce789b09384f4b1d-8787.dstack-pha1-prod9.phala.network/attestation) |
+| Web app | [notch-bureau.onrender.com](https://notch-bureau.onrender.com) |
+| Android | [Sideload the APK](app/android-release/README.md) |
+
+## Sponsors & partners
+
+Notch was built for the [Dev3pack Hackathon](https://hack.dev3pack.xyz). Logos from the [hackathon site](https://hack.dev3pack.xyz/#partners).
+
+<table>
+  <tr>
+    <td align="center" width="260"><img src="docs/img/sponsors/solana.png" width="200" alt="Solana logo"></td>
+    <td><b>Solana.</b> The Notch program, credit lines, the lender pool and test USDC all live on Solana devnet.</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/img/sponsors/solana-mobile.png" width="200" alt="Solana Mobile logo"></td>
+    <td><b>Solana Mobile.</b> An Android APK that signs with Mobile Wallet Adapter (Phantom, Solflare, Seed Vault). The web app offers it in Android Chrome too.</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/img/sponsors/supabase.png" width="200" alt="Supabase logo"></td>
+    <td><b>Supabase.</b> Sign in with Solana guards the inbox; Realtime shows the statement's status live; a pg_cron job runs the overdue-loan keeper. No statement data is stored there.</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/img/sponsors/firecrawl.png" width="200" alt="Firecrawl logo"></td>
+    <td><b>Firecrawl.</b> Hackathon sponsor. Not used in Notch.</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/img/sponsors/elevenlabs.png" width="200" alt="ElevenLabs logo"></td>
+    <td><b>ElevenLabs.</b> Hackathon sponsor. Not used in Notch.</td>
+  </tr>
+</table>
+
+**Supporters:** <img src="docs/img/sponsors/blockchain-developer-report.png" height="40" alt="Blockchain Developer Report logo" align="middle"> <img src="docs/img/sponsors/bonfires.png" height="40" alt="Bonfires logo" align="middle"> &nbsp; **Organiser:** <img src="docs/img/sponsors/dev3pack.png" height="40" alt="Dev3pack logo" align="middle">
+
+### Built with
+
+| Tool | What it does in Notch |
+|---|---|
+| [Phala](https://phala.network) | Runs the sealed server in a TEE (Intel TDX), with a public attestation. |
+| [AgentMail](https://agentmail.to) | Gives each borrower a one-time inbox for their statement. |
+| [Anchor](https://www.anchor-lang.com) | The Solana program framework. |
+| [Render](https://render.com) | Hosts the web app and the test-money faucet. |
+| [Pollar](https://pollar.xyz) | Optional "Continue with Google" wallet, no seed phrase. |
+| [WalletConnect](https://walletconnect.network) | Wallet list on iPhone Safari and a QR code on desktop. |
+
+## Run it locally
 
 ```sh
 pnpm install
-pnpm test
-pnpm test:enclave
-```
+pnpm test               # program tests (LiteSVM)
+pnpm test:enclave       # sealed server tests
 
-On-chain tests load the compiled `target/deploy/notch.so`; rebuild it after changing Rust code with the Solana/Anchor toolchain before interpreting test results.
-
-Run the local underwriter with:
-
-```sh
-cd enclave
+cd app
 pnpm install
-pnpm start
+cp .env.example .env.local   # then fill in the devnet values
+pnpm demo:enclave            # local sealed server (says "local-dev")
+pnpm dev                     # the app on http://localhost:5173
 ```
 
-`GET /attestation` explicitly reports `local-dev`. Do not submit real financial emails to this prototype.
+Browser tests: `cd app && pnpm e2e:browser:devnet` (Playwright against devnet).
+Do not send a real statement to a local server.
 
-### AI extraction (optional)
+## Repo layout
 
-Income extraction is rule-based by default. To use a model, point the underwriter at an
-OpenAI-compatible chat-completions endpoint:
-
-```sh
-NOTCH_LLM_URL=https://your-endpoint/v1/chat/completions \
-NOTCH_LLM_MODEL=your-model \
-NOTCH_LLM_KEY=optional-bearer-token \
-NOTCH_LLM_TIMEOUT_MS=10000 \
-pnpm start
+```text
+programs/notch           Solana program: limits, pool, Safe/Risky shares, borrow, repay, check_credit
+programs/hostel-deposit  Example app that calls check_credit before a booking
+enclave/                 Sealed server: inbox, DKIM check, signed limits
+app/                     React web app, Android shell (Capacitor), Playwright tests
+sdk/                     @notch/bureau: read a wallet's credit from any app
+supabase/                Schema, Realtime status, keeper cron
+deploy/phala/            Phala TEE deployment
+tests/                   Program tests (LiteSVM)
 ```
 
-The endpoint sees the decoded email body, so in production it **must** be a confidential
-(attested) model endpoint, such as Tinfoil's attested inference or a model running inside the
-same TDX enclave. Pointing this at a normal hosted LLM breaks the privacy claim. Model output
-is schema-checked and every amount must appear in the email next to a credit keyword;
-otherwise the service falls back to the rule-based extractor.
+## Honest limits
 
-## Bureau: any app can check a wallet
+- Devnet only. Not audited. Not for real money.
+- Today it reads MTN MoMo statements only.
+- The exact limit is public on chain; `check_credit` returns only a band. Mainnet would hide it.
 
-`check_credit(min_available, max_age_s)` on the Notch program is read-only. It succeeds only if the wallet has a line, is not defaulted, its signed record has not expired, was posted within `max_age_s`, and has at least `min_available` left. Otherwise it fails with `NoCreditLine`, `Defaulted`, `RecordExpired`, `InsufficientCredit` or `StaleRecord`. On success it returns and logs `{ wallet, available_bucket, on_time_repayments, defaulted: false }` where the bucket is coarse (0: under 25, 1: 25 to 100, 2: 100 to 500, 3: 500+ USDC), never the exact limit.
+More: [Research](RESEARCH.md) · [Sealed server](enclave/README.md) · [Supabase](supabase/README.md) · [SDK](sdk/README.md) · [Android](app/android-release/README.md)
 
-**Privacy of the exact limit (accepted, audit #12).** `check_credit` returns only a coarse bucket, but the credit line account (`CreditLine.limit`) and the `LimitPosted` event are public on chain and hold the exact limit. The limit is about 0.3 x monthly counted income, so anyone who knows a wallet can read an income band from chain. We accept this for the devnet demo: a lender must be able to see the limit it is exposed to, and the signed record is what the program checks. Before mainnet, either post only the bucket plus a hash commitment to the limit (the borrower reveals it when drawing), or keep the line in a confidential account. Tracked in "Mainnet bar" below.
+## License
 
-- `programs/hostel-deposit`: a minimal consumer that CPIs `check_credit` before it records a booking.
-- `sdk/` (`@notch/bureau`): `getCredit(rpc, wallet)` and `buildCheckCreditIx(...)`, with a 10-line integration example in its README.
-- Tests: `tests/bureau.test.js` (LiteSVM), `sdk/test`, and step 10 of `app/scripts/e2e-devnet.mjs`.
-- Lines created before this change are 8 bytes shorter (no `posted_at`). They keep working for draw, repay and default; `check_credit` reads them as "posted long ago", so only an unlimited `max_age_s` passes for them.
-
-## Project notes
-
-- [Research and differentiation](RESEARCH.md)
-- [Original build plan](../PLAN.md)
-
-## Mainnet bar
-
-Passing local or devnet tests does not establish mainnet safety. Before any real funds: implement and remotely verify confidential-compute attestation; replace static currency conversion; bind repayment history to verified on-chain state; hide the exact limit on chain (bucket or commitment, audit #12); add a real borrower experience and repayment terms; deploy against the intended stablecoin; obtain independent Solana security review; and handle lending, privacy, and consumer-credit requirements for the launch jurisdiction.
+No license file yet. All rights reserved until one is added.
