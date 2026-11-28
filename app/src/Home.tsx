@@ -13,6 +13,7 @@ import { MIN_FEE_LAMPORTS } from './chain';
 import { FaucetButton, NeedsTestMoney, useSticky } from './Faucet';
 import { Onboarding, WelcomeBack } from './Onboarding';
 import { useOnboard } from './onboard';
+import { useDesk } from './desk';
 
 /** Ata + idempotent create, so a wallet that never held test USDC still works. */
 export async function withAta(a: NotchAddresses, owner: ReturnType<typeof address>) {
@@ -31,9 +32,13 @@ export function lineState(line: ReturnType<typeof useChain>['line'], nowS = Math
   return { live, limit, drawn, headroom, pastDue, expired, deposit: line?.deposit ?? 0n };
 }
 
-export function Avatar() {
+/** The wallet button. On a wide screen it lives in the top bar (inBar) and the copy inside each screen steps aside, so
+ * there is only ever one. */
+export function Avatar({ inBar = false }: { inBar?: boolean }) {
   const { connected, restoring } = useWallet();
   const { openAccount, openSignIn } = useUi();
+  const desk = useDesk();
+  if (desk !== inBar) return null;
   if (restoring) return <span className="av skel" aria-label="Reconnecting your wallet" style={{ minWidth: 48, height: 48, borderRadius: 24 }} />;
   return connected ? (
     <button type="button" className="av tap wallet-pill" onClick={openAccount} aria-label={`Your wallet ${shortAddr(connected.address)}`} title={connected.address}>

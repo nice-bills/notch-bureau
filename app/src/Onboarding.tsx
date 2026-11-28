@@ -10,6 +10,7 @@ import { formatUsdc } from './amount';
 import { Btn, Icon, cx } from './ui';
 import { GOALS, PAID, STEP, STEPS, forGoal, getOnboard, setOnboard, useOnboard, type Goal, type Paid } from './onboard';
 import { buzz } from './glass';
+import { PhoneQr, useDesk } from './desk';
 
 /** The progress bar: always the same ten steps, from the promise to the first loan. It remembers where it last stood,
  * so moving to the next step (even onto a different screen, like Get your limit) fills from there instead of jumping. */
@@ -119,18 +120,22 @@ const SHARE = 0.25;
 
 function Pitch() {
   const { openSignIn, go } = useUi();
+  // A wide screen gets a wall big enough to fill the right side of the page; a phone keeps its 8 x 7 sheet.
+  const desk = useDesk();
   const wall = useMemo(() => {
+    const rows = desk ? Math.ceil(Math.max(innerHeight, 800) / 110) + 3 : ROWS;
+    const cols = desk ? Math.min(28, Math.ceil(Math.max(innerWidth, 1280) * 0.66 / 94) + 4) : COLS;
     let html = '';
-    for (let r = 0; r < ROWS; r++) {
+    for (let r = 0; r < rows; r++) {
       html += '<div class="row">';
-      for (let i = 0; i < COLS; i++) {
+      for (let i = 0; i < cols; i++) {
         const [ink, mo, num] = WALL[(i * 3 + r * 5) % WALL.length];
         html += `<span class="st" data-v="${num}" data-ink="${ink}" data-mo="${mo}" style="--d:${((i * 7 + r * 3) % 11) * 40}ms"><svg viewBox="0 0 88 104">${stamp(88, 104, { ink, motif: mo, num: String(num), cap: CAPS[(i + r * 2) % CAPS.length] })}</svg></span>`;
       }
       html += '</div>';
     }
     return html;
-  }, []);
+  }, [desk]);
   const env = useMemo(() => envelope(), []);
   const root = useRef<HTMLElement>(null);
   const wallRef = useRef<HTMLDivElement>(null);
@@ -151,11 +156,15 @@ function Pitch() {
       const r = el.getBoundingClientRect();
       el.style.setProperty('--lx', Math.max(-1, Math.min(1, ((px - r.left) / r.width) * 2 - 1)).toFixed(3));
       el.style.setProperty('--ly', Math.max(-1, Math.min(1, ((py - r.top) / r.height) * 2 - 1)).toFixed(3));
-      wallRef.current?.querySelectorAll<HTMLElement>('.st').forEach((s) => {
+      // read every position first, then write: one layout pass per frame, even with a desktop-sized wall
+      const all = [...(wallRef.current?.querySelectorAll<HTMLElement>('.st') ?? [])];
+      const ks = all.map((s) => {
         const b = s.getBoundingClientRect();
-        const d = Math.hypot(b.left + b.width / 2 - px, b.top + b.height / 2 - py);
-        const k = Math.max(0, 1 - d / 130);
-        s.style.setProperty('--k', k.toFixed(3));
+        return Math.max(0, 1 - Math.hypot(b.left + b.width / 2 - px, b.top + b.height / 2 - py) / 130);
+      });
+      all.forEach((s, j) => {
+        const k = ks[j].toFixed(3);
+        if (s.style.getPropertyValue('--k') !== k) s.style.setProperty('--k', k);
       });
     });
   };
@@ -199,7 +208,7 @@ function Pitch() {
   };
 
   const hint = got.n === 0
-    ? 'Tap the stamps. Each one is a payment in your money history.'
+    ? `${desk ? 'Click' : 'Tap'} the stamps. Each one is a payment in your money history.`
     : `${got.n} payment${got.n === 1 ? '' : 's'} (${got.sum} in) → a ${got.total} USDC limit (example). Yours comes from your real statement.`;
 
   return (
@@ -228,6 +237,7 @@ function Pitch() {
         </div>
         <p className="welcome-dev">Solana devnet only. Test money, no real funds.</p>
       </div>
+      {desk && <PhoneQr />}
     </section>
   );
 }

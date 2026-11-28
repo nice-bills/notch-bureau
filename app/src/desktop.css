@@ -1,0 +1,122 @@
+/* Notch on a wide screen (>= 1024px): a laptop or a desktop.
+   The landing becomes a real hero: words on the left, the stamp wall and the envelope on the right.
+   Every other screen stays one column (the app is made for a phone), set as a sheet of paper on a desk:
+   a slim top bar with the brand, the sections and the wallet; an airmail edge on the column; a few stamps resting
+   nearby. Nothing here applies below 1024px, so the phone layout is untouched. */
+
+@media (min-width:1024px){
+  :root{--col:480px;--bar:64px;--desk:#E7E7EC}
+  html,body{background-color:var(--desk)}
+  /* the desk: a faint cancel-dot grid, the same paper texture as the onboarding pictures */
+  body{background-image:radial-gradient(rgba(17,26,51,.06) 1px,transparent 1.3px);background-size:16px 16px;background-attachment:fixed}
+
+  /* ---------- the slim top bar ---------- */
+  .deskbar{position:fixed;inset:0 0 auto;z-index:30;height:var(--bar);display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;padding:0 24px;
+    background:rgba(231,231,236,.86);-webkit-backdrop-filter:blur(14px) saturate(160%);backdrop-filter:blur(14px) saturate(160%);box-shadow:0 .5px 0 rgba(14,15,19,.1)}
+  .db-brand{justify-self:start;display:flex;align-items:center;gap:8px;height:40px;padding:0 12px 0 6px;border-radius:20px;color:var(--ink);text-decoration:none;font-weight:650;font-size:17px;letter-spacing:-.02em}
+  .db-brand svg{width:26px;height:26px}
+  .db-nav{position:relative;display:flex;padding:4px;border-radius:22px;background:rgba(14,15,19,.05)}
+  .db-nav a{position:relative;z-index:1;width:112px;height:36px;display:flex;align-items:center;justify-content:center;gap:8px;border-radius:18px;color:var(--soft);text-decoration:none;font-size:14px;font-weight:600;transition:color .2s ease}
+  .db-nav a[aria-current="page"]{color:var(--ink)}
+  .db-nav .ic{width:18px;height:18px}
+  /* the white pill under the current section slides from tab to tab */
+  .db-sel{position:absolute;top:4px;left:4px;width:112px;height:36px;border-radius:18px;background:var(--paper);box-shadow:0 1px 2px rgba(14,15,19,.08),0 4px 12px -6px rgba(14,15,19,.2);opacity:0;transition:transform .28s var(--ease-out),opacity .2s ease}
+  .db-sel[data-on]{opacity:1}
+  .db-end{grid-column:3;justify-self:end;display:flex;align-items:center;gap:12px}
+  .db-net{font-size:12px;font-weight:600;color:var(--amber);background:var(--amber-tint);padding:4px 10px;border-radius:10px}
+  .db-end .wallet-pill{height:40px}
+  .db-end .btn.small{min-height:40px}
+
+  /* ---------- the column: a framed sheet on the desk ---------- */
+  /* the sheet hugs its content (a short screen is a short card), with a floor so it never looks like a scrap */
+  .app{max-width:var(--col);margin:calc(var(--bar) + 28px) auto 40px;min-height:min(560px,calc(100dvh - var(--bar) - 68px));border-radius:28px;overflow:clip;z-index:1;
+    box-shadow:0 0 0 1px rgba(14,15,19,.06),0 2px 4px rgba(14,15,19,.04),0 40px 80px -48px rgba(17,26,51,.45);
+    padding-bottom:40px}
+  .app.no-tabs{padding-bottom:40px}
+  /* an airmail edge across the top of the sheet */
+  .app::before{content:"";display:block;height:6px;background:repeating-linear-gradient(-45deg,var(--verm) 0 10px,var(--paper) 10px 15px,var(--ultra) 15px 25px,var(--paper) 25px 30px)}
+  .app > footer.help{padding-bottom:8px}
+  html{scroll-padding-top:calc(var(--bar) + 16px);scroll-padding-bottom:24px}
+
+  /* things that stick or float inside the column: below the bar, not under it */
+  .nav,.onb-top,.edge{top:var(--bar)}
+  .onb[data-step]{min-height:calc(100dvh - var(--bar) - 74px)}
+  .onb-top{padding-top:12px}
+  .return-banner{top:calc(var(--bar) + 12px)}
+  .tab-note{bottom:24px}
+  .welcome{min-height:calc(100dvh - var(--bar) - 120px)}
+
+  /* sheets open as a centred card instead of rising from the bottom edge */
+  .sheet{top:50%;bottom:auto;max-height:calc(100dvh - var(--bar) - 48px);transform:translate(-50%,-50%);border-radius:28px;padding-top:16px;animation:desk-pop .22s var(--ease-out)}
+  .sheet .grab{display:none}
+  @keyframes desk-pop{from{opacity:0;transform:translate(-50%,-48%) scale(.97)}}
+
+  /* stamps resting on the desk, either side of the column */
+  .desk-deco{position:fixed;inset:var(--bar) 0 0;z-index:0;pointer-events:none;overflow:hidden}
+  .desk-deco svg{position:absolute;width:120px;height:auto;opacity:.5;filter:saturate(.7) drop-shadow(0 6px 10px rgba(17,26,51,.12))}
+  .desk-deco .d1{left:calc(50% - var(--col)/2 - 220px);top:14%;transform:rotate(-11deg)}
+  .desk-deco .d2{left:calc(50% - var(--col)/2 - 150px);top:56%;width:96px;transform:rotate(7deg)}
+  .desk-deco .d3{right:calc(50% - var(--col)/2 - 200px);top:24%;width:104px;transform:rotate(9deg)}
+  .desk-deco .d4{right:calc(50% - var(--col)/2 - 250px);top:64%;transform:rotate(-6deg)}
+
+  /* hover only with a real pointer */
+  @media (hover:hover){
+    .db-nav a:hover{color:var(--ink)}
+    .db-brand:hover{background:rgba(14,15,19,.05)}
+  }
+
+  /* ---------- the landing: a desktop hero ---------- */
+  /* full width, no frame, no bar: the hero has its own brand */
+  body:has(.welcome-live) .deskbar,body:has(.welcome-live) .desk-deco{display:none}
+  body:has(.welcome-live){background-image:none}
+  .app:has(.welcome-live){max-width:none;margin:0;min-height:100dvh;border-radius:0;box-shadow:none;padding-bottom:0;overflow:clip}
+  .app:has(.welcome-live)::before{display:none}
+
+  .welcome-live{--w:clamp(400px,34vw,620px);--split:46%;min-height:100dvh;padding:0 0 0 clamp(48px,6.5vw,128px);justify-content:center}
+  .welcome-live > :is(.lede,.foot,.banner){max-width:min(600px,calc(var(--split) - 7vw))}
+  .welcome-live .brandpill{position:absolute;top:28px;left:clamp(40px,6.5vw,128px);margin:0}
+  .welcome-live > .banner{margin:96px 0 0}
+  .welcome-live .lede{padding:0;margin-top:auto}
+  .welcome-live h1{font-size:clamp(56px,5.4vw,92px);line-height:.98;letter-spacing:-.045em;max-width:10.5ch}
+  .welcome-live .lede p{margin:24px 0 0;padding:0;background:none;-webkit-backdrop-filter:none;backdrop-filter:none;font-size:clamp(18px,1.35vw,21px);line-height:1.5;max-width:30ch;color:#3C3F48;text-wrap:pretty}
+  .welcome-live .foot{position:relative;bottom:auto;margin:36px 0 auto;padding:0;background:none;align-items:flex-start;gap:12px}
+  .welcome-live .foot .btn{width:auto;min-width:240px;padding:0 36px}
+  .welcome-live .onb-links{justify-content:flex-start;gap:4px 12px;margin-left:-12px}
+  .welcome-live .onb-links .textlink{margin:0}
+  .welcome-live .welcome-dev{text-align:left;margin-top:4px;font-size:12px}
+
+  /* the stamp wall fills the right side and fades in from the words */
+  .welcome-live .wall{inset:-40px -80px -40px calc(var(--split) - 120px);-webkit-mask-image:linear-gradient(90deg,transparent,#000 240px);mask-image:linear-gradient(90deg,transparent,#000 240px)}
+  .welcome-live .wall .rows{padding-top:0}
+  .welcome-live .wall-fade{background:linear-gradient(180deg,rgba(241,241,244,.5),rgba(241,241,244,0) 12%,rgba(241,241,244,0) 88%,rgba(241,241,244,.6))}
+
+  /* the envelope sits in the middle of the wall, big */
+  .welcome-live .hero{position:absolute;width:var(--w);max-width:none;margin:0;left:calc(var(--split) + (100% - var(--split) - var(--w)) / 2);top:calc(50% - var(--w) * 204 / 312 / 2 - 32px)}
+  .welcome-live .hero-hint{position:absolute;margin:0;left:calc(var(--split) + (100% - var(--split)) / 2);top:calc(50% + var(--w) * 204 / 312 / 2 + 8px);transform:translateX(-50%);max-width:36ch;font-size:14px;padding:10px 16px}
+
+  /* "Best on your phone": a paper label pinned to the bottom right of the wall */
+  .desk-qr{position:absolute;z-index:3;right:clamp(24px,3vw,48px);bottom:clamp(24px,4vh,44px);display:flex;align-items:center;gap:14px;padding:12px 18px 12px 12px;border-radius:18px;background:var(--paper);
+    box-shadow:0 0 0 1px rgba(14,15,19,.05),0 18px 36px -18px rgba(17,26,51,.45);transform:rotate(-2deg);max-width:300px}
+  .qr-box{flex:none;width:92px;height:92px;display:grid;place-items:center;border-radius:10px;background:#fff;box-shadow:inset 0 0 0 1px rgba(14,15,19,.08);padding:6px}
+  .qr-box svg{display:block;width:100%;height:100%}
+  .qr-box path{fill:var(--ink)}
+  .qr-skel{width:100%;height:100%;border-radius:6px;background:var(--well)}
+  .qr-t b{display:block;font-size:15px;font-weight:650;letter-spacing:-.01em}
+  .qr-t small{display:block;margin-top:4px;color:var(--soft);font-size:13px;line-height:1.4}
+}
+
+/* short laptop screens: a little less of everything so the hero fits without scrolling */
+@media (min-width:1024px) and (max-height:820px){
+  .welcome-live{--w:clamp(360px,31vw,520px)}
+  .welcome-live h1{font-size:clamp(52px,5vw,76px)}
+  .welcome-live .foot{margin-top:28px}
+  .qr-box{width:80px;height:80px}
+}
+
+@media (min-width:1024px) and (prefers-reduced-transparency:reduce){
+  .deskbar{background:var(--desk);-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+@media (min-width:1024px) and (prefers-reduced-motion:reduce){
+  .db-sel,.db-nav a{transition:none}
+  .sheet{animation:fade .15s ease-out}
+}

@@ -49,10 +49,13 @@ async function borrowFlow(s: Session, o: { shots?: string; extras?: boolean }) {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Credit from the money history you already have.' })).toBeVisible();
   if (!o.shots) {
-    // desktop: a centred phone-width column, not stretched
-    const col = await page.locator('.app').boundingBox();
-    expect(col!.width).toBeLessThanOrEqual(440);
-    expect(Math.abs(col!.x + col!.width / 2 - 640)).toBeLessThan(4);
+    // desktop: the landing is a full-width hero (words left, envelope right); the other screens are a centred column
+    // (desktop.spec.ts checks those)
+    const [h, env] = await Promise.all([
+      page.getByRole('heading', { name: 'Credit from the money history you already have.' }).boundingBox(),
+      page.locator('.welcome-live .hero').boundingBox(),
+    ]);
+    expect(h!.x + h!.width).toBeLessThan(env!.x);
   }
   await shot('welcome');
 

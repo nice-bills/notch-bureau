@@ -24,6 +24,8 @@ import { GetLimit } from './GetLimit';
 import { Borrow } from './Borrow';
 import { Lend } from './Lend';
 import { Pool } from './Pool';
+import { Avatar } from './Home';
+import { DeskDeco, useDesk } from './desk';
 const loadAttacks = () => import('./Attacks');
 const Attacks = lazy(() => loadAttacks().then((m) => ({ default: m.Attacks })));
 function ScreenSkel() {
@@ -179,11 +181,15 @@ function Shell() {
   // No tab bar on the welcome screen (it covered "Get started"); everywhere else it floats over a bottom inset.
   const welcome = route === 'home' && !connected && !restoring;
   const tabbed = TABS.some((t) => t.id === route) && !welcome;
+  // A laptop or desktop: a top bar (brand, sections, wallet) instead of the floating tab bar.
+  const desk = useDesk();
 
   return (
     <UiCtx.Provider value={ui}>
       <svg id="fx" width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true"><defs dangerouslySetInnerHTML={{ __html: FX_DEFS }} /></svg>
       <a className="skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
+      {desk && <DeskDeco />}
+      {desk && <DeskBar route={route} go={go} welcome={welcome} />}
       <div className={cx('app', !tabbed && 'no-tabs')}>
         <main id="main" tabIndex={-1} style={{ outline: 'none' }}>
           <PhantomReturn />
@@ -203,7 +209,7 @@ function Shell() {
           Solana devnet only. Test money, no real funds. Program <a className="mono" translate="no" href={explorerAddress(PROGRAM_ID)} target="_blank" rel="noreferrer">{shortAddr(PROGRAM_ID, 5)}</a>
         </footer>
       </div>
-      {tabbed && <TabBar route={route} go={go} />}
+      {tabbed && !desk && <TabBar route={route} go={go} />}
       {sheet === 'signin' && <SignInSheet onClose={() => setSheet(null)} pollar={pollar} setPollar={setPollar} />}
       {sheet === 'account' && <AccountSheet onClose={() => setSheet(null)} att={att} retryAtt={loadAtt} pollar={pollar} setPollar={setPollar} />}
     </UiCtx.Provider>
@@ -303,6 +309,36 @@ function TabBar({ route, go }: { route: Route; go: (r: Route) => void }) {
         </a>
       ))}
     </nav>
+  );
+}
+
+/** Wide screens: one slim bar across the top. The sections and the wallet show once there is an app to move around in
+ * (not during the first-run questions, which keep their own Back and progress bar). */
+function DeskBar({ route, go, welcome }: { route: Route; go: (r: Route) => void; welcome: boolean }) {
+  const i = TABS.findIndex((t) => t.id === route);
+  return (
+    <header className="deskbar">
+      <a className="db-brand tap" href="#home" onClick={(e) => { e.preventDefault(); go('home'); }} aria-label="Notch home">
+        <svg viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="8" fill="#111A33" /><path d="M8.5 18V8.5l9 9V8" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        notch
+      </a>
+      {!welcome && (
+        <nav className="db-nav" aria-label="Sections">
+          <span className="db-sel" data-on={i >= 0 || undefined} style={{ transform: `translateX(${Math.max(0, i) * 100}%)` }} aria-hidden="true" />
+          {TABS.map((t) => (
+            <a key={t.id} href={`#${t.id}`} aria-current={route === t.id ? 'page' : undefined} className="tap"
+              onClick={(e) => { e.preventDefault(); go(t.id); }}>
+              <Icon name={t.icon} />
+              {t.label}
+            </a>
+          ))}
+        </nav>
+      )}
+      <div className="db-end">
+        <span className="db-net">Devnet</span>
+        {!welcome && <Avatar inBar />}
+      </div>
+    </header>
   );
 }
 
