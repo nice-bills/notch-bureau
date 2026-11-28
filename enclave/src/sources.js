@@ -25,3 +25,8 @@ export function sourceTable({ superteamDomain = DEFAULT_SUPERTEAM_DOMAIN } = {})
 }
 
 export const DEFAULT_TRUSTED = SOURCES.map((s) => s.domain);
+
+// Consumer mail providers whose DKIM signature is taken as proof of which MAILBOX sent a "forward as attachment"
+// (forward.js). Never an income source. Add one only if it signs every message with d= its own domain and lets a user
+// send only from their own address.
+export const FORWARDERS = Object.freeze(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'icloud.com', 'me.com']);

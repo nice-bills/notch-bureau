@@ -6,7 +6,8 @@ import { computeLimit } from './underwrite.js';
 import { NO_IDENTITY, signRecord } from './record.js';
 import { DeviceNonces, DeviceProofError, verifyDeviceProof } from './siws.js';
 import { SgtUnavailable, createSgtReader, sgtHash } from './sgt.js';
-import { DEFAULT_SUPERTEAM_DOMAIN, DEFAULT_TRUSTED as DEFAULT_TRUSTED_LIST, sourceTable } from './sources.js';
+import { DEFAULT_SUPERTEAM_DOMAIN, DEFAULT_TRUSTED as DEFAULT_TRUSTED_LIST, FORWARDERS, sourceTable } from './sources.js';
+import { looksForwarded, openForward } from './forward.js';
 import { pdfAttachments } from './mime.js';
 import { StatementError, identityHash, parseStatements } from './statement.js';
 import { decodeEmailText } from './extract.js';
@@ -52,6 +53,7 @@ export class Underwriter {
     secretKey,
     trusted,
     resolver,
+    forwarders = FORWARDERS, // consumer providers a "forward as attachment" may come from (forward.js)
     historyProvider,
     now = () => new Date(),
     llm = llmConfigFromEnv(),
@@ -70,6 +72,7 @@ export class Underwriter {
     this.kinds = new Map(sources.map((s) => [s.domain, s.kind]));
     this.trusted = trusted ?? sources.map((s) => s.domain);
     this.resolver = resolver;
+    this.forwarders = forwarders;
     this.historyProvider = historyProvider;
     this.now = now;
     this.llm = llm; // null => rules-only extraction, no outbound calls
@@ -120,14 +123,29 @@ export class Underwriter {
   // bridge passes it (real mail is checked against real DNS even on a demo underwriter); no HTTP route does.
   async submit(eml, wallet, { recipient, issuedAt, device, deviceProven = false, dkim } = {}) {
     bs58.decode(wallet); // throws on a bad address
-    const v = await verifyEmail(eml, dkim ?? { trusted: this.trusted, resolver: this.resolver });
-    if (!v.ok) return { ok: false, reason: v.reason, ...(v.retry ? { retry: true } : {}) };
-    if (recipient) {
-      const why = recipientRefusal(v, recipient, { issuedAt, now: this.now() });
-      if (why) return { ok: false, reason: why };
+    const settings = dkim ?? { trusted: this.trusted, resolver: this.resolver };
+    let v = await verifyEmail(eml, settings);
+    let message = eml; // what gets read and deduplicated
+    if (!v.ok && !v.retry && recipient && looksForwarded(eml, this.forwarders)) {
+      // "Forward as attachment" (inbox only): the recipient rule applies to the borrower's forward, and from here on
+      // only the ORIGINAL inside it counts, so it is the same email (same dedupe keys) as when it arrives directly.
+      const f = await openForward(eml, {
+        ...settings,
+        forwarders: this.forwarders,
+        refuseRecipient: (outer) => recipientRefusal(outer, recipient, { issuedAt, now: this.now() }),
+      });
+      if (!f.ok) return f;
+      ({ eml: message, v } = f);
+    } else {
+      if (!v.ok) return { ok: false, reason: v.reason, ...(v.retry ? { retry: true } : {}) };
+      if (recipient) {
+        const why = recipientRefusal(v, recipient, { issuedAt, now: this.now() });
+        if (why) return { ok: false, reason: why };
+      }
     }
     // Identity-bearing sources (a mobile-money statement binds a phone number to the wallet) are accepted ONLY through the
-    // statement inbox, where the DKIM-signed To header was just checked against THIS wallet's own address. Without that, anyone
+    // statement inbox, where the DKIM-signed To header was just checked against THIS wallet's own address (or, for a
+    // forward, the original's signed To against the mailbox that signed the forward). Without that, anyone
     // holding a copy of a victim's statement (a forwarded mail, a loan app that collected it) could post it first and bind the
     // victim's number to their own wallet for ever (audit #3). Non-identity sources keep the direct path.
     const kind = this.kinds.get(v.domain) || 'email-body';
@@ -141,9 +159,9 @@ export class Underwriter {
     const now = this.now();
     let got;
     try {
-      got = kind === 'statement-pdf' ? await this.#statement(eml, now)
-        : kind === 'earn-payout' ? await this.#earn(eml, wallet, now, v.domain)
-          : await this.#plain(eml, now, v.domain);
+      got = kind === 'statement-pdf' ? await this.#statement(message, now)
+        : kind === 'earn-payout' ? await this.#earn(message, wallet, now, v.domain)
+          : await this.#plain(message, now, v.domain);
     } catch (e) {
       if (e instanceof Refusal || e instanceof StatementError) return { ok: false, reason: e.message };
       throw e;

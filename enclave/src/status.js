@@ -6,6 +6,10 @@ import { recordSha256 } from './store.js';
 export function reasonCode(text) {
   const t = String(text || '');
   if (/identity|already linked/i.test(t)) return 'identity_conflict';
+  // "Forward as attachment" (forward.js).
+  if (/forward it as an attachment|exactly one original|itself a forward/i.test(t)) return 'no_statement';
+  if (/different email than|forward was not sent to this inbox|forward is (older|dated)|tied to your request|did not sign who/i.test(t)) return 'wrong_inbox';
+  if (/signature of your mail provider|forward it from a|not signed by a sender|attached email could not be verified/i.test(t)) return 'dkim_failed';
   // The ways a mail fails to belong to this inbox request. Never 'dkim_failed': the signature itself was fine. The coarse
   // word stays inside the database's fixed list; the plain sentence reaches the borrower through GET /record.
   if (/not addressed to this inbox|To header|sent before you asked|dated in the future|tied to your request/i.test(t)) return 'wrong_inbox';

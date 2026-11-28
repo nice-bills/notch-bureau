@@ -132,6 +132,9 @@ export function explainError(e: unknown): FriendlyError {
 export function explainEnclaveReason(reason: string): string {
   const r = reason.toLowerCase();
   if (r.includes('email already used')) return 'The sealed computer has already used this email. Each email counts once.';
+  // "Forward as attachment" refusals are already plain sentences: show them as they are, before the rules below that
+  // would talk about asking MTN again.
+  if (/forward|attached email|attach exactly|different email than|did not sign who/.test(r)) return `${reason[0].toUpperCase()}${reason.slice(1)}.`;
   // The mail does not belong to this inbox request. These come before the signature message: the signature was fine.
   if (r.includes('sent before you asked')) return 'This statement was sent before you asked for this address. Ask MTN for a new statement and send it here.';
   if (r.includes('dated in the future')) return 'This statement is dated in the future, so it was refused. Ask MTN for a new one.';

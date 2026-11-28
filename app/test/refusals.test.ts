@@ -22,3 +22,14 @@ describe('explainEnclaveReason: inbox refusals', () => {
     expect(explainEnclaveReason('no passing DKIM signature (mtn.com:fail)')).toMatch(/signature does not check out/);
   });
 });
+
+describe('explainEnclaveReason: forward as attachment', () => {
+  it.each([
+    'forward it as an attachment, not inline: open the original email, then More, then Forward as attachment',
+    'the statement was sent to a different email than the one that forwarded it',
+    'your mail provider did not sign a readable date and message ID, so the forward cannot be tied to your request',
+    'attach exactly one original email to the forward',
+  ])('%s', (reason) => {
+    expect(explainEnclaveReason(reason)).toBe(`${reason[0].toUpperCase()}${reason.slice(1)}.`);
+  });
+});

@@ -97,6 +97,8 @@ export async function verifyEmail(eml, { trusted, resolver } = {}) {
     messageDedupe: messageId ? crypto.createHash('sha256').update(`notch-mid-v1|${domain}|${messageId}`).digest() : null,
     signedHeaders: signed,
     to: fields.to === null ? [] : addressesIn(fields.to), // trust it only when signedHeaders has 'to'
+    toLine: fields.to, // the same, as written (forward.js wants exactly one mailbox)
+    from: fields.from,
     signedDate: signed.includes('date') && fields.date ? parseMailDate(fields.date) : null,
   };
 }
@@ -127,6 +129,15 @@ function fromDomain(value) {
   const m = value.match(/<\s*[^<>@\s]+@([^<>@\s]+)\s*>\s*$/) || value.match(/^[^<>@\s"]+@([^<>@\s]+)$/);
   if (!m) return { ok: false, reason: 'could not read the From address' };
   return { ok: true, domain: m[1].toLowerCase() };
+}
+
+// A header value that names exactly ONE mailbox (`a@b` or `Name <a@b>`) -> that address, lower-cased; anything else
+// (a list, a group, a quoted local part) -> null.
+export function singleMailbox(value) {
+  if (String(value ?? '').length > 1000) return null; // also bounds the regex below on a header of endless spaces
+  const addr = '[^<>@\\s",;:()\\[\\]\\\\]+@[A-Za-z0-9.-]+';
+  const m = new RegExp(`^(?:(?:"(?:[^"\\\\]|\\\\.)*"|[^"<>@,;:]*)\\s*<\\s*(${addr})\\s*>|(${addr}))$`).exec(String(value ?? '').trim());
+  return m ? (m[1] ?? m[2]).toLowerCase() : null;
 }
 
 // The addresses on a To value, lower-cased.

@@ -178,7 +178,15 @@ Honest limits:
   has a **different layout** (30 days, `MSISDN`, `FROM NO.`/`TO NO.`, `BAL BEFORE`/`BAL AFTER`) that `src/statement.js`
   cannot read yet, so it is still refused.
 - The app treats the mailbox as a real mail domain, so the "Send a sample statement" button shows only on the local demo server.
-- Forwarding a statement from your own mail does not work: `To` then names you, not the inbox address.
+- Forwarding a statement from your own mail works only **as an attachment** (next section); an inline forward is refused.
+
+### Forward as attachment (`src/forward.js`, inbox only)
+For senders that only email the address on file. The borrower attaches the original (`message/rfc822`) and mails it to
+their inbox address. Accepted when: the forward's DKIM passes with `d=` equal to its From domain, a listed consumer
+provider (`FORWARDERS` in `src/sources.js`); its `To` passes `recipientRefusal`; exactly one attached message, not
+itself a forward; that message passes the trusted-signer check; its `To` is **signed**, is one address, and equals the
+forwarder's (Gmail: dots and `+tags` ignored). Only the original is read and deduplicated. MTN does not sign `To`, so
+its statements cannot come this way. See [`../docs/STATEMENT-FALLBACKS.md`](../docs/STATEMENT-FALLBACKS.md).
 
 ### The secret pepper in `id_hash` (required)
 There are only about 10^9 phone numbers, so a plain `sha256("notch-msisdn"|number)` on chain (the public PDA `["identity", id_hash]`) can be

@@ -375,6 +375,15 @@ function Inbox({ wallet, signMessage, onResult, localDemo, onInbox }: { wallet: 
         </span></li>
         <li><span className="n">3</span><span>Paste the address above and <b>send</b>.</span></li>
       </ol>
+      <details className="fallback pcard" data-testid="bank-fallback">
+        <summary>Your bank only emails you?</summary>
+        <ol>
+          <li>Ask your bank to email the statement to you.</li>
+          <li>Open it in <b>Gmail on the web</b> (on a phone: browser → desktop site), then <b>More (⋮)</b> → <b>Forward as attachment</b>.</li>
+          <li>Send it to the address above.</li>
+        </ol>
+        <p className="help">It counts only if Notch recognises the sender’s signature. Most banks aren’t recognised yet.</p>
+      </details>
       <ul className="log pcard" aria-live="polite" aria-label="Statement status">
         {steps.map((s, i) => {
           const state = live === 'refused' ? (i === 0 ? 'bad' : 'wait') : i < liveIdx ? 'done' : i === liveIdx && live !== 'idle' ? 'live' : i === 0 && live === 'idle' ? 'now' : 'wait'; // waiting: a still ring (the pulse below is the one sign of life)
@@ -482,7 +491,7 @@ function Upload({ wallet, signMessage, onResult }: { wallet: string; signMessage
       <div className="or" role="separator">or</div>
       <div className="card pcard">
         <h2 id="up-h">Upload a payout email</h2>
-        <p className="sub">Paid by Deel, Wise, Payoneer, Superteam Earn or a supported bank? Download that one email as an <code>.eml</code> file and send it. Statements from mobile money only count through your inbox.</p>
+        <p className="sub">Paid by Deel, Wise, Payoneer, Superteam Earn or a supported bank? Download that one email as an <code>.eml</code> file and send it. A statement can’t be uploaded: it must come through your inbox address. If yours was only emailed to you, see “Your bank only emails you?” under that address.</p>
         <input ref={file} type="file" accept=".eml,message/rfc822" hidden aria-label="Choose an .eml file"
           onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setErr(null); setEml({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) }); } }} />
         <div className="chips">
